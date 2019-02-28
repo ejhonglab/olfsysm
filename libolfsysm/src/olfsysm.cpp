@@ -1,3 +1,5 @@
+#include "olfsysm.hpp"
+
 #include <math.h>
 #include <fstream>
 #include <vector>
@@ -6,21 +8,6 @@
 #include <random>
 #include <iostream>
 #include <functional>
-#include "Eigen/Dense"
-
-/* Use to show intent. */
-using Matrix = Eigen::MatrixXd;
-using Row    = Matrix;
-using Column = Matrix;
-using Vector = Matrix;
-
-/* Constants relevant to HC data loading. */
-unsigned const N_HC_ODORS  = 110; // all original HC odors
-unsigned const N_ODORS_ALL = 186; // all odors in the hc data file
-unsigned const N_ODORS = N_HC_ODORS;
-unsigned const N_GLOMS_ALL = 51;  // all physical gloms
-unsigned const N_HC_GLOMS  = 23;  // all good HC gloms
-unsigned const N_GLOMS = N_GLOMS_ALL;
 
 /* The ID associated with each HC glom, in the order that they are listed as
  * columns in the HC data file.
@@ -67,126 +54,6 @@ std::discrete_distribution<int> HC_GLOM_CXN_UNIFORM_DISTRIB {
 thread_local std::random_device g_randdev;
 thread_local std::mt19937 g_randgen{g_randdev()};
 
-/* Contain all model parameters; never contains data generated during
- * modeling! */
-extern "C" struct ModelParams {
-    /* Timeline params. */
-    struct Time {
-        /* Time to start simulating ORN/LN/PN layers (give them time to
-         * settle). */
-        double pre_start;
-
-        /* Start/end of KC simulation. */
-        double start;
-        double end;
-
-        /* Start/end of stimulus presentation. */
-        struct Stim {
-            double start;
-            double end;
-
-            /* Calculate the pretime-relative stimulus start step. */
-            unsigned start_step() const;
-
-            /* Calculate the pretime-relative stimulus end step. */
-            unsigned end_step() const;
-
-            /* Get a row of length time.steps_all() with ones wherever the
-             * stimulus is present, and zeros wherever it is not. */ 
-            Row row_all() const;
-            
-            /* Internal only! */
-            Time& _owner;
-            Stim(Time&);
-        } stim;
-
-        /* Simulation timestep. */
-        double dt;
-
-        /* Calculate the pretime-relative start step. */
-        unsigned start_step() const;
-
-        /* Calculate the total number of timesteps (pre_start to end). */
-        unsigned steps_all() const;
-
-        /* Calculate the number of "real" timesteps (start to end). */
-        unsigned steps() const;
-
-        /* Get a row of ones with length steps_all(). */
-        Row row_all() const;
-
-        Time();
-        Time(Time const&);
-    } time;
-
-    /* ORN params. */
-    struct ORN {
-        /* Membrane time constant. */
-        double taum;
-
-        /* Path to the HC data file. */
-        std::string hcdata_path;
-    } orn;
-
-    /* LN params. */
-    struct LN {
-        /* Time constants. */
-        double taum;
-        double tauGA;
-        double tauGB;
-
-        /* Firing threshold. */
-        double thr;
-
-        /* Inhibition calculation params. */
-        double inhsc;
-        double inhadd;
-    } ln;
-
-    /* PN params. */
-    struct PN {
-        /* Time constant. */
-        double taum;
-
-        /* Inhibition calculation params. */
-        double offset;
-        double tanhsc;
-        double inhsc;
-        double inhadd;
-
-        /* Gaussian noise parameters. */
-        struct Noise {
-            double mean;
-            double sd;
-        } noise;
-    } pn;
-
-    /* KC params. */
-    struct KC {
-        /* Whether to model KCs at all. */
-        bool enable;
-
-        /* The number of KCs. */
-        unsigned N;
-
-        /* The number of claws assigned to each KC. */
-        unsigned nclaws;
-        /* Whether to use uniform PN choice, or use observational data. */
-        bool uniform_pns;
-
-        /* The target sparsity. */
-        double sp_target;
-
-        /* Specifies the fraction +/- of the given target that is considered an
-         * acceptable sparsity. */
-        double sp_acc;
-
-        /* Time constants. */
-        double taum;
-        double apl_taum;
-        double tau_apl2kc;
-    } kc;
-};
 ModelParams const DEFAULT_PARAMS = []() {
     ModelParams p;
 
@@ -228,90 +95,9 @@ ModelParams const DEFAULT_PARAMS = []() {
     return p;
 }();
 
-
-/* Variables and storage space that is useful to each run.
- * Matrices that are not used (e.g., KC-related matrices when KC simulation is
- * disabled) are never allocated because of Eigen's lazy evalulation system. */
-struct RunVars {
-    /* ORN-related variables. */
-    struct ORN {
-        /* Loaded ORN firing rates (spont+delta). */
-        Matrix rates;
-        /* Spontaneous rates. */
-        Column spont;
-        /* Firing rate changes in response to odors. */
-        Column delta;
-
-        /* Simulation results. */
-        std::vector<Matrix> sims;
-
-        /* Initialize matrices with the correct sizes and quantities. */
-        ORN(ModelParams const&);
-    } orn;
-
-    /* LN-related variables. */
-    struct LN {
-        struct {
-            /* InhA timecourses. */
-            std::vector<Vector> sims;
-        } inhA;
-        struct {
-            /* InhB timecourses. */
-            std::vector<Vector> sims;
-        } inhB;
-
-        /* Initialize matrices with the correct sizes and quantities. */
-        LN(ModelParams const&);
-    } ln;
-
-    /* PN-related variables. */
-    struct PN {
-        std::vector<Matrix> sims;
-
-        /* Initialize matrices with the correct sizes and quantities. */
-        PN(ModelParams const&);
-    } pn;
-
-    /* KC-related variables. */
-    struct KC {
-        /* A->B connectivity matrices. */
-        Matrix wPNKC;
-        Column wAPLKC;
-        Row    wKCAPL;
-
-        /* Firing thresholds. */
-        Column thr;
-
-        /* Binary (KC, odor) response information. */
-        Matrix responses;
-
-        /* Initialize matrices with the correct sizes and quantities. */
-        KC(ModelParams const&);
-    } kc;
-
-    /* Info from the model parameters is needed to correctly initialize matrix
-     * sizes.*/
-    RunVars(ModelParams const&);
-};
-
-template<class M>
-void dump(M val, std::string const& name) {
-    std::ofstream fout(name);
-    for (int i = 0; i < val.rows(); i++) {
-        for (int k = 0; k < val.cols()-1; k++) {
-            fout << val(i, k) << ',';
-        }
-        fout << val(i, val.cols()-1) << std::endl;
-    }
-    fout.close();
-}
-
 /* (utility) Split a string by commas, and fill vec with the segments.
  * vec must be sized correctly! */
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec);
-
-/* Load HC data from file. */
-void load_hc_data(ModelParams const& p, RunVars& rv);
 
 /* The exponential ('e') part of the smoothts MATLAB function included in the
  * Kennedy source.
@@ -327,8 +113,6 @@ void build_wPNKC_weighted(ModelParams const& p, RunVars& rv);
 /* Randomly generate the wPNKC connectivity matrix. Glom choice is UNIFORMLY
  * weighted. */
 void build_wPNKC_uniform(ModelParams const& p, RunVars& rv);
-/* Choose between the above functions appropriately. */
-void build_wPNKC(ModelParams const& p, RunVars& rv);
 
 /* Sample spontaneous PN output from odor 0. */
 Column sample_PN_spont(ModelParams const& p, RunVars const& rv);
@@ -336,45 +120,6 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv);
 /* Decide a KC threshold column from KC membrane voltage data. */
 Column choose_KC_thresh(
         ModelParams const& p, Matrix& KCpks, Column const& spont_in);
-
-/* Set KC spike thresholds, and tune APL<->KC weights until reaching the
- * desired sparsity. */
-void fit_sparseness(ModelParams const& p, RunVars& rv);
-
-/* Model ORN response for one odor. */
-void sim_ORN_layer(
-        ModelParams const& p, RunVars const& rv,
-        int odorid,
-        Matrix& orn_t);
-
-/* Model LN response to one odor. */
-void sim_LN_layer(
-        ModelParams const& p,
-        Matrix const& orn_t,
-        Row& inhA, Row& inhB);
-
-/* Model PN response to one odor. */
-void sim_PN_layer(
-        ModelParams const& p, RunVars const& rv,
-        Matrix const& orn_t, Row const& inhA, Row const& inhB, 
-        Matrix& pn_t);
-
-/* Model KC response to one odor. */
-void sim_KC_layer(
-        ModelParams const& p, RunVars const& rv,
-        Matrix const& pn_t,
-        Matrix& Vm, Matrix& spikes);
-
-/* Run ORN and LN sims for all odors. */
-void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
-
-/* Run PN sims for all odors. */
-void run_PN_sims(ModelParams const& p, RunVars& rv);
-
-/* Regenerate PN->KC connectivity, re-tune thresholds and APL, and run KC sims
- * for all odors.
- * Connectivity regeneration can be turned off by passing regen=false. */
-void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen=true);
 
 /* Remove all columns <step in timecourse.*/
 void remove_before(unsigned step, Matrix& timecourse);
@@ -470,6 +215,7 @@ void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
 void load_hc_data(ModelParams const& p, RunVars& run) {
     run.orn.rates.setZero();
     run.orn.spont.setZero();
+    run.orn.delta.setZero();
 
     std::ifstream fin(p.orn.hcdata_path);
     std::string line;
@@ -614,8 +360,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
             KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
         }
-#pragma omp barrier
-#pragma omp master
+
+#pragma omp single
         {
             /* Finish picking thresholds. */
             rv.kc.thr = choose_KC_thresh(p, KCpks, spont_in);
@@ -626,11 +372,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.wKCAPL.setConstant(
                     2*ceil(-log(p.kc.sp_target))/double(p.kc.N));
         }
-#pragma omp barrier
 
         /* Continue tuning until we reach the desired sparsity. */
         do {
-#pragma omp master
+#pragma omp critical
+            std::cout << "t" << omp_get_thread_num() << " lbegin\n";
+#pragma omp single
             {
                 /* Modify the APL<->KC weights in order to move in the
                  * direction of the target sparsity. */
@@ -640,8 +387,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.kc.wKCAPL.array() += delta/double(p.kc.N);
 
                 count += 1.0;
+
+                std::cout << "t" << omp_get_thread_num() << " onlyone (1)\n";
             }
-#pragma omp barrier
+
+#pragma omp critical
+            std::cout << "t" << omp_get_thread_num() << " before for\n";
 
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
@@ -649,13 +400,17 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
                 KCmean_st.col(i/3) = spikes.rowwise().sum();
             }
-#pragma omp barrier
-#pragma omp master
+
+#pragma omp single
             {
                 KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
                 sp = KCmean_st.mean();
+
+                std::cout << "t" << omp_get_thread_num() << " onlyone (2)\n";
             }
-#pragma omp barrier
+
+#pragma omp critical
+            std::cout << "t" << omp_get_thread_num() << ": " << sp << std::endl;
         } while (abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target));
     }
 }
@@ -758,12 +513,29 @@ void sim_KC_layer(
 }
 
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
-#pragma omp parallel for
-    for (unsigned i = 0; i < N_ODORS; i++) {
-        sim_ORN_layer(p, rv, i, rv.orn.sims[i]);
-        sim_LN_layer(
-                p, rv.orn.sims[i],
-                rv.ln.inhA.sims[i], rv.ln.inhB.sims[i]);
+#pragma omp parallel
+    {
+        Matrix orn_t(N_GLOMS, p.time.steps_all());
+        Row inhA(1, p.time.steps_all());
+        Row inhB(1, p.time.steps_all());
+#pragma omp for
+        for (unsigned i = 0; i < N_ODORS; i++) {
+            sim_ORN_layer(p, rv, i, orn_t);
+            sim_LN_layer(p, orn_t, inhA, inhB);
+#pragma omp critical
+            {
+                rv.orn.sims[i] = orn_t;
+                rv.ln.inhA.sims[i] = inhA;
+                rv.ln.inhB.sims[i] = inhB;
+            }
+
+            /*
+            sim_ORN_layer(p, rv, i, rv.orn.sims[i]);
+            sim_LN_layer(
+                    p, rv.orn.sims[i],
+                    rv.ln.inhA.sims[i], rv.ln.inhB.sims[i]);
+                    */
+        }
     }
 }
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
@@ -794,6 +566,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                     Vm, spikes);
             respcol = spikes.rowwise().sum();
             respcol = (respcol.array() > 0.0).select(1.0, respcol);
+
+#pragma omp critical
             rv.kc.responses.col(i) = respcol;
         }
     }
@@ -832,55 +606,3 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
         }
     }
 }
-
-/*
-extern "C" double *model_kc_responses_raw(int nclaws, int& n_kcs, int& n_odors) {
-    Matrix result = model_kc_responses(nclaws);
-    n_kcs = result.rows();
-    n_odors = result.cols();
-    double *raw = new double[n_kcs*n_odors];
-#pragma omp parallel for
-    for (int r = 0; r < n_kcs; r++) {
-        for (int c = 0; c < n_odors; c++) {
-            raw[(r*n_odors)+c] = result(r, c);
-        }
-    }
-    return raw;
-}
-*/
-
-void dump(Matrix const& m, std::string const& p) {
-    std::ofstream fout(p);
-    for (unsigned i = 0; i < m.rows(); i++) {
-        for (unsigned j = 0; j < m.cols()-1; j++) {
-            fout << m(i,j) << ',';
-        }
-        fout << m(i,m.cols()-1) << std::endl;
-    }
-    fout.close();
-}
-
-int main() {
-    ModelParams mp = DEFAULT_PARAMS;
-    mp.kc.uniform_pns = true;
-
-    RunVars rv(mp);
-
-    load_hc_data(mp, rv);
-    run_ORN_LN_sims(mp, rv);
-    run_PN_sims(mp, rv);
-
-    mp.kc.nclaws = 6;
-
-    Matrix Vm(mp.kc.N, mp.time.steps_all());
-    Matrix spikes(mp.kc.N, mp.time.steps_all());
-
-    unsigned const ODOR = 54;
-    sim_KC_layer(mp, rv, rv.pn.sims[ODOR], Vm, spikes);
-    remove_before(mp.time.start_step(), spikes);
-
-    dump(spikes, "o4/spikes.csv");
-
-    return 0;
-}
-

@@ -1,0 +1,4 @@
+import(Rcpp)
+import(xptr)
+useDynLib(olfsysm, .registration=TRUE, .fixes="C_")
+exportPattern("^[[:alpha:]]+")

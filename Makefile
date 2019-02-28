@@ -1,8 +1,12 @@
-all:
-	g++ -std=c++14 model.cpp -Ofast -fopenmp -o model
-
-debug:
-	g++ -std=c++14 model.cpp -g -o model
+all: bindings
 
 lib:
-	g++ -std=c++14 -fPIC -shared model.cpp -Ofast -fopenmp -o model.so
+	$(MAKE) -C ./libolfsysm
+
+bindings: lib
+	$(MAKE) -C ./bindings
+
+install:
+	$(MAKE) -C ./bindings install
+
+.PHONY: all lib bindings
