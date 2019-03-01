@@ -115,9 +115,6 @@ struct ModelParams {
 
     /* KC params. */
     struct KC {
-        /* Whether to model KCs at all. */
-        bool enable;
-
         /* The number of KCs. */
         unsigned N;
 
@@ -125,6 +122,9 @@ struct ModelParams {
         unsigned nclaws;
         /* Whether to use uniform PN choice, or use observational data. */
         bool uniform_pns;
+
+        /* Whether to simulate the APL at all.*/
+        bool enable_apl;
 
         /* The target sparsity. */
         double sp_target;

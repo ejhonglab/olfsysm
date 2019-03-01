@@ -101,10 +101,10 @@ extern "C" SEXP access_mparam(
     ACCESS("pn.inhadd"      , mp->pn.inhadd);
     ACCESS("pn.noise.mean"  , mp->pn.noise.mean);
     ACCESS("pn.noise.sd"    , mp->pn.noise.sd);
-    ACCESS("kc.enable"      , mp->kc.enable);
     ACCESS("kc.N"           , mp->kc.N);
     ACCESS("kc.nclaws"      , mp->kc.nclaws);
     ACCESS("kc.uniform_pns" , mp->kc.uniform_pns);
+    ACCESS("kc.enable_apl"  , mp->kc.enable_apl);
     ACCESS("kc.sp_target"   , mp->kc.sp_target);
     ACCESS("kc.sp_acc"      , mp->kc.sp_acc);
     ACCESS("kc.taum"        , mp->kc.taum);

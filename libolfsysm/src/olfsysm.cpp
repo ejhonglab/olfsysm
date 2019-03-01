@@ -82,10 +82,10 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.noise.mean = 0.0;
     p.pn.noise.sd   = 0.0;
 
-    p.kc.enable      = true;
     p.kc.N           = 2000;
     p.kc.nclaws      = 6;
     p.kc.uniform_pns = false;
+    p.kc.enable_apl  = true;
     p.kc.sp_target   = 0.1;
     p.kc.sp_acc      = 0.1;
     p.kc.taum        = 0.01;
@@ -365,7 +365,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         {
             /* Finish picking thresholds. */
             rv.kc.thr = choose_KC_thresh(p, KCpks, spont_in);
+        }
 
+        /* Enter this region only if APL use is enabled; if disabled, just exit
+         * (at this point APL->KC weights are set to 0). */
+        if (p.kc.enable_apl) {
+
+#pragma omp single
+        {
             /* Starting values for to-be-tuned APL<->KC weights. */
             rv.kc.wAPLKC.setConstant(
                     2*ceil(-log(p.kc.sp_target)));
@@ -375,8 +382,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
         /* Continue tuning until we reach the desired sparsity. */
         do {
-#pragma omp critical
-            std::cout << "t" << omp_get_thread_num() << " lbegin\n";
 #pragma omp single
             {
                 /* Modify the APL<->KC weights in order to move in the
@@ -387,12 +392,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.kc.wKCAPL.array() += delta/double(p.kc.N);
 
                 count += 1.0;
-
-                std::cout << "t" << omp_get_thread_num() << " onlyone (1)\n";
             }
-
-#pragma omp critical
-            std::cout << "t" << omp_get_thread_num() << " before for\n";
 
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
@@ -405,14 +405,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             {
                 KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
                 sp = KCmean_st.mean();
-
-                std::cout << "t" << omp_get_thread_num() << " onlyone (2)\n";
             }
-
-#pragma omp critical
-            std::cout << "t" << omp_get_thread_num() << ": " << sp << std::endl;
         } while (abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target));
-    }
+    }}
 }
 
 void sim_ORN_layer(
