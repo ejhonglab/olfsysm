@@ -90,6 +90,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.use_fixed_thr = false;
     p.kc.sp_target     = 0.1;
     p.kc.sp_acc        = 0.1;
+    p.kc.max_iters     = 10;
     p.kc.taum          = 0.01;
     p.kc.apl_taum      = 0.05;
     p.kc.tau_apl2kc    = 0.01;
@@ -351,7 +352,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     double sp = 0.0789;
     /* Used to count number of times looped; the 'learning rate' is decreased
      * as 1/sqrt(count) with each iteration. */
-    double count = 1.0;
+    unsigned count = 1;
 
     /* Break up into threads. */
 #pragma omp parallel
@@ -395,12 +396,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             {
                 /* Modify the APL<->KC weights in order to move in the
                  * direction of the target sparsity. */
-                double lr = 10.0/sqrt(count);
+                double lr = 10.0/sqrt(double(count));
                 double delta = (sp-p.kc.sp_target)*lr/p.kc.sp_target;
                 rv.kc.wAPLKC.array() += delta;
                 rv.kc.wKCAPL.array() += delta/double(p.kc.N);
 
-                count += 1.0;
+                count++;
             }
 
             /* Run through a bunch of odors to test sparsity. */
@@ -415,7 +416,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
                 sp = KCmean_st.mean();
             }
-        } while (abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target));
+        } while ((abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target))
+                && (count <= p.kc.max_iters));
     }}
 }
 

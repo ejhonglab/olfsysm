@@ -138,6 +138,10 @@ struct ModelParams {
          * acceptable sparsity. */
         double sp_acc;
 
+        /* The maximum number of tuning iterations that should be done before
+         * aborting. Must be >=1. */
+        unsigned max_iters;
+
         /* Time constants. */
         double taum;
         double apl_taum;

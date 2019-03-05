@@ -107,9 +107,9 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.enable_apl",    mp->kc.enable_apl);
     ACCESS("kc.fixed_thr",     mp->kc.fixed_thr);
     ACCESS("kc.use_fixed_thr", mp->kc.use_fixed_thr);
-    ACCESS("kc.fixed_thr",     mp->kc.fixed_thr);
     ACCESS("kc.sp_target",     mp->kc.sp_target);
     ACCESS("kc.sp_acc",        mp->kc.sp_acc);
+    ACCESS("kc.max_iters",     mp->kc.max_iters);
     ACCESS("kc.taum",          mp->kc.taum);
     ACCESS("kc.apl_taum",      mp->kc.apl_taum);
     ACCESS("kc.tau_apl2kc",    mp->kc.tau_apl2kc);
