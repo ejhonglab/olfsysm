@@ -36,6 +36,13 @@ get_rvar <- function(rv, var) {
     access_rvar(rv, var, NULL);
 }
 
+set_log_dest <- function(rv, dest) {
+    if (!is_xpt(rv)) stop("rv must be externalptr");
+    if (!is.character(dest)) stop("dest must be string");
+    .Call(C_set_log_destf, rv, dest);
+    invisible();
+}
+
 mprv_funccall <- function(mp, rv, func) {
     if (!is_xpt(mp)) stop("mp must be externalptr");
     if (!is_xpt(rv)) stop("rv must be externalptr");

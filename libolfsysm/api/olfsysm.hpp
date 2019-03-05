@@ -3,7 +3,34 @@
 
 #include <vector>
 #include <string>
+#include <functional>
+#include <mutex>
+#include <fstream>
 #include "Eigen/Dense"
+
+/* Used for thread-safe logging. */
+class Logger {
+private:
+    std::ofstream fout;
+    std::mutex mtx;
+
+public:
+    Logger();
+    /* Throw an error. */
+    Logger(Logger const& other);
+
+    /* Log a message. */
+    void operator()(std::string const&);
+
+    /* Log a blank line. */
+    void operator()();
+
+    /* Begin appending output to the given file. */
+    void redirect(std::string const& path);
+
+    /* Shut off output. */
+    void disable();
+};
 
 /* Constants relevant to HC data loading. */
 unsigned const N_HC_ODORS  = 110; // all original HC odors
@@ -215,6 +242,9 @@ struct RunVars {
         /* Initialize matrices with the correct sizes and quantities. */
         KC(ModelParams const&);
     } kc;
+
+    /* Logger for this run. */
+    Logger log;
 
     /* Info from the model parameters is needed to correctly initialize matrix
      * sizes.*/

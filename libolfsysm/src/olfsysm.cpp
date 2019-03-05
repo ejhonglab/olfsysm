@@ -8,6 +8,38 @@
 #include <random>
 #include <iostream>
 #include <functional>
+#include <sstream>
+
+Logger::Logger() {}
+Logger::Logger(Logger const&) {
+    throw std::runtime_error("Can't copy Logger instances.");
+}
+void Logger::operator()(std::string const& msg) {
+    std::lock_guard<std::mutex> lock(mtx);
+    if (!fout) return;
+    fout << msg << std::endl;
+}
+void Logger::operator()() {
+    this->operator()("");
+}
+void Logger::redirect(std::string const& path) {
+    std::lock_guard<std::mutex> lock(mtx);
+    fout.close();
+    fout.open(path, std::ofstream::out | std::ofstream::app);
+}
+void Logger::disable() {
+    std::lock_guard<std::mutex> lock(mtx);
+    fout.close();
+}
+
+/* Concatenate all the given arguments, which can be of any type, into one
+ * string. No separator is placed between the arguments! */
+template<class... Args>
+std::string cat(Args&&... args) {
+    std::stringstream ss;
+    (ss << ... << std::forward<Args>(args));
+    return ss.str();
+}
 
 /* The ID associated with each HC glom, in the order that they are listed as
  * columns in the HC data file.
@@ -218,6 +250,8 @@ void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
 }
 
 void load_hc_data(ModelParams const& p, RunVars& run) {
+    run.log("loading HC data from file: " + p.orn.hcdata_path);
+
     run.orn.rates.setZero();
     run.orn.spont.setZero();
     run.orn.delta.setZero();
@@ -283,6 +317,7 @@ void add_randomly(std::function<double()> rng, Matrix& out) {
 void build_wPNKC_weighted(ModelParams const& p, RunVars& r) {
     /* Draw PN connections from realistic connection distribution data (see
      * above). */
+    r.log("building WEIGHTED connectivity matrix");
     r.kc.wPNKC.setZero();
     for (unsigned kc = 0; kc < p.kc.N; kc++) {
         for (unsigned claw = 0; claw < p.kc.nclaws; claw++) {
@@ -291,6 +326,7 @@ void build_wPNKC_weighted(ModelParams const& p, RunVars& r) {
     }
 }
 void build_wPNKC_uniform(ModelParams const& p, RunVars& r) {
+    r.log("building UNIFORM connectivity matrix");
     r.kc.wPNKC.setZero();
     for (unsigned kc = 0; kc < p.kc.N; kc++) {
         for (unsigned claw = 0; claw < p.kc.nclaws; claw++) {
@@ -329,6 +365,8 @@ Column choose_KC_thresh(
 
 }
 void fit_sparseness(ModelParams const& p, RunVars& rv) {
+    rv.log("fitting sparseness");
+
     /* Set starting values for the things we'll tune. */
     rv.kc.wAPLKC.setZero();
     rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
@@ -336,6 +374,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         rv.kc.thr.setConstant(1e5); // higher than will ever be reached
     }
     else {
+        rv.log(cat("using FIXED threshold: ", p.kc.fixed_thr));
         rv.kc.thr.setConstant(p.kc.fixed_thr);
     }
 
@@ -364,6 +403,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Matrix spikes(p.kc.N, p.time.steps_all());
 
         if (!p.kc.use_fixed_thr) {
+#pragma omp single
+            {
+                rv.log("choosing thresholds from spontaneous input");
+            }
+
             /* Measure voltages achieved by the KCs, and choose a threshold
              * based on that. */
 #pragma omp for
@@ -382,9 +426,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         /* Enter this region only if APL use is enabled; if disabled, just exit
          * (at this point APL->KC weights are set to 0). */
         if (p.kc.enable_apl) {
-
 #pragma omp single
         {
+            rv.log(cat("APL enabled; tuning begin (",
+                        "target=", p.kc.sp_target,
+                        " acc=", p.kc.sp_acc,
+                        ")"));
+
             rv.kc.tuning_iters = 1;
             /* Starting values for to-be-tuned APL<->KC weights. */
             rv.kc.wAPLKC.setConstant(
@@ -395,6 +443,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
         /* Continue tuning until we reach the desired sparsity. */
         do {
+            rv.log(cat("** t", omp_get_thread_num(), " @ top"));
+#pragma omp barrier
+
 #pragma omp single
             {
                 /* Modify the APL<->KC weights in order to move in the
@@ -413,28 +464,46 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                             0.0, rv.kc.wKCAPL);
                 }
 
+                rv.log(cat( "* i=", rv.kc.tuning_iters,
+                            ", sp=", sp, 
+                            ", d=", delta,
+                            ", lr=", lr));
+
                 rv.kc.tuning_iters++;
             }
 
+            rv.log(cat("** t", omp_get_thread_num(), " @ before testing"));
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
             for (unsigned i = 0; i < N_ODORS; i+=3) {
                 sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
                 KCmean_st.col(i/3) = spikes.rowwise().sum();
             }
+            rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
 
 #pragma omp single
             {
                 KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
                 sp = KCmean_st.mean();
             }
+
+            rv.log(cat("** t", omp_get_thread_num(), " @ before bottom cond [",
+                        "sp=", sp,
+                        ", i=", rv.kc.tuning_iters,
+                        ", tgt=", p.kc.sp_target,
+                        ", acc=", p.kc.sp_acc,
+                        ", I=", p.kc.max_iters,
+                        "]"));
         } while ((abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target))
                 && (rv.kc.tuning_iters <= p.kc.max_iters));
+        rv.log(cat("** t", omp_get_thread_num(), " @ exit"));
+#pragma omp barrier
 #pragma omp single
         {
             rv.kc.tuning_iters--;
         }
     }}
+    rv.log("done fitting sparseness");
 }
 
 void sim_ORN_layer(
@@ -535,6 +604,7 @@ void sim_KC_layer(
 }
 
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
+    rv.log("running ORN and LN sims");
 #pragma omp parallel
     {
         Matrix orn_t(N_GLOMS, p.time.steps_all());
@@ -561,6 +631,7 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
     }
 }
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
+    rv.log("running PN sims");
 #pragma omp parallel for
     for (unsigned i = 0; i < N_ODORS; i++) {
         sim_PN_layer(
@@ -571,10 +642,12 @@ void run_PN_sims(ModelParams const& p, RunVars& rv) {
 }
 void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     if (regen) {
+        rv.log("generating new KC replicate");
         build_wPNKC(p, rv);
         fit_sparseness(p, rv);
     }
 
+    rv.log("running KC sims");
 #pragma omp parallel
     {
         Matrix Vm(p.kc.N, p.time.steps_all());

@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++14 -fopenmp -fpic -I./api/ -I./include/ -c
+CXXFLAGS = -std=c++17 -fopenmp -fpic -I./api/ -I./include/ -c
 
 AR = ar
 ARFLAGS = rvcs
@@ -17,7 +17,7 @@ TARGET = $(TGTDIR)/libolfsysm.a
 
 debug ?= 0
 ifeq ($(debug), 1)
-	DEBUG_FLAGS = -DDEBUG -Og -g
+	DEBUG_FLAGS = -DDEBUG -Og -ggdb3
 else
 	DEBUG_FLAGS = -Ofast -funroll-loops -march=native
 endif

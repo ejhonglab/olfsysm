@@ -144,6 +144,15 @@ extern "C" SEXP access_rvar(
     return R_NilValue;
 )}
 
+extern "C" SEXP set_log_destf(
+        SEXP rv_,
+        SEXP path_) { TRYFWD (
+    DEFFROM_AS(Rcpp::XPtr<RunVars>, rv, rv_);
+    DEFFROM_AS(std::string, path, path_);
+    rv->log.redirect(path);
+    return R_NilValue;
+)}
+
 #define MP_RV_FUNC(wrapped) \
 extern "C" SEXP EXPORT_##wrapped(SEXP mp_, SEXP rv_) { TRYFWD ( \
     DEFFROM_AS(Rcpp::XPtr<ModelParams>, mp, mp_); \
@@ -166,11 +175,12 @@ extern "C" SEXP EXPORT_run_KC_sims(SEXP mp_, SEXP rv_, SEXP regen_) { TRYFWD (
     return R_NilValue;
 )}
 
-extern "C" const R_CallMethodDef CallEntries[11] = {
+extern "C" const R_CallMethodDef CallEntries[12] = {
     {"mk_modelparams", (DL_FUNC) &mk_modelparams, 0},
     {"mk_runvars", (DL_FUNC) &mk_runvars, 1},
     {"access_mparam", (DL_FUNC) &access_mparam, 4},
     {"access_rvar", (DL_FUNC) &access_rvar, 4},
+    {"set_log_destf", (DL_FUNC) &set_log_destf, 2},
     {"load_hc_data", (DL_FUNC) &EXPORT_load_hc_data, 2},
     {"build_wPNKC", (DL_FUNC) &EXPORT_build_wPNKC, 2},
     {"fit_sparseness", (DL_FUNC) &EXPORT_fit_sparseness, 2},

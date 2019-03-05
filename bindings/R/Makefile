@@ -1,11 +1,9 @@
-all:
+all: clean
 	cp ../../libolfsysm/bin/libolfsysm.a ./olfsysm/src/
 	cp ../../libolfsysm/api/olfsysm.hpp ./olfsysm/src/
 	R CMD INSTALL "olfsysm"
 	rm ./olfsysm/src/libolfsysm.a
 	rm ./olfsysm/src/olfsysm.hpp
-
-install: all
 
 clean:
 	-rm ./olfsysm/src/hook.o

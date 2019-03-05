@@ -1,12 +1,9 @@
-all: bindings
-
-lib:
+all:
 	$(MAKE) -C ./libolfsysm
-
-bindings: lib
 	$(MAKE) -C ./bindings
 
-install:
-	$(MAKE) -C ./bindings install
+debug:
+	$(MAKE) -C ./libolfsysm debug=1
+	$(MAKE) -C ./bindings
 
-.PHONY: all lib bindings
+.PHONY: all debug
