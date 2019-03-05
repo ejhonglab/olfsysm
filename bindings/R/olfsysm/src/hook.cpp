@@ -109,6 +109,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.use_fixed_thr", mp->kc.use_fixed_thr);
     ACCESS("kc.sp_target",     mp->kc.sp_target);
     ACCESS("kc.sp_acc",        mp->kc.sp_acc);
+    ACCESS("kc.sp_lr_coeff",   mp->kc.sp_lr_coeff);
     ACCESS("kc.max_iters",     mp->kc.max_iters);
     ACCESS("kc.taum",          mp->kc.taum);
     ACCESS("kc.apl_taum",      mp->kc.apl_taum);
@@ -126,17 +127,18 @@ extern "C" SEXP access_rvar(
     DEFFROM_AS(std::string, name, name_);
     DEFFROM_AS(bool, set, set_);
 
-    ACCESS("orn.rates",    rv->orn.rates);
-    ACCESS("orn.spont",    rv->orn.spont);
-    ACCESS("orn.delta",    rv->orn.delta);
-    ACCESS("orn.sims",     rv->orn.sims);
-    ACCESS("ln.inhA.sims", rv->ln.inhA.sims);
-    ACCESS("ln.inhB.sims", rv->ln.inhB.sims);
-    ACCESS("pn.sims",      rv->pn.sims);
-    ACCESS("kc.wPNKC",     rv->kc.wPNKC);
-    ACCESS("kc.wAPLKC",    rv->kc.wAPLKC);
-    ACCESS("kc.thr",       rv->kc.thr);
-    ACCESS("kc.responses", rv->kc.responses);
+    ACCESS("orn.rates",       rv->orn.rates);
+    ACCESS("orn.spont",       rv->orn.spont);
+    ACCESS("orn.delta",       rv->orn.delta);
+    ACCESS("orn.sims",        rv->orn.sims);
+    ACCESS("ln.inhA.sims",    rv->ln.inhA.sims);
+    ACCESS("ln.inhB.sims",    rv->ln.inhB.sims);
+    ACCESS("pn.sims",         rv->pn.sims);
+    ACCESS("kc.wPNKC",        rv->kc.wPNKC);
+    ACCESS("kc.wAPLKC",       rv->kc.wAPLKC);
+    ACCESS("kc.thr",          rv->kc.thr);
+    ACCESS("kc.responses",    rv->kc.responses);
+    ACCESS("kc.tuning_iters", rv->kc.tuning_iters);
 
     Rcpp::stop(std::string("invalid run variable: ") + name);
     return R_NilValue;

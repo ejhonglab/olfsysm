@@ -138,6 +138,9 @@ struct ModelParams {
          * acceptable sparsity. */
         double sp_acc;
 
+        /* Changes the scaling of the ~1/(n^2) tuning step-size curve. */
+        double sp_lr_coeff;
+
         /* The maximum number of tuning iterations that should be done before
          * aborting. Must be >=1. */
         unsigned max_iters;
@@ -205,6 +208,9 @@ struct RunVars {
 
         /* Binary (KC, odor) response information. */
         Matrix responses;
+
+        /* The number of iterations done during APL tuning. */
+        unsigned tuning_iters;
 
         /* Initialize matrices with the correct sizes and quantities. */
         KC(ModelParams const&);

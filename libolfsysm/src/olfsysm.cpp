@@ -90,6 +90,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.use_fixed_thr = false;
     p.kc.sp_target     = 0.1;
     p.kc.sp_acc        = 0.1;
+    p.kc.sp_lr_coeff   = 10.0;
     p.kc.max_iters     = 10;
     p.kc.taum          = 0.01;
     p.kc.apl_taum      = 0.05;
@@ -197,7 +198,8 @@ RunVars::KC::KC(ModelParams const& p) :
     wAPLKC(p.kc.N, 1),
     wKCAPL(1, p.kc.N),
     thr(p.kc.N, 1),
-    responses(p.kc.N, N_ODORS) {
+    responses(p.kc.N, N_ODORS),
+    tuning_iters(0) {
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -352,7 +354,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     double sp = 0.0789;
     /* Used to count number of times looped; the 'learning rate' is decreased
      * as 1/sqrt(count) with each iteration. */
-    unsigned count = 1;
+    rv.kc.tuning_iters = 0;
 
     /* Break up into threads. */
 #pragma omp parallel
@@ -383,6 +385,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
 #pragma omp single
         {
+            rv.kc.tuning_iters = 1;
             /* Starting values for to-be-tuned APL<->KC weights. */
             rv.kc.wAPLKC.setConstant(
                     2*ceil(-log(p.kc.sp_target)));
@@ -396,12 +399,21 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             {
                 /* Modify the APL<->KC weights in order to move in the
                  * direction of the target sparsity. */
-                double lr = 10.0/sqrt(double(count));
+                double lr = p.kc.sp_lr_coeff/sqrt(double(rv.kc.tuning_iters));
                 double delta = (sp-p.kc.sp_target)*lr/p.kc.sp_target;
                 rv.kc.wAPLKC.array() += delta;
                 rv.kc.wKCAPL.array() += delta/double(p.kc.N);
 
-                count++;
+                /* If we learn too fast in the negative direction we could end
+                 * up with negative weights. */
+                if (delta < 0.0) {
+                    rv.kc.wAPLKC = (rv.kc.wAPLKC.array() < 0.0).select(
+                            0.0, rv.kc.wAPLKC);
+                    rv.kc.wKCAPL = (rv.kc.wKCAPL.array() < 0.0).select(
+                            0.0, rv.kc.wKCAPL);
+                }
+
+                rv.kc.tuning_iters++;
             }
 
             /* Run through a bunch of odors to test sparsity. */
@@ -417,7 +429,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 sp = KCmean_st.mean();
             }
         } while ((abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target))
-                && (count <= p.kc.max_iters));
+                && (rv.kc.tuning_iters <= p.kc.max_iters));
+#pragma omp single
+        {
+            rv.kc.tuning_iters--;
+        }
     }}
 }
 
