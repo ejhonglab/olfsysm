@@ -82,15 +82,17 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.noise.mean = 0.0;
     p.pn.noise.sd   = 0.0;
 
-    p.kc.N           = 2000;
-    p.kc.nclaws      = 6;
-    p.kc.uniform_pns = false;
-    p.kc.enable_apl  = true;
-    p.kc.sp_target   = 0.1;
-    p.kc.sp_acc      = 0.1;
-    p.kc.taum        = 0.01;
-    p.kc.apl_taum    = 0.05;
-    p.kc.tau_apl2kc  = 0.01;
+    p.kc.N             = 2000;
+    p.kc.nclaws        = 6;
+    p.kc.uniform_pns   = false;
+    p.kc.enable_apl    = true;
+    p.kc.fixed_thr     = 0;
+    p.kc.use_fixed_thr = false;
+    p.kc.sp_target     = 0.1;
+    p.kc.sp_acc        = 0.1;
+    p.kc.taum          = 0.01;
+    p.kc.apl_taum      = 0.05;
+    p.kc.tau_apl2kc    = 0.01;
 
     return p;
 }();
@@ -327,7 +329,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     /* Set starting values for the things we'll tune. */
     rv.kc.wAPLKC.setZero();
     rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
-    rv.kc.thr.setConstant(1e5); // higher than will ever be reached (for now)
+    if (!p.kc.use_fixed_thr) {
+        rv.kc.thr.setConstant(1e5); // higher than will ever be reached
+    }
+    else {
+        rv.kc.thr.setConstant(p.kc.fixed_thr);
+    }
 
     /* Calculate spontaneous input to KCs. */
     Column spont_in = rv.kc.wPNKC * sample_PN_spont(p, rv);
@@ -353,18 +360,20 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
 
-        /* Measure voltages achieved by the KCs, and choose a threshold based
-         * on that. */
+        if (!p.kc.use_fixed_thr) {
+            /* Measure voltages achieved by the KCs, and choose a threshold
+             * based on that. */
 #pragma omp for
-        for (unsigned i = 0; i < N_ODORS; i++) {
-            sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
-            KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
-        }
+            for (unsigned i = 0; i < N_ODORS; i++) {
+                sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
+                KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
+            }
 
 #pragma omp single
-        {
-            /* Finish picking thresholds. */
-            rv.kc.thr = choose_KC_thresh(p, KCpks, spont_in);
+            {
+                /* Finish picking thresholds. */
+                rv.kc.thr = choose_KC_thresh(p, KCpks, spont_in);
+            }
         }
 
         /* Enter this region only if APL use is enabled; if disabled, just exit

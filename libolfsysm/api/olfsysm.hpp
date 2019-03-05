@@ -126,6 +126,11 @@ struct ModelParams {
         /* Whether to simulate the APL at all.*/
         bool enable_apl;
 
+        /* Optionally set a fixed KC firing threshold, instead of using the
+         * normally generated thresholds. */
+        double fixed_thr;
+        bool use_fixed_thr;
+
         /* The target sparsity. */
         double sp_target;
 
