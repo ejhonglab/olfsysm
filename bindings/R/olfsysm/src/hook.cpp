@@ -80,40 +80,44 @@ extern "C" SEXP access_mparam(
     DEFFROM_AS(std::string, name, name_);
     DEFFROM_AS(bool, set, set_);
 
-    ACCESS("time.pre_start",   mp->time.pre_start);
-    ACCESS("time.start",       mp->time.start);
-    ACCESS("time.end",         mp->time.end);
-    ACCESS("time.stim.start",  mp->time.stim.start);
-    ACCESS("time.stim.end",    mp->time.stim.end);
-    ACCESS("time.dt",          mp->time.dt);
-    ACCESS("orn.taum",         mp->orn.taum);
-    ACCESS("orn.hcdata_path",  mp->orn.hcdata_path);
-    ACCESS("ln.taum",          mp->ln.taum);
-    ACCESS("ln.tauGA",         mp->ln.tauGA);
-    ACCESS("ln.tauGB",         mp->ln.tauGB);
-    ACCESS("ln.thr",           mp->ln.thr);
-    ACCESS("ln.inhsc",         mp->ln.inhsc);
-    ACCESS("ln.inhadd",        mp->ln.inhadd);
-    ACCESS("pn.taum",          mp->pn.taum);
-    ACCESS("pn.offset",        mp->pn.offset);
-    ACCESS("pn.tanhsc",        mp->pn.tanhsc);
-    ACCESS("pn.inhsc",         mp->pn.inhsc);
-    ACCESS("pn.inhadd",        mp->pn.inhadd);
-    ACCESS("pn.noise.mean",    mp->pn.noise.mean);
-    ACCESS("pn.noise.sd",      mp->pn.noise.sd);
-    ACCESS("kc.N",             mp->kc.N);
-    ACCESS("kc.nclaws",        mp->kc.nclaws);
-    ACCESS("kc.uniform_pns",   mp->kc.uniform_pns);
-    ACCESS("kc.enable_apl",    mp->kc.enable_apl);
-    ACCESS("kc.fixed_thr",     mp->kc.fixed_thr);
-    ACCESS("kc.use_fixed_thr", mp->kc.use_fixed_thr);
-    ACCESS("kc.sp_target",     mp->kc.sp_target);
-    ACCESS("kc.sp_acc",        mp->kc.sp_acc);
-    ACCESS("kc.sp_lr_coeff",   mp->kc.sp_lr_coeff);
-    ACCESS("kc.max_iters",     mp->kc.max_iters);
-    ACCESS("kc.taum",          mp->kc.taum);
-    ACCESS("kc.apl_taum",      mp->kc.apl_taum);
-    ACCESS("kc.tau_apl2kc",    mp->kc.tau_apl2kc);
+    ACCESS("time.pre_start",       mp->time.pre_start);
+    ACCESS("time.start",           mp->time.start);
+    ACCESS("time.end",             mp->time.end);
+    ACCESS("time.stim.start",      mp->time.stim.start);
+    ACCESS("time.stim.end",        mp->time.stim.end);
+    ACCESS("time.dt",              mp->time.dt);
+    ACCESS("orn.taum",             mp->orn.taum);
+    ACCESS("orn.n_physical_gloms", mp->orn.n_physical_gloms);
+    ACCESS("orn.data.spont",       mp->orn.data.spont);
+    ACCESS("orn.data.delta",       mp->orn.data.delta);
+    ACCESS("ln.taum",              mp->ln.taum);
+    ACCESS("ln.tauGA",             mp->ln.tauGA);
+    ACCESS("ln.tauGB",             mp->ln.tauGB);
+    ACCESS("ln.thr",               mp->ln.thr);
+    ACCESS("ln.inhsc",             mp->ln.inhsc);
+    ACCESS("ln.inhadd",            mp->ln.inhadd);
+    ACCESS("pn.taum",              mp->pn.taum);
+    ACCESS("pn.offset",            mp->pn.offset);
+    ACCESS("pn.tanhsc",            mp->pn.tanhsc);
+    ACCESS("pn.inhsc",             mp->pn.inhsc);
+    ACCESS("pn.inhadd",            mp->pn.inhadd);
+    ACCESS("pn.noise.mean",        mp->pn.noise.mean);
+    ACCESS("pn.noise.sd",          mp->pn.noise.sd);
+    ACCESS("kc.N",                 mp->kc.N);
+    ACCESS("kc.nclaws",            mp->kc.nclaws);
+    ACCESS("kc.uniform_pns",       mp->kc.uniform_pns);
+    ACCESS("kc.cxn_distrib",       mp->kc.cxn_distrib);
+    ACCESS("kc.enable_apl",        mp->kc.enable_apl);
+    ACCESS("kc.fixed_thr",         mp->kc.fixed_thr);
+    ACCESS("kc.use_fixed_thr",     mp->kc.use_fixed_thr);
+    ACCESS("kc.sp_target",         mp->kc.sp_target);
+    ACCESS("kc.sp_acc",            mp->kc.sp_acc);
+    ACCESS("kc.sp_lr_coeff",       mp->kc.sp_lr_coeff);
+    ACCESS("kc.max_iters",         mp->kc.max_iters);
+    ACCESS("kc.tune_from",         mp->kc.tune_from);
+    ACCESS("kc.taum",              mp->kc.taum);
+    ACCESS("kc.apl_taum",          mp->kc.apl_taum);
+    ACCESS("kc.tau_apl2kc",        mp->kc.tau_apl2kc);
 
     Rcpp::stop(std::string("invalid model parameter: ") + name);
     return R_NilValue;
@@ -127,9 +131,6 @@ extern "C" SEXP access_rvar(
     DEFFROM_AS(std::string, name, name_);
     DEFFROM_AS(bool, set, set_);
 
-    ACCESS("orn.rates",       rv->orn.rates);
-    ACCESS("orn.spont",       rv->orn.spont);
-    ACCESS("orn.delta",       rv->orn.delta);
     ACCESS("orn.sims",        rv->orn.sims);
     ACCESS("ln.inhA.sims",    rv->ln.inhA.sims);
     ACCESS("ln.inhB.sims",    rv->ln.inhB.sims);
@@ -153,6 +154,15 @@ extern "C" SEXP set_log_destf(
     return R_NilValue;
 )}
 
+extern "C" SEXP EXPORT_load_hc_data(
+        SEXP mp_,
+        SEXP path_) { TRYFWD (
+    DEFFROM_AS(Rcpp::XPtr<ModelParams>, mp, mp_);
+    DEFFROM_AS(std::string, fpath, path_);
+    load_hc_data(*mp, fpath);
+    return R_NilValue;
+)}
+
 #define MP_RV_FUNC(wrapped) \
 extern "C" SEXP EXPORT_##wrapped(SEXP mp_, SEXP rv_) { TRYFWD ( \
     DEFFROM_AS(Rcpp::XPtr<ModelParams>, mp, mp_); \
@@ -161,7 +171,6 @@ extern "C" SEXP EXPORT_##wrapped(SEXP mp_, SEXP rv_) { TRYFWD ( \
     return R_NilValue; \
 )}
 
-MP_RV_FUNC(load_hc_data);
 MP_RV_FUNC(build_wPNKC);
 MP_RV_FUNC(fit_sparseness);
 MP_RV_FUNC(run_ORN_LN_sims);

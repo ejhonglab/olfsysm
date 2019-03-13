@@ -41,47 +41,6 @@ std::string cat(Args&&... args) {
     return ss.str();
 }
 
-/* The ID associated with each HC glom, in the order that they are listed as
- * columns in the HC data file.
- * len = N_HC_GLOMS+1 = 24. */
-unsigned const HC_GLOMNUMS[] = {
-    6, 16, 45, 11, 7, 19, 4,
-    123456,  // UNUSED!! (8TH GLOM)
-    38, 5, 44, 20, 28, 32, 21,
-    14, 23, 39, 33, 22, 47, 15,
-    27, 48};
-
-/* A transform that zeros rows corresponding to non-HC gloms. */
-Matrix const ZERO_NONHC_GLOMS = [](){
-    Matrix ret(N_GLOMS_ALL, N_GLOMS_ALL);
-    ret.setZero();
-    for (unsigned i = 0; i < N_HC_GLOMS+1; i++) {
-        if (i == 7) continue; // skip the 8th glom; it's bad!
-        unsigned gn = HC_GLOMNUMS[i];
-        ret(gn, gn) = 1.0;
-    }
-    return ret;
-}();
-
-/* A distribution describing the frequency with wich each HC glom should be
- * connected to when creating PN->KC connectivity matrices. */
-std::discrete_distribution<int> HC_GLOM_CXN_DISTRIB {
-    2.0, 24.0, 4.0, 30.0, 33.0, 8.0, 0.0,
-    0.0, // no #8!
-    29.0, 6.0, 2.0, 4.0, 21.0, 18.0, 4.0,
-    12.0, 21.0, 10.0, 27.0, 4.0, 26.0, 7.0,
-    26.0, 24.0
-};
-/* Convenience description of uniform connectivity probabilities, with #8
- * removed. */
-std::discrete_distribution<int> HC_GLOM_CXN_UNIFORM_DISTRIB {
-    1, 1, 1, 1, 1, 1, 1,
-    0, // no #8!
-    1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1,
-    1, 1
-};
-
 /* For random number generation. */
 thread_local std::random_device g_randdev;
 thread_local std::mt19937 g_randgen{g_randdev()};
@@ -96,8 +55,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.time.stim.end   = 0.5;
     p.time.dt         = 0.5e-3;
 
-    p.orn.taum = 0.01;
-    p.orn.hcdata_path = "hc_data.csv";
+    p.orn.taum             = 0.01;
+    p.orn.n_physical_gloms = 51;
 
     p.ln.taum   = 0.01;
     p.ln.tauGA  = 0.1;
@@ -169,6 +128,13 @@ void remove_all_pretime(ModelParams const& p, RunVars& r);
 *********************                                      *********************
 ********************************************************************************
 *******************************************************************************/
+inline unsigned get_ngloms(ModelParams const& mp) {
+    return mp.orn.data.delta.rows();
+}
+inline unsigned get_nodors(ModelParams const& mp) {
+    return mp.orn.data.delta.cols();
+}
+
 ModelParams::Time::Time() : stim(*this) {
 }
 ModelParams::Time::Time(Time const& o) : stim(*this) {
@@ -213,24 +179,21 @@ Row ModelParams::Time::row_all() const {
 RunVars::RunVars(ModelParams const& p) : orn(p), ln(p), pn(p), kc(p) {
 }
 RunVars::ORN::ORN(ModelParams const& p) :
-    rates(N_GLOMS, N_ODORS),
-    spont(N_GLOMS, 1),
-    delta(N_GLOMS, N_ODORS),
-    sims(N_ODORS, Matrix(N_GLOMS, p.time.steps_all())) {
+    sims(get_nodors(p), Matrix(get_ngloms(p), p.time.steps_all())) {
 }
 RunVars::LN::LN(ModelParams const& p) :
-    inhA{std::vector<Vector>(N_HC_ODORS, Row(1, p.time.steps_all()))},
-    inhB{std::vector<Vector>(N_HC_ODORS, Row(1, p.time.steps_all()))} {
+    inhA{std::vector<Vector>(get_nodors(p), Row(1, p.time.steps_all()))},
+    inhB{std::vector<Vector>(get_nodors(p), Row(1, p.time.steps_all()))} {
 }
 RunVars::PN::PN(ModelParams const& p) :
-    sims(N_ODORS, Matrix(N_GLOMS, p.time.steps_all())) {
+    sims(get_nodors(p), Matrix(get_ngloms(p), p.time.steps_all())) {
 }
 RunVars::KC::KC(ModelParams const& p) :
-    wPNKC(p.kc.N, N_GLOMS),
+    wPNKC(p.kc.N, get_ngloms(p)),
     wAPLKC(p.kc.N, 1),
     wKCAPL(1, p.kc.N),
     thr(p.kc.N, 1),
-    responses(p.kc.N, N_ODORS),
+    responses(p.kc.N, get_nodors(p)),
     tuning_iters(0) {
 }
 
@@ -249,14 +212,32 @@ void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
     vec[vec.size()-1] = growing;
 }
 
-void load_hc_data(ModelParams const& p, RunVars& run) {
-    run.log("loading HC data from file: " + p.orn.hcdata_path);
+/* Helper function for load_hc_data(). */
+void load_hc_data_line(
+        std::string const& line, std::vector<std::string>& segs,
+        Matrix& out, unsigned col) {
+    unsigned const N_HC_GLOMS  = 23;
+    split_regular_csv(line, segs);
+    unsigned g8fix = 0; // decrement the column ID of odors after glom 8
+    for (unsigned glom = 0; glom < N_HC_GLOMS+1; glom++) {
+        /* Ignore the 8th glom column (Kennedy does this). */
+        if (glom == 7) {
+            g8fix = 1;
+            continue;
+        }
 
-    run.orn.rates.setZero();
-    run.orn.spont.setZero();
-    run.orn.delta.setZero();
+        out(glom-g8fix, col) = std::stod(segs[glom+2]);
+    }
+}
+void load_hc_data(ModelParams& p, std::string const& fpath) {
+    unsigned const N_HC_ODORS  = 110; // all original HC odors
+    unsigned const N_HC_GLOMS  = 23;  // all good HC gloms
+    unsigned const N_ODORS_ALL = 186; // all odors in Kennedy's HC data file
 
-    std::ifstream fin(p.orn.hcdata_path);
+    p.orn.data.delta.resize(N_HC_GLOMS, N_HC_ODORS);
+    p.orn.data.spont.resize(N_HC_GLOMS, 1);
+
+    std::ifstream fin(fpath);
     std::string line;
 
     /* Discard the first two (header) lines. */
@@ -273,27 +254,23 @@ void load_hc_data(ModelParams const& p, RunVars& run) {
         if (odor >= N_HC_ODORS) continue;
 
         /* Parse and store data. */
-        split_regular_csv(line, segs);
-        for (unsigned glom = 0; glom < N_HC_GLOMS+1; glom++) {
-            /* Ignore the 8th glom column (Kennedy does this). */
-            if (glom == 7) continue;
-
-            /* At this point we're actually storing deltas. */
-            run.orn.rates(HC_GLOMNUMS[glom], odor) = std::stod(segs[glom+2]);
-            run.orn.delta(HC_GLOMNUMS[glom], odor) = std::stod(segs[glom+2]);
-        }
+        load_hc_data_line(line, segs, p.orn.data.delta, odor);
     }
 
     /* Load the spontaneous rates line. */
     std::getline(fin, line);
-    split_regular_csv(line, segs);
-    for (unsigned glom = 0; glom < N_HC_GLOMS+1; glom++) {
-        if (glom == 7) continue;
-        run.orn.spont(HC_GLOMNUMS[glom]) = std::stod(segs[glom+2]);
-    }
+    load_hc_data_line(line, segs, p.orn.data.spont, 0);
 
-    /* Convert deltas into absolute rates. */
-    run.orn.rates.colwise() += run.orn.spont.col(0);
+    /* Load connectivity distribution data. */
+    p.kc.cxn_distrib.resize(1, N_HC_GLOMS);
+    /* Data presumably taken from some real measurements.
+     * Taken from Kennedy source. */
+    p.kc.cxn_distrib <<
+        2.0, 24.0, 4.0, 30.0, 33.0, 8.0, 0.0,
+        // no #8!
+        29.0, 6.0, 2.0, 4.0, 21.0, 18.0, 4.0,
+        12.0, 21.0, 10.0, 27.0, 4.0, 26.0, 7.0,
+        26.0, 24.0;
 }
 
 void smoothts_exp(Matrix& vin, double wsize) {
@@ -314,33 +291,29 @@ void add_randomly(std::function<double()> rng, Matrix& out) {
     }
 }
 
-void build_wPNKC_weighted(ModelParams const& p, RunVars& r) {
-    /* Draw PN connections from realistic connection distribution data (see
-     * above). */
-    r.log("building WEIGHTED connectivity matrix");
-    r.kc.wPNKC.setZero();
-    for (unsigned kc = 0; kc < p.kc.N; kc++) {
-        for (unsigned claw = 0; claw < p.kc.nclaws; claw++) {
-            r.kc.wPNKC(kc, HC_GLOMNUMS[HC_GLOM_CXN_DISTRIB(g_randgen)]) += 1.0;
-        }
+void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
+    w.setZero();
+    std::vector<double> flat(cxnd.size());
+    for (unsigned i = 0; i < cxnd.size(); i++) {
+        flat[i] = cxnd(0, i);
     }
-}
-void build_wPNKC_uniform(ModelParams const& p, RunVars& r) {
-    r.log("building UNIFORM connectivity matrix");
-    r.kc.wPNKC.setZero();
-    for (unsigned kc = 0; kc < p.kc.N; kc++) {
-        for (unsigned claw = 0; claw < p.kc.nclaws; claw++) {
-            r.kc.wPNKC(kc, HC_GLOMNUMS[
-                    HC_GLOM_CXN_UNIFORM_DISTRIB(g_randgen)]) += 1.0;
+    std::discrete_distribution<int> dd(flat.begin(), flat.end());
+    for (unsigned kc = 0; kc < w.rows(); kc++) {
+        for (unsigned claw = 0; claw < nc; claw++) {
+            w(kc, dd(g_randgen)) += 1.0;
         }
     }
 }
 void build_wPNKC(ModelParams const& p, RunVars& rv) {
     if (p.kc.uniform_pns) {
-        build_wPNKC_uniform(p, rv);
+        rv.log("building UNIFORM connectivity matrix");
+        Row cxnd(1, get_ngloms(p));
+        cxnd.setOnes();
+        build_wPNKC_from_cxnd(rv.kc.wPNKC, p.kc.nclaws, cxnd);
     }
     else {
-        build_wPNKC_weighted(p, rv);
+        rv.log("building WEIGHTED connectivity matrix");
+        build_wPNKC_from_cxnd(rv.kc.wPNKC, p.kc.nclaws, p.kc.cxn_distrib);
     }
 }
 Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
@@ -351,21 +324,27 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
     unsigned sp_t2 =
         p.time.start_step()
         + unsigned((p.time.stim.start-p.time.start)/(p.time.dt));
-    return rv.pn.sims[0].block(0,sp_t1,N_GLOMS,sp_t2-sp_t1).rowwise().mean();
+    return rv.pn.sims[0].block(0,sp_t1,get_ngloms(p),sp_t2-sp_t1).rowwise().mean();
 }
 Column choose_KC_thresh(
         ModelParams const& p, Matrix& KCpks, Column const& spont_in) {
+    unsigned tlist_sz = KCpks.cols();
     KCpks.resize(1, KCpks.size());                     // flatten
     std::sort(KCpks.data(), KCpks.data()+KCpks.size(),
             [](double a, double b){return a>b;});      // dec. order
     double thr_const = KCpks(std::min(
-                int(p.kc.sp_target*2.0*double(p.kc.N*N_ODORS)),
-                int(p.kc.N*N_ODORS)-1));
+                int(p.kc.sp_target*2.0*double(p.kc.N*tlist_sz)),
+                int(p.kc.N*tlist_sz)-1));
     return thr_const + spont_in.array()*2.0;
 
 }
 void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log("fitting sparseness");
+
+    std::vector<unsigned> tlist = p.kc.tune_from;
+    if (!tlist.size()) {
+        for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
+    }
 
     /* Set starting values for the things we'll tune. */
     rv.kc.wAPLKC.setZero();
@@ -383,10 +362,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
     /* Used for measuring KC voltage; defined here to make it shared across all
      * threads.*/
-    Matrix KCpks(p.kc.N, N_ODORS); KCpks.setZero();
+    Matrix KCpks(p.kc.N, tlist.size()); KCpks.setZero();
 
     /* Used to store odor response data during APL tuning. */
-    Matrix KCmean_st(p.kc.N, 1+((N_ODORS-1)/3));
+    Matrix KCmean_st(p.kc.N, 1+((tlist.size()-1)/3));
     /* Used to store the current sparsity.
      * Initially set to the below value because, given default model
      * parameters, it causes tuning to complete in just one iteration. */
@@ -411,8 +390,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Measure voltages achieved by the KCs, and choose a threshold
              * based on that. */
 #pragma omp for
-            for (unsigned i = 0; i < N_ODORS; i++) {
-                sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
+            for (unsigned i = 0; i < tlist.size(); i++) {
+                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes);
                 KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
             }
 
@@ -475,8 +454,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log(cat("** t", omp_get_thread_num(), " @ before testing"));
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
-            for (unsigned i = 0; i < N_ODORS; i+=3) {
-                sim_KC_layer(p, rv, rv.pn.sims[i], Vm, spikes);
+            for (unsigned i = 0; i < tlist.size(); i+=3) {
+                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes);
                 KCmean_st.col(i/3) = spikes.rowwise().sum();
             }
             rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
@@ -511,11 +490,11 @@ void sim_ORN_layer(
         int odorid,
         Matrix& orn_t) {
     /* Initialize with spontaneous activity. */
-    orn_t = rv.orn.spont*p.time.row_all();
+    orn_t = p.orn.data.spont*p.time.row_all();
 
     /* "Odor input to ORNs" (Kennedy comment)
      * Smoothed timeseries of spont...odor rate...spont */
-    Matrix odor = orn_t + rv.orn.delta.col(odorid)*p.time.stim.row_all();
+    Matrix odor = orn_t + p.orn.data.delta.col(odorid)*p.time.stim.row_all();
     smoothts_exp(odor, 0.02/p.time.dt); // where does 0.02 come from!?
 
     double mul = p.time.dt/p.orn.taum;
@@ -534,12 +513,13 @@ void sim_LN_layer(
     double inh_LN = 0.0;
 
     double dinhAdt, dinhBdt, dLNdt;
+    double scaling = double(get_ngloms(p))/double(p.orn.n_physical_gloms);
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         dinhAdt = -inhA(t-1) + response(t-1);
         dinhBdt = -inhB(t-1) + response(t-1);
         dLNdt =
             -potential(t-1)
-            +pow(orn_t.col(t-1).mean(), 3.0)*51.0/23.0/2.0*inh_LN;
+            +pow(orn_t.col(t-1).mean()*scaling, 3.0)/scaling/2.0*inh_LN;
         inhA(t) = inhA(t-1) + dinhAdt*p.time.dt/p.ln.tauGA;
         inhB(t) = inhB(t-1) + dinhBdt*p.time.dt/p.ln.tauGB;
         inh_LN = p.ln.inhsc/(p.ln.inhadd+inhA(t));
@@ -554,14 +534,14 @@ void sim_PN_layer(
         Matrix& pn_t) {                                        
     std::normal_distribution<double> noise(p.pn.noise.mean, p.pn.noise.sd);
 
-    Column spont  = rv.orn.spont*p.pn.inhsc/(rv.orn.spont.sum()+p.pn.inhadd);
-    pn_t          = rv.orn.spont*p.time.row_all();
+    Column spont  = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
+    pn_t          = p.orn.data.spont*p.time.row_all();
     double inh_PN = 0.0;
 
     Column orn_delta;
     Column dPNdt;
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
-        orn_delta = orn_t.col(t-1)-rv.orn.spont;
+        orn_delta = orn_t.col(t-1)-p.orn.data.spont;
         dPNdt = -pn_t.col(t-1) + spont;
         dPNdt += 
             200.0*((orn_delta.array()+p.pn.offset)*p.pn.tanhsc/200.0*inh_PN).matrix().unaryExpr<double(*)(double)>(&tanh);
@@ -571,9 +551,6 @@ void sim_PN_layer(
         pn_t.col(t) = pn_t.col(t-1) + dPNdt*p.time.dt/p.pn.taum;
         pn_t.col(t) = (0.0 < pn_t.col(t).array()).select(pn_t.col(t), 0.0);
     }
-
-    /* Zero non-HC gloms (they are just noise, not from odor...) */
-    pn_t = ZERO_NONHC_GLOMS * pn_t;
 }
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
@@ -607,11 +584,11 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
     rv.log("running ORN and LN sims");
 #pragma omp parallel
     {
-        Matrix orn_t(N_GLOMS, p.time.steps_all());
+        Matrix orn_t(get_ngloms(p), p.time.steps_all());
         Row inhA(1, p.time.steps_all());
         Row inhB(1, p.time.steps_all());
 #pragma omp for
-        for (unsigned i = 0; i < N_ODORS; i++) {
+        for (unsigned i = 0; i < get_nodors(p); i++) {
             sim_ORN_layer(p, rv, i, orn_t);
             sim_LN_layer(p, orn_t, inhA, inhB);
 #pragma omp critical
@@ -633,7 +610,7 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
     rv.log("running PN sims");
 #pragma omp parallel for
-    for (unsigned i = 0; i < N_ODORS; i++) {
+    for (unsigned i = 0; i < get_nodors(p); i++) {
         sim_PN_layer(
                 p, rv,
                 rv.orn.sims[i], rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
@@ -654,7 +631,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix respcol;
 #pragma omp for
-        for (unsigned i = 0; i < N_ODORS; i++) {
+        for (unsigned i = 0; i < get_nodors(p); i++) {
             sim_KC_layer(
                     p, rv,
                     rv.pn.sims[i],

@@ -1,5 +1,5 @@
-#ifndef MODEL_H_
-#define MODEL_H_
+#ifndef OLFSYSM_H_
+#define OLFSYSM_H_
 
 #include <vector>
 #include <string>
@@ -31,14 +31,6 @@ public:
     /* Shut off output. */
     void disable();
 };
-
-/* Constants relevant to HC data loading. */
-unsigned const N_HC_ODORS  = 110; // all original HC odors
-unsigned const N_ODORS_ALL = 186; // all odors in the hc data file
-unsigned const N_ODORS = N_HC_ODORS;
-unsigned const N_GLOMS_ALL = 51;  // all physical gloms
-unsigned const N_HC_GLOMS  = 23;  // all good HC gloms
-unsigned const N_GLOMS = N_GLOMS_ALL;
 
 /* Use to show intent. */
 using Matrix = Eigen::MatrixXd;
@@ -103,8 +95,17 @@ struct ModelParams {
         /* Membrane time constant. */
         double taum;
 
-        /* Path to the HC data file. */
-        std::string hcdata_path;
+        /* The number of gloms in the physical system; used to scale input to
+         * LNs. */
+        unsigned n_physical_gloms;
+
+        /* ORN spike-rate info (the model input). Not set by DEFAULT_PARAMS! */
+        struct Data {
+            /* Spontaneous rates; n_gloms x 1.*/
+            Column spont;
+            /* Firing rate changes in response to odors; n_gloms x n_odors. */
+            Column delta;
+        } data;
     } orn;
 
     /* LN params. */
@@ -149,6 +150,8 @@ struct ModelParams {
         unsigned nclaws;
         /* Whether to use uniform PN choice, or use observational data. */
         bool uniform_pns;
+        /* Weighted PN distribution data; required if uniform_pns is false. */
+        Row cxn_distrib;
 
         /* Whether to simulate the APL at all.*/
         bool enable_apl;
@@ -172,6 +175,11 @@ struct ModelParams {
          * aborting. Must be >=1. */
         unsigned max_iters;
 
+        /* List of (0-based!) IDs of odors that should be used for APL/sparsity
+         * tuning. If the list is empty, then it will be ignored and instead
+         * all odors will be used. */
+        std::vector<unsigned> tune_from;
+
         /* Time constants. */
         double taum;
         double apl_taum;
@@ -186,13 +194,6 @@ extern ModelParams const DEFAULT_PARAMS;
 struct RunVars {
     /* ORN-related variables. */
     struct ORN {
-        /* Loaded ORN firing rates (spont+delta). */
-        Matrix rates;
-        /* Spontaneous rates. */
-        Column spont;
-        /* Firing rate changes in response to odors. */
-        Column delta;
-
         /* Simulation results. */
         std::vector<Matrix> sims;
 
@@ -252,7 +253,7 @@ struct RunVars {
 };
 
 /* Load HC data from file. */
-void load_hc_data(ModelParams const& p, RunVars& rv);
+void load_hc_data(ModelParams& p, std::string const& fpath);
 
 /* Choose between the above functions appropriately. */
 void build_wPNKC(ModelParams const& p, RunVars& rv);
