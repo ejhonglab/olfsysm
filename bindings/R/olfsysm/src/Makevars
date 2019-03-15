@@ -1,2 +1,2 @@
-PKG_CXXFLAGS = -std=c++14 $(SHLIB_OPENMP_CXXFLAGS) -g
+PKG_CXXFLAGS = -std=c++14 $(SHLIB_OPENMP_CXXFLAGS) -g -march=native
 PKG_LIBS = -L./ -lolfsysm
