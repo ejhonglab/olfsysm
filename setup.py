@@ -22,22 +22,20 @@ class get_pybind_include(object):
         import pybind11
         return pybind11.get_include(self.user)
 
-#
-print(include_dirs)
-#
 
 ext_modules = [
     Extension(
         'olfsysm',
-        ['bindings/python/pyolfsysm.cpp'],
-        include_dirs=include_dirs,
+        ['libolfsysm/src/olfsysm.cpp', 'bindings/python/pyolfsysm.cpp'],
         include_dirs = [
             'libolfsysm/api',
             'libolfsysm/include',
-            # Path to pybind11 headers
             get_pybind_include(),
             get_pybind_include(user=True)
         ],
+        libraries=['gomp'],
+        extra_compile_args = ['-fopenmp', '-fpic'],
+        extra_link_args = ['-lgomp'],
         language='c++'
     ),
 ]
@@ -59,20 +57,6 @@ def has_flag(compiler, flagname):
     return True
 
 
-def cpp_flag(compiler):
-    """Return the -std=c++[11/14] compiler flag.
-
-    The c++14 is prefered over c++11 (when it is available).
-    """
-    if has_flag(compiler, '-std=c++14'):
-        return '-std=c++14'
-    elif has_flag(compiler, '-std=c++11'):
-        return '-std=c++11'
-    else:
-        raise RuntimeError('Unsupported compiler -- at least C++11 support '
-                           'is needed!')
-
-
 class BuildExt(build_ext):
     """A custom build extension for adding compiler-specific options."""
     c_opts = {
@@ -86,28 +70,39 @@ class BuildExt(build_ext):
     def build_extensions(self):
         ct = self.compiler.compiler_type
         opts = self.c_opts.get(ct, [])
+
         if ct == 'unix':
             opts.append('-DVERSION_INFO="%s"' % self.distribution.get_version())
-            opts.append(cpp_flag(self.compiler))
+
+            opts.append('-std=c++17')
             if has_flag(self.compiler, '-fvisibility=hidden'):
                 opts.append('-fvisibility=hidden')
+
         elif ct == 'msvc':
             opts.append('/DVERSION_INFO=\\"%s\\"' % self.distribution.get_version())
+
         for ext in self.extensions:
-            ext.extra_compile_args = opts
+            for a in ext.extra_compile_args:
+                assert has_flag(self.compiler, a)
+
+            ext.extra_compile_args += opts
+
         build_ext.build_extensions(self)
+
 
 setup(
     name='olfsysm',
     version=__version__,
-    author="Tom O'Connell",
-    author_email='tom.oconn3ll@gmail.com',
+    author="",
+    author_email='',
     url='https://github.com/bauersmatthew/olfsysm',
     # TODO
     description='',
+    # TODO from readme
     long_description='',
     ext_modules=ext_modules,
     install_requires=['pybind11>=2.2'],
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
 )
+
