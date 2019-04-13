@@ -13,6 +13,16 @@ and [Rcpp](https://cran.r-project.org/web/packages/Rcpp/index.html).
 Once these are installed, `make` from the base directory will build everything and install the R package.
 If not run with `sudo`, a local R install directory must already exist.
 
+Compilation will fail with `g++` version 5.5.0, but works with `g++` 7.4.0.
+If using Ubuntu 16.04, you may need to follow [these instructions](https://gist.github.com/jlblancoc/99521194aba975286c80f93e47966dc5)
+to update your `g++`.
+
+### Python bindings
+```
+pip install pybind11
+python setup.py install
+```
+
 ## Example Run (R Code)
 ```R
 library(olfsysm)
