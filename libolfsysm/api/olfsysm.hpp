@@ -203,11 +203,11 @@ struct RunVars {
 
     /* LN-related variables. */
     struct LN {
-        struct {
+        struct InhA {
             /* InhA timecourses. */
             std::vector<Vector> sims;
         } inhA;
-        struct {
+        struct InhB {
             /* InhB timecourses. */
             std::vector<Vector> sims;
         } inhB;
