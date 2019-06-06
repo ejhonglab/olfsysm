@@ -326,7 +326,7 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
         + unsigned((p.time.stim.start-p.time.start)/(p.time.dt));
     return rv.pn.sims[0].block(0,sp_t1,get_ngloms(p),sp_t2-sp_t1).rowwise().mean();
 }
-Column choose_KC_thresh(
+Column choose_KC_thresh_uniform(
         ModelParams const& p, Matrix& KCpks, Column const& spont_in) {
     unsigned tlist_sz = KCpks.cols();
     KCpks.resize(1, KCpks.size());                     // flatten
@@ -336,7 +336,27 @@ Column choose_KC_thresh(
                 int(p.kc.sp_target*2.0*double(p.kc.N*tlist_sz)),
                 int(p.kc.N*tlist_sz)-1));
     return thr_const + spont_in.array()*2.0;
-
+}
+Column choose_KC_thresh_homeostatic(
+        ModelParams const& p, Matrix& KCpks, Column const& spont_in) {
+    /* Basically do the same procedure as the uniform algorithm, but do it for
+     * each KC (row) separately instead of all together. 
+     * To sort each row in place, we first flatten the entire list, and then
+     * sort portions of it in place. This is an unfortunate consequence of the
+     * lack of stl iterators in Eigen <=3.4. */
+    Column thr = 2.0*spont_in;
+    unsigned cols = KCpks.cols();
+    unsigned wanted = p.kc.sp_target*double(cols);
+    KCpks.transposeInPlace();
+    KCpks.resize(1, KCpks.size());
+    /* Choose a threshold for each KC by inspecting its sorted responses. */
+    for (unsigned i = 0; i < p.kc.N; i++) {
+        unsigned offset = i*cols;
+        std::sort(KCpks.data()+offset, KCpks.data()+offset+cols,
+                std::greater<double>());
+        thr(i) += KCpks(offset+wanted);
+    }
+    return thr;
 }
 void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log("fitting sparseness");
@@ -398,7 +418,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 #pragma omp single
             {
                 /* Finish picking thresholds. */
-                rv.kc.thr = choose_KC_thresh(p, KCpks, spont_in);
+                if (p.kc.use_homeostatic_thrs) {
+                    rv.kc.thr = choose_KC_thresh_homeostatic(p, KCpks, spont_in);
+                }
+                else {
+                    rv.kc.thr = choose_KC_thresh_uniform(p, KCpks, spont_in);
+                }
             }
         }
 

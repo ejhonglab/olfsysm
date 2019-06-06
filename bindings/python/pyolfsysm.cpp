@@ -86,6 +86,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("enable_apl", &ModelParams::KC::enable_apl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
+        .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)

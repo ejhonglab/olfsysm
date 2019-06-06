@@ -161,6 +161,10 @@ struct ModelParams {
         double fixed_thr;
         bool use_fixed_thr;
 
+        /* Use homeostatic (instead of uniform) KC thresholding.
+         * Is overridden by use_fixed_thr. */
+        bool use_homeostatic_thrs;
+
         /* The target sparsity. */
         double sp_target;
 
