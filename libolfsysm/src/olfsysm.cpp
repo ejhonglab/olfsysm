@@ -73,19 +73,20 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.noise.mean = 0.0;
     p.pn.noise.sd   = 0.0;
 
-    p.kc.N             = 2000;
-    p.kc.nclaws        = 6;
-    p.kc.uniform_pns   = false;
-    p.kc.enable_apl    = true;
-    p.kc.fixed_thr     = 0;
-    p.kc.use_fixed_thr = false;
-    p.kc.sp_target     = 0.1;
-    p.kc.sp_acc        = 0.1;
-    p.kc.sp_lr_coeff   = 10.0;
-    p.kc.max_iters     = 10;
-    p.kc.taum          = 0.01;
-    p.kc.apl_taum      = 0.05;
-    p.kc.tau_apl2kc    = 0.01;
+    p.kc.N                    = 2000;
+    p.kc.nclaws               = 6;
+    p.kc.uniform_pns          = false;
+    p.kc.enable_apl           = true;
+    p.kc.fixed_thr            = 0;
+    p.kc.use_fixed_thr        = false;
+    p.kc.use_homeostatic_thrs = true;
+    p.kc.sp_target            = 0.1;
+    p.kc.sp_acc               = 0.1;
+    p.kc.sp_lr_coeff          = 10.0;
+    p.kc.max_iters            = 10;
+    p.kc.taum                 = 0.01;
+    p.kc.apl_taum             = 0.05;
+    p.kc.tau_apl2kc           = 0.01;
 
     return p;
 }();
@@ -194,6 +195,7 @@ RunVars::KC::KC(ModelParams const& p) :
     wKCAPL(1, p.kc.N),
     thr(p.kc.N, 1),
     responses(p.kc.N, get_nodors(p)),
+    spike_counts(p.kc.N, get_nodors(p)),
     tuning_iters(0) {
 }
 
@@ -346,7 +348,7 @@ Column choose_KC_thresh_homeostatic(
      * lack of stl iterators in Eigen <=3.4. */
     Column thr = 2.0*spont_in;
     unsigned cols = KCpks.cols();
-    unsigned wanted = p.kc.sp_target*double(cols);
+    unsigned wanted = p.kc.sp_target*2.0*double(cols);
     KCpks.transposeInPlace();
     KCpks.resize(1, KCpks.size());
     /* Choose a threshold for each KC by inspecting its sorted responses. */
@@ -655,6 +657,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix respcol;
+        Matrix respcol_bin;
 #pragma omp for
         for (unsigned i = 0; i < get_nodors(p); i++) {
             sim_KC_layer(
@@ -662,10 +665,11 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                     rv.pn.sims[i],
                     Vm, spikes);
             respcol = spikes.rowwise().sum();
-            respcol = (respcol.array() > 0.0).select(1.0, respcol);
+            respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
 
 #pragma omp critical
-            rv.kc.responses.col(i) = respcol;
+            rv.kc.responses.col(i) = respcol_bin;
+            rv.kc.spike_counts.col(i) = respcol;
         }
     }
 }

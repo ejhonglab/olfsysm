@@ -241,6 +241,9 @@ struct RunVars {
         /* Binary (KC, odor) response information. */
         Matrix responses;
 
+        /* Like responses, but counting the number of spikes. */
+        Matrix spike_counts;
+
         /* The number of iterations done during APL tuning. */
         unsigned tuning_iters;
 
