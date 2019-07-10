@@ -188,6 +188,10 @@ struct ModelParams {
         double taum;
         double apl_taum;
         double tau_apl2kc;
+
+        /* Output options. */
+        bool save_vm_sims;
+        bool save_spike_recordings;
     } kc;
 };
 extern ModelParams const DEFAULT_PARAMS;
@@ -243,6 +247,12 @@ struct RunVars {
 
         /* Like responses, but counting the number of spikes. */
         Matrix spike_counts;
+
+        /* Membrane voltage timeseries (KCs x timesteps) for each odor. */
+        std::vector<Matrix> vm_sims;
+
+        /* Spike recordings (KCs x timesteps) for each odor. */
+        std::vector<Matrix> spike_recordings;
 
         /* The number of iterations done during APL tuning. */
         unsigned tuning_iters;

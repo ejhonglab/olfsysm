@@ -73,20 +73,22 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.noise.mean = 0.0;
     p.pn.noise.sd   = 0.0;
 
-    p.kc.N                    = 2000;
-    p.kc.nclaws               = 6;
-    p.kc.uniform_pns          = false;
-    p.kc.enable_apl           = true;
-    p.kc.fixed_thr            = 0;
-    p.kc.use_fixed_thr        = false;
-    p.kc.use_homeostatic_thrs = true;
-    p.kc.sp_target            = 0.1;
-    p.kc.sp_acc               = 0.1;
-    p.kc.sp_lr_coeff          = 10.0;
-    p.kc.max_iters            = 10;
-    p.kc.taum                 = 0.01;
-    p.kc.apl_taum             = 0.05;
-    p.kc.tau_apl2kc           = 0.01;
+    p.kc.N                     = 2000;
+    p.kc.nclaws                = 6;
+    p.kc.uniform_pns           = false;
+    p.kc.enable_apl            = true;
+    p.kc.fixed_thr             = 0;
+    p.kc.use_fixed_thr         = false;
+    p.kc.use_homeostatic_thrs  = true;
+    p.kc.sp_target             = 0.1;
+    p.kc.sp_acc                = 0.1;
+    p.kc.sp_lr_coeff           = 10.0;
+    p.kc.max_iters             = 10;
+    p.kc.taum                  = 0.01;
+    p.kc.apl_taum              = 0.05;
+    p.kc.tau_apl2kc            = 0.01;
+    p.kc.save_vm_sims          = false;
+    p.kc.save_spike_recordings = false;
 
     return p;
 }();
@@ -196,7 +198,11 @@ RunVars::KC::KC(ModelParams const& p) :
     thr(p.kc.N, 1),
     responses(p.kc.N, get_nodors(p)),
     spike_counts(p.kc.N, get_nodors(p)),
-    tuning_iters(0) {
+    tuning_iters(0),
+    vm_sims(p.kc.save_vm_sims ? get_nodors(p) : 0,
+            Matrix(p.kc.N, p.time.steps_all())),
+    spike_recordings(p.kc.save_spike_recordings ? get_nodors(p) : 0,
+            Matrix(p.kc.N, p.time.steps_all())) {
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -654,17 +660,34 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     rv.log("running KC sims");
 #pragma omp parallel
     {
-        Matrix Vm(p.kc.N, p.time.steps_all());
-        Matrix spikes(p.kc.N, p.time.steps_all());
+        Matrix Vm_here;
+        if (p.kc.save_vm_sims) {
+            Vm_here = Matrix(p.kc.N, p.time.steps_all());
+        }
+
+        Matrix spikes_here;
+        if (p.kc.save_spike_recordings) {
+            spikes_here = Matrix(p.kc.N, p.time.steps_all());
+        }
+
+        // Matrix Vm(p.kc.N, p.time.steps_all());
+        // Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix respcol;
         Matrix respcol_bin;
 #pragma omp for
         for (unsigned i = 0; i < get_nodors(p); i++) {
+            Matrix& Vm_link = p.kc.save_vm_sims 
+                ? rv.kc.vm_sims.at(i)
+                : Vm_here;
+            Matrix& spikes_link = p.kc.save_spike_recordings
+                ? rv.kc.spike_recordings.at(i)
+                : spikes_here;
+
             sim_KC_layer(
                     p, rv,
                     rv.pn.sims[i],
-                    Vm, spikes);
-            respcol = spikes.rowwise().sum();
+                    Vm_link, spikes_link);
+            respcol = spikes_link.rowwise().sum();
             respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
 
 #pragma omp critical
