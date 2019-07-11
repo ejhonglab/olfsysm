@@ -111,6 +111,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.fixed_thr",             mp->kc.fixed_thr);
     ACCESS("kc.use_fixed_thr",         mp->kc.use_fixed_thr);
     ACCESS("kc.use_homeostatic_thrs",  mp->kc.use_homeostatic_thrs);
+    ACCESS("kc.thr_type",              mp->kc.thr_type);
     ACCESS("kc.sp_target",             mp->kc.sp_target);
     ACCESS("kc.sp_acc",                mp->kc.sp_acc);
     ACCESS("kc.sp_lr_coeff",           mp->kc.sp_lr_coeff);

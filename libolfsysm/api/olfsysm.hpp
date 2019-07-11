@@ -165,6 +165,18 @@ struct ModelParams {
          * Is overridden by use_fixed_thr. */
         bool use_homeostatic_thrs;
 
+        /* One of "uniform", "hstatic", "mixed", or "fixed" if set.
+         * If set, this option overrides other flags. Otherwise, the
+         * thresholding type is decided by the use_fixed_thr and
+         * use_homeostatic_thrs flags.
+         * Uniform: traditional thresholding where all thresholds are the same,
+         *   +/- spontaneous activity.
+         * Hstatic: homeostatic thresholding where each KC is given its own
+         *   threshold based on lifetime input recieved.
+         * Mixed: the average of uniform and hstatic.
+         * Fixed: all thrs are set to a fixed value (fixed_thr). */
+        std::string thr_type;
+
         /* The target sparsity. */
         double sp_target;
 

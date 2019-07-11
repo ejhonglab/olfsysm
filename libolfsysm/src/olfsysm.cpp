@@ -80,6 +80,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.fixed_thr             = 0;
     p.kc.use_fixed_thr         = false;
     p.kc.use_homeostatic_thrs  = true;
+    p.kc.thr_type              = "";
     p.kc.sp_target             = 0.1;
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 10.0;
@@ -366,6 +367,17 @@ Column choose_KC_thresh_homeostatic(
     }
     return thr;
 }
+Column choose_KC_thresh_mixed(
+        ModelParams const& p, Matrix& KCpks, Column const& spont_in) {
+    /* Just average uniform and homeostatic thresholding. */
+    // choose_KC_thresh_X methods mess with KCpks, so we have to give them each
+    // their own.
+    Matrix& KCpks1 = KCpks;
+    Matrix KCpks2 = KCpks;
+    Column uniform = choose_KC_thresh_uniform(p, KCpks1, spont_in);
+    Column hstatic = choose_KC_thresh_homeostatic(p, KCpks2, spont_in);
+    return (uniform+hstatic)/2.0;
+}
 void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log("fitting sparseness");
 
@@ -402,6 +414,24 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
      * as 1/sqrt(count) with each iteration. */
     rv.kc.tuning_iters = 0;
 
+    unsigned const TTFIXED = 1;
+    unsigned const TTHSTATIC = 2;
+    unsigned const TTMIXED = 3;
+    unsigned const TTUNIFORM = 4;
+    unsigned const TTINVALID = 5;
+    std::string tt = p.kc.thr_type;
+    bool nott = (tt == "");
+    unsigned thrtype =
+        nott ?
+            p.kc.use_fixed_thr ? TTFIXED :
+            p.kc.use_homeostatic_thrs ? TTHSTATIC :
+            TTUNIFORM
+        :   tt == "uniform" ? TTUNIFORM :
+            tt == "hstatic" ? TTHSTATIC :
+            tt == "mixed" ? TTMIXED :
+            tt == "fixed" ? TTFIXED :
+        (abort(), TTINVALID);
+
     /* Break up into threads. */
 #pragma omp parallel
     { 
@@ -409,7 +439,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
 
-        if (!p.kc.use_fixed_thr) {
+        if (thrtype != TTFIXED) {
 #pragma omp single
             {
                 rv.log("choosing thresholds from spontaneous input");
@@ -426,12 +456,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 #pragma omp single
             {
                 /* Finish picking thresholds. */
-                if (p.kc.use_homeostatic_thrs) {
-                    rv.kc.thr = choose_KC_thresh_homeostatic(p, KCpks, spont_in);
-                }
-                else {
-                    rv.kc.thr = choose_KC_thresh_uniform(p, KCpks, spont_in);
-                }
+                rv.kc.thr =
+                    (thrtype == TTHSTATIC ? choose_KC_thresh_homeostatic :
+                     thrtype == TTMIXED ? choose_KC_thresh_mixed :
+                     choose_KC_thresh_uniform)
+                    (p, KCpks, spont_in);
             }
         }
 
@@ -661,12 +690,12 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 #pragma omp parallel
     {
         Matrix Vm_here;
-        if (p.kc.save_vm_sims) {
+        if (!p.kc.save_vm_sims) {
             Vm_here = Matrix(p.kc.N, p.time.steps_all());
         }
 
         Matrix spikes_here;
-        if (p.kc.save_spike_recordings) {
+        if (!p.kc.save_spike_recordings) {
             spikes_here = Matrix(p.kc.N, p.time.steps_all());
         }
 
