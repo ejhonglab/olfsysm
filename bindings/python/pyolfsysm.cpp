@@ -87,6 +87,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
+        .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
@@ -94,7 +95,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)
         .def_readwrite("taum", &ModelParams::KC::taum)
         .def_readwrite("apl_taum", &ModelParams::KC::apl_taum)
-        .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc);
+        .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc)
+        .def_readwrite("save_vm_sims", &ModelParams::KC::save_vm_sims)
+        .def_readwrite("save_spike_recordings", &ModelParams::KC::save_spike_recordings);
 
 	/* TODO convert all values in DEFAULT_PARAMS to default kwargs on a python
        constsructor */
@@ -126,6 +129,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wKCAPL", &RunVars::KC::wKCAPL)
         .def_readwrite("thr", &RunVars::KC::thr)
         .def_readwrite("responses", &RunVars::KC::responses)
+        .def_readwrite("spike_counts", &RunVars::KC::spike_counts)
+        .def_readwrite("vm_sims", &RunVars::KC::vm_sims)
+        .def_readwrite("spike_recordings", &RunVars::KC::spike_recordings)
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters);
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(
