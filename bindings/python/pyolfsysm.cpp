@@ -83,6 +83,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("nclaws", &ModelParams::KC::nclaws)
         .def_readwrite("uniform_pns", &ModelParams::KC::uniform_pns)
         .def_readwrite("cxn_distrib", &ModelParams::KC::cxn_distrib)
+        .def_readwrite("currents", &ModelParams::KC::currents)
         .def_readwrite("enable_apl", &ModelParams::KC::enable_apl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)

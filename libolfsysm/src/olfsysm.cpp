@@ -324,6 +324,10 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
         rv.log("building WEIGHTED connectivity matrix");
         build_wPNKC_from_cxnd(rv.kc.wPNKC, p.kc.nclaws, p.kc.cxn_distrib);
     }
+    if (p.kc.currents.size()) {
+        rv.kc.wPNKC *= p.kc.currents.asDiagonal();
+        //rv.kc.wPNKC = rv.kc.wPNKC.array().colwise() * p.kc.currents.array();
+    }
 }
 Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
     /* Sample from halfway between time start and stim start to stim start. */

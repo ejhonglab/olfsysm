@@ -153,6 +153,10 @@ struct ModelParams {
         /* Weighted PN distribution data; required if uniform_pns is false. */
         Row cxn_distrib;
 
+        /* Multiplicative current weights assigned to each PN. If left empty,
+         * then this is treated as a row of ones. */
+        Eigen::VectorXd currents;
+
         /* Whether to simulate the APL at all.*/
         bool enable_apl;
 

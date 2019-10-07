@@ -10,6 +10,9 @@ namespace Rcpp {
     template<> SEXP wrap(::Matrix const&);
 
     template<> SEXP wrap(std::vector<::Matrix> const&);
+
+    template<> Eigen::VectorXd as(SEXP);
+    template<> SEXP wrap(Eigen::VectorXd const&);
 }
 
 #include <Rcpp.h>
@@ -50,6 +53,22 @@ template<> SEXP Rcpp::wrap(std::vector<::Matrix> const& v) {
         ret.push_back(Rcpp::wrap<::Matrix>(m));
     }
     return Rcpp::wrap<Rcpp::List>(ret);
+}
+template<> Eigen::VectorXd Rcpp::as(SEXP s) {
+    Rcpp::NumericVector src = Rcpp::as<Rcpp::NumericVector>(s);
+    Eigen::VectorXd dst;
+    dst.resize(src.size());
+    for (unsigned i = 0; i < src.size(); i++) {
+        dst[i] = src[i];
+    }
+    return dst;
+}
+template<> SEXP Rcpp::wrap(Eigen::VectorXd const& src) {
+    Rcpp::NumericVector dst(src.size());
+    for (unsigned i = 0; i < src.size(); i++) {
+        dst[i] = src[i];
+    }
+    return Rcpp::wrap<Rcpp::NumericVector>(dst);
 }
 
 extern "C" SEXP mk_modelparams() { TRYFWD (
@@ -107,6 +126,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.nclaws",                mp->kc.nclaws);
     ACCESS("kc.uniform_pns",           mp->kc.uniform_pns);
     ACCESS("kc.cxn_distrib",           mp->kc.cxn_distrib);
+    ACCESS("kc.currents",              mp->kc.currents);
     ACCESS("kc.enable_apl",            mp->kc.enable_apl);
     ACCESS("kc.fixed_thr",             mp->kc.fixed_thr);
     ACCESS("kc.use_fixed_thr",         mp->kc.use_fixed_thr);
