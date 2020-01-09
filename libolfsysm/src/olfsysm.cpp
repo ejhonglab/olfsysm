@@ -76,6 +76,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
     p.kc.uniform_pns           = false;
+    p.kc.seed                  = 0;
     p.kc.enable_apl            = true;
     p.kc.fixed_thr             = 0;
     p.kc.use_fixed_thr         = false;
@@ -325,6 +326,9 @@ void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
     }
 }
 void build_wPNKC(ModelParams const& p, RunVars& rv) {
+    if (p.kc.seed != 0) {
+        g_randgen.seed(p.kc.seed);
+    }
     if (p.kc.uniform_pns) {
         rv.log("building UNIFORM connectivity matrix");
         Row cxnd(1, get_ngloms(p));
