@@ -140,8 +140,13 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.taum",                  mp->kc.taum);
     ACCESS("kc.apl_taum",              mp->kc.apl_taum);
     ACCESS("kc.tau_apl2kc",            mp->kc.tau_apl2kc);
+    ACCESS("kc.tau_r",                 mp->kc.tau_r);
+    ACCESS("kc.ves_p",                 mp->kc.ves_p);
     ACCESS("kc.save_vm_sims",          mp->kc.save_vm_sims);
     ACCESS("kc.save_spike_recordings", mp->kc.save_spike_recordings);
+    ACCESS("kc.save_nves_sims",        mp->kc.save_nves_sims);
+    ACCESS("kc.save_inh_sims",         mp->kc.save_inh_sims);
+    ACCESS("kc.save_Is_sims",          mp->kc.save_Is_sims);
 
     Rcpp::stop(std::string("invalid model parameter: ") + name);
     return R_NilValue;
@@ -166,6 +171,9 @@ extern "C" SEXP access_rvar(
     ACCESS("kc.spike_counts",     rv->kc.spike_counts);
     ACCESS("kc.vm_sims",          rv->kc.vm_sims);
     ACCESS("kc.spike_recordings", rv->kc.spike_recordings);
+    ACCESS("kc.nves_sims",        rv->kc.nves_sims);
+    ACCESS("kc.inh_sims",         rv->kc.inh_sims);
+    ACCESS("kc.Is_sims",          rv->kc.Is_sims);
     ACCESS("kc.tuning_iters",     rv->kc.tuning_iters);
 
     Rcpp::stop(std::string("invalid run variable: ") + name);

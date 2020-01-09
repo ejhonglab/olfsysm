@@ -88,8 +88,13 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.taum                  = 0.01;
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
+    p.kc.tau_r                 = 1.0;
+    p.kc.ves_p                 = 0.0;
     p.kc.save_vm_sims          = false;
     p.kc.save_spike_recordings = false;
+    p.kc.save_nves_sims        = false;
+    p.kc.save_inh_sims         = false;
+    p.kc.save_Is_sims          = false;
 
     return p;
 }();
@@ -203,7 +208,13 @@ RunVars::KC::KC(ModelParams const& p) :
     vm_sims(p.kc.save_vm_sims ? get_nodors(p) : 0,
             Matrix(p.kc.N, p.time.steps_all())),
     spike_recordings(p.kc.save_spike_recordings ? get_nodors(p) : 0,
-            Matrix(p.kc.N, p.time.steps_all())) {
+            Matrix(p.kc.N, p.time.steps_all())),
+    nves_sims(p.kc.save_nves_sims ? get_nodors(p) : 0,
+            Matrix(p.kc.N, p.time.steps_all())),
+    inh_sims(p.kc.save_inh_sims ? get_nodors(p) : 0,
+            Matrix(1, p.time.steps_all())),
+    Is_sims(p.kc.save_Is_sims ? get_nodors(p) : 0,
+            Matrix(1, p.time.steps_all())) {
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -442,6 +453,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         /* Output matrices for the KC simulation. */
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
+        Matrix nves(p.kc.N, p.time.steps_all());
+        Row inh(1, p.time.steps_all());
+        Row Is(1, p.time.steps_all());
 
         if (thrtype != TTFIXED) {
 #pragma omp single
@@ -453,7 +467,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
              * based on that. */
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i++) {
-                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes);
+                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes, nves, inh, Is);
                 KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
             }
 
@@ -521,7 +535,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i+=3) {
-                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes);
+                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes, nves, inh, Is);
                 KCmean_st.col(i/3) = spikes.rowwise().sum();
             }
             rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
@@ -621,15 +635,17 @@ void sim_PN_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t,
-        Matrix& Vm, Matrix& spikes) { 
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is) { 
     Vm.setZero();
     spikes.setZero();
-    Row inh(1, p.time.steps_all()); inh.setZero();
-    Row Is(1, p.time.steps_all());  Is.setZero();
+    nves.setOnes();
+    inh.setZero();
+    Is.setZero();
 
     Column dKCdt;
     for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
-        double dIsdt = -Is(t-1) + (rv.kc.wKCAPL*spikes.col(t-1))(0,0)*1e4;
+        double dIsdt = -Is(t-1) + (
+                rv.kc.wKCAPL*(nves.col(t-1).array()*spikes.col(t-1).array()).matrix())(0,0)*1e4;
         double dinhdt = -inh(t-1) + Is(t-1);
 
         dKCdt = 
@@ -639,6 +655,9 @@ void sim_KC_layer(
         Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
         inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
         Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
+
+        nves.col(t) = nves.col(t-1);
+        nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
 
         auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
         spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
@@ -703,6 +722,21 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             spikes_here = Matrix(p.kc.N, p.time.steps_all());
         }
 
+        Matrix nves_here;
+        if (!p.kc.save_nves_sims) {
+            nves_here = Matrix(p.kc.N, p.time.steps_all());
+        }
+
+        Row inh_here;
+        if (!p.kc.save_inh_sims) {
+            inh_here = Matrix(1, p.time.steps_all());
+        }
+
+        Row Is_here;
+        if (!p.kc.save_Is_sims) {
+            Is_here = Matrix(1, p.time.steps_all());
+        }
+
         // Matrix Vm(p.kc.N, p.time.steps_all());
         // Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix respcol;
@@ -715,11 +749,20 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             Matrix& spikes_link = p.kc.save_spike_recordings
                 ? rv.kc.spike_recordings.at(i)
                 : spikes_here;
+            Matrix& nves_link = p.kc.save_nves_sims
+                ? rv.kc.nves_sims.at(i)
+                : nves_here;
+            Matrix& inh_link = p.kc.save_inh_sims
+                ? rv.kc.inh_sims.at(i)
+                : inh_here;
+            Matrix& Is_link = p.kc.save_Is_sims
+                ? rv.kc.Is_sims.at(i)
+                : Is_here;
 
             sim_KC_layer(
                     p, rv,
                     rv.pn.sims[i],
-                    Vm_link, spikes_link);
+                    Vm_link, spikes_link, nves_link, inh_link, Is_link);
             respcol = spikes_link.rowwise().sum();
             respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
 

@@ -205,9 +205,17 @@ struct ModelParams {
         double apl_taum;
         double tau_apl2kc;
 
+        /* Synaptic depression params; see Hennig 2013 equation 3. Synaptic
+         * depression can be disabled by setting ves_p = 0. */
+        double tau_r;
+        double ves_p;
+
         /* Output options. */
         bool save_vm_sims;
         bool save_spike_recordings;
+        bool save_nves_sims;
+        bool save_inh_sims;
+        bool save_Is_sims;
     } kc;
 };
 extern ModelParams const DEFAULT_PARAMS;
@@ -270,6 +278,15 @@ struct RunVars {
         /* Spike recordings (KCs x timesteps) for each odor. */
         std::vector<Matrix> spike_recordings;
 
+        /* Timeseries of the vesicle depletion factor for each odor. */
+        std::vector<Matrix> nves_sims;
+
+        /* Timeseries of APL potential for each odor. */
+        std::vector<Row> inh_sims;
+
+        /* Timeseries of KC->APL synapse current for each odor. */
+        std::vector<Row> Is_sims;
+
         /* The number of iterations done during APL tuning. */
         unsigned tuning_iters;
 
@@ -317,7 +334,7 @@ void sim_PN_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t,
-        Matrix& Vm, Matrix& spikes);
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
