@@ -221,6 +221,9 @@ struct ModelParams {
         bool save_inh_sims;
         bool save_Is_sims;
     } kc;
+
+    /* Only (re?)simulate the given odors. If empty, simulate everything. */
+    std::vector<unsigned> sim_only;
 };
 extern ModelParams const DEFAULT_PARAMS;
 

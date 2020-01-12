@@ -148,6 +148,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.save_nves_sims",        mp->kc.save_nves_sims);
     ACCESS("kc.save_inh_sims",         mp->kc.save_inh_sims);
     ACCESS("kc.save_Is_sims",          mp->kc.save_Is_sims);
+    ACCESS("sim_only",                 mp->sim_only);
 
     Rcpp::stop(std::string("invalid model parameter: ") + name);
     return R_NilValue;

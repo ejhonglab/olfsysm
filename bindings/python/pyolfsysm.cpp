@@ -22,7 +22,9 @@ PYBIND11_MODULE(olfsysm, m) {
 	py::class_<ModelParams>(m, "ModelParams")
         .def_readwrite("orn", &ModelParams::orn)
         .def_readwrite("ln", &ModelParams::ln)
+        .def_readwrite("pn", &ModelParams::pn)
         .def_readwrite("kc", &ModelParams::kc)
+        .def_readwrite("sim_only", &ModelParams::sim_only)
         .def(py::init([](){
             return std::unique_ptr<ModelParams>(new ModelParams(DEFAULT_PARAMS));
         }))

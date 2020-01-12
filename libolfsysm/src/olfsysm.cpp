@@ -131,6 +131,9 @@ void remove_before(unsigned step, Matrix& timecourse);
 /* Remove all pretime columns in all timecourses in r. */
 void remove_all_pretime(ModelParams const& p, RunVars& r);
 
+/* Get the list of odors that should be simulated (non-tuning). */
+std::vector<unsigned> get_simlist(ModelParams const& p);
+
 /*******************************************************************************
 ********************************************************************************
 *********************                                      *********************
@@ -671,13 +674,15 @@ void sim_KC_layer(
 
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
     rv.log("running ORN and LN sims");
+    std::vector<unsigned> simlist = get_simlist(p);
 #pragma omp parallel
     {
         Matrix orn_t(get_ngloms(p), p.time.steps_all());
         Row inhA(1, p.time.steps_all());
         Row inhB(1, p.time.steps_all());
 #pragma omp for
-        for (unsigned i = 0; i < get_nodors(p); i++) {
+        for (unsigned j = 0; j < simlist.size(); j++) {
+            unsigned i = simlist[j];
             sim_ORN_layer(p, rv, i, orn_t);
             sim_LN_layer(p, orn_t, inhA, inhB);
 #pragma omp critical
@@ -698,8 +703,10 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
 }
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
     rv.log("running PN sims");
+    std::vector<unsigned> simlist = get_simlist(p);
 #pragma omp parallel for
-    for (unsigned i = 0; i < get_nodors(p); i++) {
+    for (unsigned j = 0; j < simlist.size(); j++) {
+        unsigned i = simlist[j];
         sim_PN_layer(
                 p, rv,
                 rv.orn.sims[i], rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
@@ -714,6 +721,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     }
 
     rv.log("running KC sims");
+    std::vector<unsigned> simlist = get_simlist(p);
 #pragma omp parallel
     {
         Matrix Vm_here;
@@ -746,7 +754,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         Matrix respcol;
         Matrix respcol_bin;
 #pragma omp for
-        for (unsigned i = 0; i < get_nodors(p); i++) {
+        for (unsigned j = 0; j < simlist.size(); j++) {
+            unsigned i = simlist[j];
             Matrix& Vm_link = p.kc.save_vm_sims 
                 ? rv.kc.vm_sims.at(i)
                 : Vm_here;
@@ -809,4 +818,13 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
             cut(r.pn.sims[i]);
         }
     }
+}
+
+std::vector<unsigned> get_simlist(ModelParams const& p) {
+    if (p.sim_only.empty()) {
+        std::vector<unsigned> ret(get_nodors(p));
+        std::iota(std::begin(ret), std::end(ret), 0);
+        return ret;
+    }
+    return p.sim_only;
 }
