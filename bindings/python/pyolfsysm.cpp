@@ -16,13 +16,7 @@ namespace py = pybind11;
 PYBIND11_MODULE(olfsysm, m) {
 	/* TODO fill this in from his other docs */
     m.doc() = R"pbdoc(
-        Pybind11 example plugin
-        -----------------------
-        .. currentmodule:: python_example
-        .. autosummary::
-           :toctree: _generate
-           add
-           subtract
+        Olfactory system model based on Ann Kennedy's model.
     )pbdoc";
 
 	py::class_<ModelParams>(m, "ModelParams")
@@ -83,6 +77,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("nclaws", &ModelParams::KC::nclaws)
         .def_readwrite("uniform_pns", &ModelParams::KC::uniform_pns)
         .def_readwrite("cxn_distrib", &ModelParams::KC::cxn_distrib)
+        .def_readwrite("seed", &ModelParams::KC::seed)
         .def_readwrite("currents", &ModelParams::KC::currents)
         .def_readwrite("enable_apl", &ModelParams::KC::enable_apl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
@@ -97,8 +92,13 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("taum", &ModelParams::KC::taum)
         .def_readwrite("apl_taum", &ModelParams::KC::apl_taum)
         .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc)
+        .def_readwrite("tau_r", &ModelParams::KC::tau_r)
+        .def_readwrite("ves_p", &ModelParams::KC::ves_p)
         .def_readwrite("save_vm_sims", &ModelParams::KC::save_vm_sims)
-        .def_readwrite("save_spike_recordings", &ModelParams::KC::save_spike_recordings);
+        .def_readwrite("save_spike_recordings", &ModelParams::KC::save_spike_recordings)
+        .def_readwrite("save_nves_sims", &ModelParams::KC::save_nves_sims)
+        .def_readwrite("save_inh_sims", &ModelParams::KC::save_inh_sims)
+        .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims);
 
 	/* TODO convert all values in DEFAULT_PARAMS to default kwargs on a python
        constsructor */
@@ -133,6 +133,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("spike_counts", &RunVars::KC::spike_counts)
         .def_readwrite("vm_sims", &RunVars::KC::vm_sims)
         .def_readwrite("spike_recordings", &RunVars::KC::spike_recordings)
+        .def_readwrite("nves_sims", &RunVars::KC::nves_sims)
+        .def_readwrite("inh_sims", &RunVars::KC::inh_sims)
+        .def_readwrite("Is_sims", &RunVars::KC::Is_sims)
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters);
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(

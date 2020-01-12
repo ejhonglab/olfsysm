@@ -205,7 +205,6 @@ RunVars::KC::KC(ModelParams const& p) :
     thr(p.kc.N, 1),
     responses(p.kc.N, get_nodors(p)),
     spike_counts(p.kc.N, get_nodors(p)),
-    tuning_iters(0),
     vm_sims(p.kc.save_vm_sims ? get_nodors(p) : 0,
             Matrix(p.kc.N, p.time.steps_all())),
     spike_recordings(p.kc.save_spike_recordings ? get_nodors(p) : 0,
@@ -215,7 +214,8 @@ RunVars::KC::KC(ModelParams const& p) :
     inh_sims(p.kc.save_inh_sims ? get_nodors(p) : 0,
             Matrix(1, p.time.steps_all())),
     Is_sims(p.kc.save_Is_sims ? get_nodors(p) : 0,
-            Matrix(1, p.time.steps_all())) {
+            Matrix(1, p.time.steps_all())),
+    tuning_iters(0) {
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
