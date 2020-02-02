@@ -91,6 +91,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)
+        .def_readwrite("apltune_subsample", &ModelParams::KC::apltune_subsample)
         .def_readwrite("taum", &ModelParams::KC::taum)
         .def_readwrite("apl_taum", &ModelParams::KC::apl_taum)
         .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc)

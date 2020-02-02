@@ -86,6 +86,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 10.0;
     p.kc.max_iters             = 10;
+    p.kc.apltune_subsample     = 1;
     p.kc.taum                  = 0.01;
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
@@ -427,7 +428,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     Matrix KCpks(p.kc.N, tlist.size()); KCpks.setZero();
 
     /* Used to store odor response data during APL tuning. */
-    Matrix KCmean_st(p.kc.N, 1+((tlist.size()-1)/3));
+    Matrix KCmean_st(p.kc.N, 1+((tlist.size()-1)/p.kc.apltune_subsample));
     /* Used to store the current sparsity.
      * Initially set to the below value because, given default model
      * parameters, it causes tuning to complete in just one iteration. */
@@ -541,9 +542,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log(cat("** t", omp_get_thread_num(), " @ before testing"));
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
-            for (unsigned i = 0; i < tlist.size(); i+=3) {
+            for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], Vm, spikes, nves, inh, Is);
-                KCmean_st.col(i/3) = spikes.rowwise().sum();
+                KCmean_st.col(i/p.kc.apltune_subsample) = spikes.rowwise().sum();
             }
             rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
 

@@ -138,6 +138,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.sp_lr_coeff",           mp->kc.sp_lr_coeff);
     ACCESS("kc.max_iters",             mp->kc.max_iters);
     ACCESS("kc.tune_from",             mp->kc.tune_from);
+    ACCESS("kc.apltune_subsample",     mp->kc.apltune_subsample);
     ACCESS("kc.taum",                  mp->kc.taum);
     ACCESS("kc.apl_taum",              mp->kc.apl_taum);
     ACCESS("kc.tau_apl2kc",            mp->kc.tau_apl2kc);

@@ -204,6 +204,10 @@ struct ModelParams {
          * all odors will be used. */
         std::vector<unsigned> tune_from;
 
+        /* X where every Xth odor in tune_from is used to estimate sparsity
+         * during APL tuning. */
+        unsigned apltune_subsample;
+
         /* Time constants. */
         double taum;
         double apl_taum;
