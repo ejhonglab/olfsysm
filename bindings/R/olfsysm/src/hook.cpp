@@ -122,6 +122,11 @@ extern "C" SEXP access_mparam(
     ACCESS("pn.inhadd",                mp->pn.inhadd);
     ACCESS("pn.noise.mean",            mp->pn.noise.mean);
     ACCESS("pn.noise.sd",              mp->pn.noise.sd);
+    ACCESS("ffapl.taum",               mp->ffapl.taum);
+    ACCESS("ffapl.w",                  mp->ffapl.w);
+    ACCESS("ffapl.coef",               mp->ffapl.coef);
+    ACCESS("ffapl.gini.a",             mp->ffapl.gini.a);
+    ACCESS("ffapl.gini.source",        mp->ffapl.gini.source);
     ACCESS("kc.N",                     mp->kc.N);
     ACCESS("kc.nclaws",                mp->kc.nclaws);
     ACCESS("kc.uniform_pns",           mp->kc.uniform_pns);
@@ -167,6 +172,8 @@ extern "C" SEXP access_rvar(
     ACCESS("ln.inhA.sims",        rv->ln.inhA.sims);
     ACCESS("ln.inhB.sims",        rv->ln.inhB.sims);
     ACCESS("pn.sims",             rv->pn.sims);
+    ACCESS("ffapl.vm_sims",       rv->ffapl.vm_sims);
+    ACCESS("ffapl.coef_sims",     rv->ffapl.coef_sims);
     ACCESS("kc.wPNKC",            rv->kc.wPNKC);
     ACCESS("kc.wAPLKC",           rv->kc.wAPLKC);
     ACCESS("kc.wKCAPL",           rv->kc.wKCAPL);
@@ -214,6 +221,7 @@ MP_RV_FUNC(build_wPNKC);
 MP_RV_FUNC(fit_sparseness);
 MP_RV_FUNC(run_ORN_LN_sims);
 MP_RV_FUNC(run_PN_sims);
+MP_RV_FUNC(run_FFAPL_sims);
 
 extern "C" SEXP EXPORT_run_KC_sims(SEXP mp_, SEXP rv_, SEXP regen_) { TRYFWD (
     DEFFROM_AS(Rcpp::XPtr<ModelParams>, mp, mp_);
@@ -223,7 +231,7 @@ extern "C" SEXP EXPORT_run_KC_sims(SEXP mp_, SEXP rv_, SEXP regen_) { TRYFWD (
     return R_NilValue;
 )}
 
-extern "C" const R_CallMethodDef CallEntries[12] = {
+extern "C" const R_CallMethodDef CallEntries[13] = {
     {"mk_modelparams", (DL_FUNC) &mk_modelparams, 0},
     {"mk_runvars", (DL_FUNC) &mk_runvars, 1},
     {"access_mparam", (DL_FUNC) &access_mparam, 4},
@@ -234,6 +242,7 @@ extern "C" const R_CallMethodDef CallEntries[12] = {
     {"fit_sparseness", (DL_FUNC) &EXPORT_fit_sparseness, 2},
     {"run_ORN_LN_sims", (DL_FUNC) &EXPORT_run_ORN_LN_sims, 2},
     {"run_PN_sims", (DL_FUNC) &EXPORT_run_PN_sims, 2},
+    {"run_FFAPL_sims", (DL_FUNC) &EXPORT_run_FFAPL_sims, 2},
     {"run_KC_sims", (DL_FUNC) &EXPORT_run_KC_sims, 3},
     {NULL, NULL, 0}
 };

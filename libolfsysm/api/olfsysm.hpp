@@ -226,6 +226,36 @@ struct ModelParams {
         bool save_Is_sims;
     } kc;
 
+    /* Feedforward APL params. */
+    struct FFAPL {
+        /* Time constants. */
+        double taum;
+
+        /* PN->APL synaptic strength. */
+        double w;
+
+        /* The input into the APL is calculated as
+         *   w * (summed output of PNs) * (coef)
+         * where coef is some function of the firing rate distribution of PNs:
+         * - "gini" */
+        std::string coef;
+
+        /* coef = [1 - a*G]+, where G is the Gini coefficient of the
+         * population of firing rates and a is declared below.
+         * See: https://en.wikipedia.org/wiki/Gini_coefficient */
+        struct Gini {
+            /* Coefficient on G. */
+            double a;
+
+            /* How to compute G. Options:
+             * - "=": use PN firing rates directly
+             * - "-spont": subtract spontaneous PN firing rates first
+             * - "/spont": divide by spontaneous rates first
+             * - "(-s)/s": use (firing rate - spont rate)/spont rate */
+            std::string source;
+        } gini;
+    } ffapl;
+
     /* Only (re?)simulate the given odors. If empty, simulate everything. */
     std::vector<unsigned> sim_only;
 };
@@ -266,6 +296,18 @@ struct RunVars {
         /* Initialize matrices with the correct sizes and quantities. */
         PN(ModelParams const&);
     } pn;
+
+    /* FFAPL-related variables. */
+    struct FFAPL {
+        /* Membrane voltage timecourses. */
+        std::vector<Vector> vm_sims;
+
+        /* Coef timecourses (see ModelParams::FFAPL for description). */
+        std::vector<Vector> coef_sims;
+
+        /* Initialize memory, zero-fill vm_sims. */
+        FFAPL(ModelParams const&);
+    } ffapl;
 
     /* KC-related variables. */
     struct KC {
@@ -341,10 +383,16 @@ void sim_PN_layer(
         Matrix const& orn_t, Row const& inhA, Row const& inhB, 
         Matrix& pn_t);
 
+/* Model feedforward APL response to one odor. */
+void sim_FFAPL_layer(
+        ModelParams const& p, RunVars const& rv,
+        Matrix const& pn_t,
+        Vector& coef_t, Vector& ffapl_t);
+
 /* Model KC response to one odor. */
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
-        Matrix const& pn_t,
+        Matrix const& pn_t, Vector const& ffapl_t,
         Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is);
 
 /* Run ORN and LN sims for all odors. */
@@ -352,6 +400,9 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
 
 /* Run PN sims for all odors. */
 void run_PN_sims(ModelParams const& p, RunVars& rv);
+
+/* Run feedforward APL sims for all odors. */
+void run_FFAPL_sims(ModelParams const& p, RunVars& rv);
 
 /* Regenerate PN->KC connectivity, re-tune thresholds and APL, and run KC sims
  * for all odors.

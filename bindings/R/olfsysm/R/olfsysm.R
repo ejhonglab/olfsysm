@@ -60,6 +60,7 @@ build_wPNKC <- function(mp, rv) { mprv_funccall(mp, rv, C_build_wPNKC); }
 fit_sparseness <- function(mp, rv) { mprv_funccall(mp, rv, C_fit_sparseness); }
 run_ORN_LN_sims <- function(mp, rv) { mprv_funccall(mp, rv, C_run_ORN_LN_sims); }
 run_PN_sims <- function(mp, rv) { mprv_funccall(mp, rv, C_run_PN_sims); }
+run_FFAPL_sims <- function(mp, rv) { mprv_funccall(mp, rv, C_run_FFAPL_sims); }
 
 run_KC_sims <- function(mp, rv, regen=TRUE) {
     if (!is_xpt(mp)) stop("mp must be externalptr");
