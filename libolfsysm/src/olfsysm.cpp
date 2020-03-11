@@ -345,7 +345,7 @@ double ffapl_coef_gini(ModelParams const& p,
     else if (p.ffapl.gini.source == "(-s)/s")
         src = (pn-spont).array()/spont.array();
     else
-        return 0.0;
+        return 1.0;
 
     double mu = src.mean();
     if (abs(mu) < 1e-5)
@@ -702,7 +702,8 @@ void sim_FFAPL_layer(
     ffapl_t.setZero();
     coef_t.setZero();
 
-    Column pn_spont = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
+    //Column pn_spont = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
+    Column pn_spont = sample_PN_spont(p, rv);
 
     double (*coef_calc)(ModelParams const&, Column const&, Column const&);
     if (p.ffapl.coef == "gini") {
