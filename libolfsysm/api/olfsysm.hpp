@@ -255,6 +255,12 @@ struct ModelParams {
              * - "(-s)/s": use (firing rate - spont rate)/spont rate */
             std::string source;
         } gini;
+
+        /* coef = m+L(1-m), where L is the instantaneous lifetime
+         * sparseness of the odor. Takes values in the range [1,m]. */
+        struct LTS {
+            double m; /* default: 1.5 */
+        } lts;
     } ffapl;
 
     /* Only (re?)simulate the given odors. If empty, simulate everything. */

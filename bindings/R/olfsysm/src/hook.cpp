@@ -127,6 +127,7 @@ extern "C" SEXP access_mparam(
     ACCESS("ffapl.coef",               mp->ffapl.coef);
     ACCESS("ffapl.gini.a",             mp->ffapl.gini.a);
     ACCESS("ffapl.gini.source",        mp->ffapl.gini.source);
+    ACCESS("ffapl.lts.m",              mp->ffapl.lts.m);
     ACCESS("kc.N",                     mp->kc.N);
     ACCESS("kc.nclaws",                mp->kc.nclaws);
     ACCESS("kc.uniform_pns",           mp->kc.uniform_pns);

@@ -103,6 +103,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.ffapl.coef             = "gini";
     p.ffapl.gini.a           = 1.0;
     p.ffapl.gini.source      = "(-s)/s";
+    p.ffapl.lts.m            = 1.5;
 
     return p;
 }();
@@ -381,12 +382,14 @@ double ffapl_coef_lts(ModelParams const& p,
         return 1.0;
     }
 
-    double r = pow(delta.sum(), 2.0)/(delta.array()*delta.array()).sum();
-    r =  (1.0 - r/delta.size())/(1.0 - 1.0/delta.size());
-    if (isnan(r)) {
-        r = 1.0;
+    double L = pow(delta.sum(), 2.0)/(delta.array()*delta.array()).sum();
+    L =  (1.0 - L/delta.size())/(1.0 - 1.0/delta.size());
+    if (isnan(L)) {
+        L = 1.0;
     }
-    return r;
+
+    double m = p.ffapl.lts.m;
+    return m + L*(1.0-m);
 }
 
 void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
