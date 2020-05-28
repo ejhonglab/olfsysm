@@ -376,8 +376,17 @@ double ffapl_coef_lts(ModelParams const& p,
     Column delta = pn-spont;
     delta = (delta.array() < 0).select(0, delta);
 
+    if ((delta.array()/spont.array()).abs().maxCoeff() < 0.05) {
+        // <5% change from spont in all channels
+        return 1.0;
+    }
+
     double r = pow(delta.sum(), 2.0)/(delta.array()*delta.array()).sum();
-    return (1.0 - r/delta.size())/(1.0 - 1.0/delta.size());
+    r =  (1.0 - r/delta.size())/(1.0 - 1.0/delta.size());
+    if (isnan(r)) {
+        r = 1.0;
+    }
+    return r;
 }
 
 void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
