@@ -123,6 +123,10 @@ void add_randomly(std::function<double()> rng, Matrix& out);
 double ffapl_coef_gini(ModelParams const& p,
         Column const& pn, Column const& pn_spont);
 
+/* Calculate the lifetime sparseness FFAPL coefficient. */
+double ffapl_coef_lts(ModelParams const& p,
+        Column const& pn, Column const& pn_spont);
+
 /* Randomly generate the wPNKC connectivity matrix. Glom choice is WEIGHTED by
  * HC_GLOM_CXN_DISTRIB (above). */
 void build_wPNKC_weighted(ModelParams const& p, RunVars& rv);
@@ -365,6 +369,15 @@ double ffapl_coef_gini(ModelParams const& p,
         g = 0.0;
 
     return g;
+}
+
+double ffapl_coef_lts(ModelParams const& p,
+        Column const& pn, Column const& spont) {
+    Column delta = pn-spont;
+    delta = (delta.array() < 0).select(0, delta);
+
+    double r = pow(delta.sum(), 2.0)/(delta.array()*delta.array()).sum();
+    return (1.0 - r/delta.size())/(1.0 - 1.0/delta.size());
 }
 
 void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
@@ -706,10 +719,11 @@ void sim_FFAPL_layer(
     Column pn_spont = sample_PN_spont(p, rv);
 
     double (*coef_calc)(ModelParams const&, Column const&, Column const&);
-    if (p.ffapl.coef == "gini") {
-        coef_calc = ffapl_coef_gini;
-    }
-
+    coef_calc = 
+        p.ffapl.coef == "gini" ? ffapl_coef_gini :
+        p.ffapl.coef == "lts" ? ffapl_coef_lts :
+        (abort(), nullptr);
+        
     double dVdt;
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         coef_t(t) = coef_calc(p, pn_t.col(t-1), pn_spont);

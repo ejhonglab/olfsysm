@@ -237,7 +237,8 @@ struct ModelParams {
         /* The input into the APL is calculated as
          *   w * (summed output of PNs) * (coef)
          * where coef is some function of the firing rate distribution of PNs:
-         * - "gini" */
+         * - "gini"
+         * - "lts" (lifetime sparseness) */
         std::string coef;
 
         /* coef = [1 - a*G]+, where G is the Gini coefficient of the
