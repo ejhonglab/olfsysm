@@ -132,6 +132,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.nclaws",                mp->kc.nclaws);
     ACCESS("kc.uniform_pns",           mp->kc.uniform_pns);
     ACCESS("kc.cxn_distrib",           mp->kc.cxn_distrib);
+    ACCESS("kc.preset_wPNKC",          mp->kc.preset_wPNKC);
     ACCESS("kc.seed",                  mp->kc.seed);
     ACCESS("kc.currents",              mp->kc.currents);
     ACCESS("kc.enable_apl",            mp->kc.enable_apl);

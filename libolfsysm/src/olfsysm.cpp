@@ -76,6 +76,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
     p.kc.uniform_pns           = false;
+    p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
     p.kc.enable_apl            = true;
     p.kc.fixed_thr             = 0;
@@ -406,6 +407,7 @@ void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
     }
 }
 void build_wPNKC(ModelParams const& p, RunVars& rv) {
+    if (p.kc.preset_wPNKC) return;
     if (p.kc.seed != 0) {
         g_randgen.seed(p.kc.seed);
     }
