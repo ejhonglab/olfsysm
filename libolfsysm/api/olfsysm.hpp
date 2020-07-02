@@ -153,6 +153,12 @@ struct ModelParams {
         bool uniform_pns;
         /* Weighted PN distribution data; required if uniform_pns is false. */
         Row cxn_distrib;
+        /* The proportion of PN connections that should be (stochastically)
+         * dropped during wPNKC generation. This is useful for simulating what
+         * the draw of a reduced system would look like if it were taken by
+         * truncating the connectivity matrix of the complete system. Takes
+         * values in the interval [0,1). */
+        double pn_drop_prop;
 
         /* Set to true if using a pre-loaded KC-PN connectivity matrix.
          * Overrides `uniform_pns`. */

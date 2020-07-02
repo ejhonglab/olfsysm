@@ -79,6 +79,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("nclaws", &ModelParams::KC::nclaws)
         .def_readwrite("uniform_pns", &ModelParams::KC::uniform_pns)
         .def_readwrite("cxn_distrib", &ModelParams::KC::cxn_distrib)
+        .def_readwrite("pn_drop_prop", &ModelParams::KC::pn_drop_prop)
         .def_readwrite("preset_wPNKC", &ModelParams::KC::preset_wPNKC)
         .def_readwrite("seed", &ModelParams::KC::seed)
         .def_readwrite("currents", &ModelParams::KC::currents)

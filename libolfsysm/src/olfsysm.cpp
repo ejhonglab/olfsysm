@@ -76,6 +76,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
     p.kc.uniform_pns           = false;
+    p.kc.pn_drop_prop          = 0.0;
     p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
     p.kc.enable_apl            = true;
@@ -130,12 +131,13 @@ double ffapl_coef_gini(ModelParams const& p,
 double ffapl_coef_lts(ModelParams const& p,
         Column const& pn, Column const& pn_spont);
 
-/* Randomly generate the wPNKC connectivity matrix. Glom choice is WEIGHTED by
- * HC_GLOM_CXN_DISTRIB (above). */
-void build_wPNKC_weighted(ModelParams const& p, RunVars& rv);
-/* Randomly generate the wPNKC connectivity matrix. Glom choice is UNIFORMLY
- * weighted. */
-void build_wPNKC_uniform(ModelParams const& p, RunVars& rv);
+/* Build PNKC connectivity matrix w in place, with glom choice weighted by cxnd
+ * and drop_prop (see ModelParams). */
+void build_wPNKC_from_cxnd(
+        Matrix& w, unsigned nc, Row const& cxnd, double drop_prop);
+
+/* Build wPNKC as specified by the ModelParams. */
+void build_wPNKC(ModelParams const& p, RunVars& rv);
 
 /* Sample spontaneous PN output from odor 0. */
 Column sample_PN_spont(ModelParams const& p, RunVars const& rv);
@@ -394,16 +396,23 @@ double ffapl_coef_lts(ModelParams const& p,
     return m + L*(1.0-m);
 }
 
-void build_wPNKC_from_cxnd(Matrix& w, unsigned nc, Row const& cxnd) {
+void build_wPNKC_from_cxnd(
+        Matrix& w, unsigned nc, Row const& cxnd, double drop_prop) {
     w.setZero();
     std::vector<double> flat(cxnd.size());
+    double sum = 0;
     for (unsigned i = 0; i < cxnd.size(); i++) {
         flat[i] = cxnd(0, i);
+        sum += flat[i];
     }
+    flat.push_back(drop_prop*sum/(1.0-drop_prop));
     std::discrete_distribution<int> dd(flat.begin(), flat.end());
     for (unsigned kc = 0; kc < w.rows(); kc++) {
         for (unsigned claw = 0; claw < nc; claw++) {
-            w(kc, dd(g_randgen)) += 1.0;
+            int idx = dd(g_randgen);
+            if (idx < cxnd.size()) {
+                w(kc, idx) += 1.0;
+            }
         }
     }
 }
@@ -412,15 +421,17 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
     if (p.kc.seed != 0) {
         g_randgen.seed(p.kc.seed);
     }
+    unsigned nc = p.kc.nclaws;
+    double pdp = p.kc.pn_drop_prop;
     if (p.kc.uniform_pns) {
         rv.log("building UNIFORM connectivity matrix");
         Row cxnd(1, get_ngloms(p));
         cxnd.setOnes();
-        build_wPNKC_from_cxnd(rv.kc.wPNKC, p.kc.nclaws, cxnd);
+        build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, cxnd, pdp);
     }
     else {
         rv.log("building WEIGHTED connectivity matrix");
-        build_wPNKC_from_cxnd(rv.kc.wPNKC, p.kc.nclaws, p.kc.cxn_distrib);
+        build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, p.kc.cxn_distrib, pdp);
     }
     if (p.kc.currents.size()) {
         rv.kc.wPNKC *= p.kc.currents.asDiagonal();
