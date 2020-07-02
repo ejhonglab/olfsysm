@@ -83,6 +83,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("seed", &ModelParams::KC::seed)
         .def_readwrite("currents", &ModelParams::KC::currents)
         .def_readwrite("enable_apl", &ModelParams::KC::enable_apl)
+        .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)

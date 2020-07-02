@@ -169,6 +169,10 @@ struct ModelParams {
         /* Whether to simulate the APL at all.*/
         bool enable_apl;
 
+        /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
+         * been called. */
+        bool ignore_ffapl;
+
         /* Optionally set a fixed KC firing threshold, instead of using the
          * normally generated thresholds. */
         double fixed_thr;

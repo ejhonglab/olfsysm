@@ -79,6 +79,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
     p.kc.enable_apl            = true;
+    p.kc.ignore_ffapl          = false;
     p.kc.fixed_thr             = 0;
     p.kc.use_fixed_thr         = false;
     p.kc.use_homeostatic_thrs  = true;
@@ -99,12 +100,12 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.save_inh_sims         = false;
     p.kc.save_Is_sims          = false;
 
-    p.ffapl.taum             = p.kc.apl_taum;
-    p.ffapl.w                = 3.0/23.0;
-    p.ffapl.coef             = "gini";
-    p.ffapl.gini.a           = 1.0;
-    p.ffapl.gini.source      = "(-s)/s";
-    p.ffapl.lts.m            = 1.5;
+    p.ffapl.taum         = p.kc.apl_taum;
+    p.ffapl.w            = 1.0;             // appropriate for LTS
+    p.ffapl.coef         = "lts";
+    p.ffapl.gini.a       = 1.0;
+    p.ffapl.gini.source  = "(-s)/s";
+    p.ffapl.lts.m        = 1.5;
 
     return p;
 }();
@@ -755,6 +756,8 @@ void sim_KC_layer(
     inh.setZero();
     Is.setZero();
 
+    float use_ffapl = float(!p.kc.ignore_ffapl);
+
     Column dKCdt;
     for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
         double dIsdt = -Is(t-1) + (
@@ -765,7 +768,7 @@ void sim_KC_layer(
             (-Vm.col(t-1)
             +rv.kc.wPNKC*pn_t.col(t)
             -rv.kc.wAPLKC*inh(t-1)).array()
-            -ffapl_t(t-1);
+            -use_ffapl*ffapl_t(t-1);
         Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
         inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
         Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;

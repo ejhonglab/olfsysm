@@ -136,6 +136,7 @@ extern "C" SEXP access_mparam(
     ACCESS("kc.seed",                  mp->kc.seed);
     ACCESS("kc.currents",              mp->kc.currents);
     ACCESS("kc.enable_apl",            mp->kc.enable_apl);
+    ACCESS("kc.ignore_ffapl",          mp->kc.ignore_ffapl);
     ACCESS("kc.fixed_thr",             mp->kc.fixed_thr);
     ACCESS("kc.use_fixed_thr",         mp->kc.use_fixed_thr);
     ACCESS("kc.use_homeostatic_thrs",  mp->kc.use_homeostatic_thrs);
