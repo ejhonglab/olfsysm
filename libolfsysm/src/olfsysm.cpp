@@ -104,6 +104,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.ffapl.taum         = p.kc.apl_taum;
     p.ffapl.w            = 1.0;             // appropriate for LTS
     p.ffapl.coef         = "lts";
+    p.ffapl.zero         = true;
+    p.ffapl.nneg         = true;
     p.ffapl.gini.a       = 1.0;
     p.ffapl.gini.source  = "(-s)/s";
     p.ffapl.lts.m        = 1.5;
@@ -755,6 +757,14 @@ void sim_FFAPL_layer(
         coef_t(t) = coef_calc(p, pn_t.col(t-1), pn_spont);
         dVdt = -ffapl_t(t-1) + p.ffapl.w*coef_t(t)*pn_t.col(t-1).sum();
         ffapl_t(t) = ffapl_t(t-1) + dVdt*p.time.dt/p.ffapl.taum;
+    }
+
+    double spont = ffapl_t(p.time.stim.start_step()-1);
+    if (p.ffapl.nneg) {
+        ffapl_t = (spont < ffapl_t.array()).select(ffapl_t, spont);
+    }
+    if (p.ffapl.zero) {
+        ffapl_t = ffapl_t.array() - spont;
     }
 }
 void sim_KC_layer(

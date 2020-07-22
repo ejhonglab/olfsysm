@@ -256,6 +256,12 @@ struct ModelParams {
          * - "lts" (lifetime sparseness) */
         std::string coef;
 
+        /* Whether to set the spontaneous FFAPL output to zero. */
+        bool zero;
+
+        /* Whether to stop the FFAPL output from dropping below spont. */
+        bool nneg;
+
         /* coef = [1 - a*G]+, where G is the Gini coefficient of the
          * population of firing rates and a is declared below.
          * See: https://en.wikipedia.org/wiki/Gini_coefficient */
