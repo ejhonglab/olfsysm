@@ -1,2 +1,8 @@
-PKG_CXXFLAGS = -std=c++14 $(SHLIB_OPENMP_CXXFLAGS) -g -march=native
-PKG_LIBS = -L./ -lolfsysm
+OS := $(shell uname)
+ifeq ($(OS),Darwin)
+    PKG_CXXFLAGS = -std=c++14 $(SHLIB_OPENMP_CXXFLAGS) -I/opt/local/include/libomp -g -Xclang -fopenmp
+    PKG_LIBS = -L./ -L/opt/local/lib/libomp -lolfsysm -lomp
+else
+    PKG_CXXFLAGS = -std=c++14 $(SHLIB_OPENMP_CXXFLAGS) -g -march=native
+    PKG_LIBS = -L./ -lolfsysm
+endif

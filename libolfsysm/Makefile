@@ -1,5 +1,12 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -fopenmp -fpic -I./api/ -I./include/ -c
+OS := $(shell uname)
+ifeq ($(OS),Darwin)
+	CXX = clang++
+	CXXFLAGS = -std=c++17 -I/opt/local/include/libomp -L/opt/local/lib/libomp -fopenmp -fpic -I./api/ -I./include/ -c
+else
+	CXX = g++
+	CXXFLAGS = -std=c++17 -fopenmp -fpic -I./api/ -I./include/ -c
+endif
+
 
 AR = ar
 ARFLAGS = rvcs
@@ -19,7 +26,11 @@ debug ?= 0
 ifeq ($(debug), 1)
 	DEBUG_FLAGS = -DDEBUG -Og -ggdb3
 else
-	DEBUG_FLAGS = -Ofast -funroll-loops -march=native
+	ifeq ($(OS),Darwin)
+		DEBUG_FLAGS = -Ofast -funroll-loops
+	else
+		DEBUG_FLAGS = -Ofast -funroll-loops -march=native
+	endif
 endif
 
 all: $(TARGET)
