@@ -74,6 +74,19 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("mean", &ModelParams::PN::Noise::mean)
         .def_readwrite("sd", &ModelParams::PN::Noise::sd);
 
+    py::class_<ModelParams::FFAPL>(m, "MPFFAPL")
+        .def_readwrite("taum", &ModelParams::FFAPL::taum)
+        .def_readwrite("w", &ModelParams::FFAPL::w)
+        .def_readwrite("zero", &ModelParams::FFAPL::coef)
+        .def_readwrite("nneg", &ModelParams::FFAPL::coef)
+        .def_readwrite("gini", &ModelParams::FFAPL::gini)
+        .def_readwrite("lts", &ModelParams::FFAPL::lts);
+    py::class_<ModelParams::FFAPL::Gini>(m, "MPFFAPLGini")
+        .def_readwrite("a", &ModelParams::FFAPL::Gini::a)
+        .def_readwrite("source", &ModelParams::FFAPL::Gini::source);
+    py::class_<ModelParams::FFAPL::LTS>(m, "MPFFAPLLTS")
+        .def_readwrite("m", &ModelParams::FFAPL::LTS::m);
+
     py::class_<ModelParams::KC>(m, "MPKC")
         .def_readwrite("N", &ModelParams::KC::N)
         .def_readwrite("nclaws", &ModelParams::KC::nclaws)
@@ -113,6 +126,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("orn", &RunVars::orn)
         .def_readwrite("ln", &RunVars::ln)
         .def_readwrite("pn", &RunVars::pn)
+        .def_readwrite("ffapl", &RunVars::ffapl)
         .def_readwrite("kc", &RunVars::kc)
         .def(py::init<ModelParams const&>());
 
@@ -129,6 +143,10 @@ PYBIND11_MODULE(olfsysm, m) {
 
     py::class_<RunVars::PN>(m, "RVPN")
         .def_readwrite("pn_sims", &RunVars::PN::sims);
+
+    py::class_<RunVars::FFAPL>(m, "RVFFAPL")
+        .def_readwrite("vm_sims", &RunVars::FFAPL::vm_sims)
+        .def_readwrite("coef_sims", &RunVars::FFAPL::coef_sims);
 
     py::class_<RunVars::KC>(m, "RVKC")
         .def_readwrite("wPNKC", &RunVars::KC::wPNKC)
@@ -165,10 +183,6 @@ PYBIND11_MODULE(olfsysm, m) {
         Model LN response for one odor.
     )pbdoc");
 
-    m.def("sim_LN_layer", &sim_LN_layer, R"pbdoc(
-        Model LN response for one odor.
-    )pbdoc");
-
     m.def("sim_PN_layer", &sim_PN_layer, R"pbdoc(
         Model PN response for one odor.
     )pbdoc");
@@ -183,6 +197,10 @@ PYBIND11_MODULE(olfsysm, m) {
 
     m.def("run_PN_sims", &run_PN_sims, R"pbdoc(
         Run PN sims for all odors.
+    )pbdoc");
+
+    m.def("run_FFAPL_sims", &run_FFAPL_sims, R"pbdoc(
+        Run FFAPL sims for all oors.
     )pbdoc");
 
     m.def("run_KC_sims", &run_KC_sims, R"pbdoc(
