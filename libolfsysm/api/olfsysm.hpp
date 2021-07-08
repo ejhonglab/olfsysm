@@ -344,6 +344,10 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
+        /* Peak membrane potentials achieved on the training set before
+         * applying firing thresholds. */
+        Matrix pks;
+
         /* Firing thresholds. */
         Column thr;
 

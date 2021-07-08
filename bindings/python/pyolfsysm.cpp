@@ -152,6 +152,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wPNKC", &RunVars::KC::wPNKC)
         .def_readwrite("wAPLKC", &RunVars::KC::wAPLKC)
         .def_readwrite("wKCAPL", &RunVars::KC::wKCAPL)
+        .def_readwrite("pks", &RunVars::KC::pks)
         .def_readwrite("thr", &RunVars::KC::thr)
         .def_readwrite("responses", &RunVars::KC::responses)
         .def_readwrite("spike_counts", &RunVars::KC::spike_counts)

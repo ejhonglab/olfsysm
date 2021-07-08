@@ -183,6 +183,7 @@ extern "C" SEXP access_rvar(
     ACCESS("kc.wPNKC",            rv->kc.wPNKC);
     ACCESS("kc.wAPLKC",           rv->kc.wAPLKC);
     ACCESS("kc.wKCAPL",           rv->kc.wKCAPL);
+    ACCESS("kc.pks",              rv->kc.pks);
     ACCESS("kc.thr",              rv->kc.thr);
     ACCESS("kc.responses",        rv->kc.responses);
     ACCESS("kc.spike_counts",     rv->kc.spike_counts);

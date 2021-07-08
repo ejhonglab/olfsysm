@@ -234,6 +234,7 @@ RunVars::KC::KC(ModelParams const& p) :
     wPNKC(p.kc.N, get_ngloms(p)),
     wAPLKC(p.kc.N, 1),
     wKCAPL(1, p.kc.N),
+    // pks gets default initialized
     thr(p.kc.N, 1),
     responses(p.kc.N, get_nodors(p)),
     spike_counts(p.kc.N, get_nodors(p)),
@@ -570,11 +571,19 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 sim_KC_layer(p, rv,
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                         Vm, spikes, nves, inh, Is);
+#pragma omp critical
                 KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
             }
 
 #pragma omp single
             {
+                rv.kc.pks = KCpks;
+                /*for (unsigned w = 0; w < rv.kc.pks.rows(); w++) {
+                    for (unsigned z = 0; z < rv.kc.pks.cols(); z++) {
+                        if (rv.kc.pks(w,z) < -1e20) abort();
+                    }
+                }*/
+
                 /* Finish picking thresholds. */
                 rv.kc.thr =
                     (thrtype == TTHSTATIC ? choose_KC_thresh_homeostatic :
