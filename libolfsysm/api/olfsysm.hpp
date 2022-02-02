@@ -151,8 +151,13 @@ struct ModelParams {
 
         /* Whether to use uniform PN choice, or use observational data. */
         bool uniform_pns;
+
         /* Weighted PN distribution data; required if uniform_pns is false. */
         Row cxn_distrib;
+
+        /* Whether a KC can draw twice from the same glomerulus. */
+        bool allow_double_draws;
+
         /* The proportion of PN connections that should be (stochastically)
          * dropped during wPNKC generation. This is useful for simulating what
          * the draw of a reduced system would look like if it were taken by

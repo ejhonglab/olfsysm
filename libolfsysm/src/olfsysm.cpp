@@ -76,6 +76,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
     p.kc.uniform_pns           = false;
+    p.kc.allow_double_draws    = true;
     p.kc.pn_drop_prop          = 0.0;
     p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
@@ -136,7 +137,8 @@ double ffapl_coef_lts(ModelParams const& p,
 /* Build PNKC connectivity matrix w in place, with glom choice weighted by cxnd
  * and drop_prop (see ModelParams). */
 void build_wPNKC_from_cxnd(
-        Matrix& w, unsigned nc, Row const& cxnd, double drop_prop);
+        Matrix& w, unsigned nc, Row const& cxnd, double drop_prop,
+        bool allow_double_draws);
 
 /* Build wPNKC as specified by the ModelParams. */
 void build_wPNKC(ModelParams const& p, RunVars& rv);
@@ -400,7 +402,8 @@ double ffapl_coef_lts(ModelParams const& p,
 }
 
 void build_wPNKC_from_cxnd(
-        Matrix& w, unsigned nc, Row const& cxnd, double drop_prop) {
+        Matrix& w, unsigned nc, Row const& cxnd, double drop_prop,
+        bool allow_double_draws) {
     w.setZero();
     std::vector<double> flat(cxnd.size());
     double sum = 0;
@@ -408,14 +411,20 @@ void build_wPNKC_from_cxnd(
         flat[i] = cxnd(0, i);
         sum += flat[i];
     }
-    flat.push_back(drop_prop*sum/(1.0-drop_prop));
     std::discrete_distribution<int> dd(flat.begin(), flat.end());
+    std::bernoulli_distribution dropd(drop_prop);
     for (unsigned kc = 0; kc < w.rows(); kc++) {
         for (unsigned claw = 0; claw < nc; claw++) {
-            int idx = dd(g_randgen);
-            if (idx < cxnd.size()) {
-                w(kc, idx) += 1.0;
+            if (dropd(g_randgen)) {
+                continue;
             }
+            int idx = dd(g_randgen);
+            if (!allow_double_draws) {
+                while (w(kc, idx) > 0.0) {
+                    idx = dd(g_randgen);
+                }
+            }
+            w(kc, idx) += 1.0;
         }
     }
 }
@@ -426,15 +435,16 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
     }
     unsigned nc = p.kc.nclaws;
     double pdp = p.kc.pn_drop_prop;
+    bool allowdd = p.kc.allow_double_draws;
     if (p.kc.uniform_pns) {
         rv.log("building UNIFORM connectivity matrix");
         Row cxnd(1, get_ngloms(p));
         cxnd.setOnes();
-        build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, cxnd, pdp);
+        build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, cxnd, pdp, allowdd);
     }
     else {
         rv.log("building WEIGHTED connectivity matrix");
-        build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, p.kc.cxn_distrib, pdp);
+        build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, p.kc.cxn_distrib, pdp, allowdd);
     }
     if (p.kc.currents.size()) {
         rv.kc.wPNKC *= p.kc.currents.asDiagonal();
