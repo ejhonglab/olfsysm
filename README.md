@@ -21,8 +21,19 @@ to update your `g++`.
 ### Python bindings
 ```
 pip install pybind11
-python setup.py install
+pip install .
 ```
+
+To see compilation errors, which can be helpful when modify the library code / bindings:
+```
+pip install -v .
+```
+
+Most recently tested using:
+- pip `22.3.1`
+- `pybind11==2.10.4`
+- Python `3.8.12`
+- Ubuntu 20.04
 
 ## Example Run
 ### R
