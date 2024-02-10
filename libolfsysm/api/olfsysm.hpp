@@ -63,9 +63,9 @@ struct ModelParams {
             unsigned end_step() const;
 
             /* Get a row of length time.steps_all() with ones wherever the
-             * stimulus is present, and zeros wherever it is not. */ 
+             * stimulus is present, and zeros wherever it is not. */
             Row row_all() const;
-            
+
             /* Internal only! */
             Time& _owner;
             Stim(Time&);
@@ -172,8 +172,10 @@ struct ModelParams {
          * then this is treated as a row of ones. */
         Eigen::VectorXd currents;
 
+        // TODO TODO reword matt's doc. not true. (APL still used, weights just
+        // don't change)
         /* Whether to simulate the APL at all.*/
-        bool enable_apl;
+        bool tune_apl_weights;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
@@ -182,6 +184,7 @@ struct ModelParams {
         /* Optionally set a fixed KC firing threshold, instead of using the
          * normally generated thresholds. */
         double fixed_thr;
+        bool add_fixed_thr_to_spont;
         bool use_fixed_thr;
 
         /* Use homeostatic (instead of uniform) KC thresholding.
@@ -348,6 +351,9 @@ struct RunVars {
          * applying firing thresholds. */
         Matrix pks;
 
+        /* Spontaneous input each KC receives. Threshold typically added to this. */
+        Column spont_in;
+
         /* Firing thresholds. */
         Column thr;
 
@@ -412,7 +418,7 @@ void sim_LN_layer(
 /* Model PN response to one odor. */
 void sim_PN_layer(
         ModelParams const& p, RunVars const& rv,
-        Matrix const& orn_t, Row const& inhA, Row const& inhB, 
+        Matrix const& orn_t, Row const& inhA, Row const& inhB,
         Matrix& pn_t);
 
 /* Model feedforward APL response to one odor. */

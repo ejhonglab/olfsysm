@@ -79,9 +79,10 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.pn_drop_prop          = 0.0;
     p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
-    p.kc.enable_apl            = true;
+    p.kc.tune_apl_weights      = true;
     p.kc.ignore_ffapl          = false;
     p.kc.fixed_thr             = 0;
+    p.kc.add_fixed_thr_to_spont= false;
     p.kc.use_fixed_thr         = false;
     p.kc.use_homeostatic_thrs  = true;
     p.kc.thr_type              = "";
@@ -465,7 +466,7 @@ Column choose_KC_thresh_uniform(
 Column choose_KC_thresh_homeostatic(
         ModelParams const& p, Matrix& KCpks, Column const& spont_in) {
     /* Basically do the same procedure as the uniform algorithm, but do it for
-     * each KC (row) separately instead of all together. 
+     * each KC (row) separately instead of all together.
      * To sort each row in place, we first flatten the entire list, and then
      * sort portions of it in place. This is an unfortunate consequence of the
      * lack of stl iterators in Eigen <=3.4. */
@@ -502,19 +503,45 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
 
+    /* Calculate spontaneous input to KCs. */
+    Column spont_in = rv.kc.wPNKC * sample_PN_spont(p, rv);
+    rv.kc.spont_in = spont_in;
+
     /* Set starting values for the things we'll tune. */
-    rv.kc.wAPLKC.setZero();
-    rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
+    // TODO matter? seems to be overwritten below in this case anyway...
+    // (and put inside this conditional to avoid overwriting values set in python, via
+    // pybind11)
+    if (p.kc.tune_apl_weights) {
+        // TODO if this is helping, and i also need in other case, maybe set wAPLKC and
+        // wKCAPL via new entries in ModelParams, after initial calls that would use
+        // them below (and still initialize like this, unconditionally, up here)?
+        //
+        // TODO delete? resetting just below anyway...
+        // or did i really need these up top where i moved them from (why?)?
+        // (didn't want to overwrite values when passing in, but could make a
+        // conditional up there)
+        rv.kc.wAPLKC.setZero();
+        rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
+
+        // TODO in an else statement, check that wAPLKC and wKCAPL are appropriately
+        // initialized?
+    }
     if (!p.kc.use_fixed_thr) {
         rv.kc.thr.setConstant(1e5); // higher than will ever be reached
     }
     else {
         rv.log(cat("using FIXED threshold: ", p.kc.fixed_thr));
-        rv.kc.thr.setConstant(p.kc.fixed_thr);
-    }
+        if (p.kc.add_fixed_thr_to_spont) {
+            // TODO delete + replace w/ similar commented line below
+            // (after confirming the 2 things w/ factor 2 cancel out...)
+            rv.log("adding fixed threshold to 2 * spontaneous PN input to each KC");
+            //rv.log("adding fixed threshold to spontaneous PN input to each KC");
 
-    /* Calculate spontaneous input to KCs. */
-    Column spont_in = rv.kc.wPNKC * sample_PN_spont(p, rv);
+            rv.kc.thr = p.kc.fixed_thr + spont_in.array()*2.0;
+        } else {
+            rv.kc.thr.setConstant(p.kc.fixed_thr);
+        }
+    }
 
     /* Used for measuring KC voltage; defined here to make it shared across all
      * threads.*/
@@ -550,7 +577,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
     /* Break up into threads. */
 #pragma omp parallel
-    { 
+    {
         /* Output matrices for the KC simulation. */
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
@@ -595,10 +622,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
         /* Enter this region only if APL use is enabled; if disabled, just exit
          * (at this point APL->KC weights are set to 0). */
-        if (p.kc.enable_apl) {
+        if (p.kc.tune_apl_weights) {
 #pragma omp single
         {
-            rv.log(cat("APL enabled; tuning begin (",
+            // TODO fucked version seems to have this block more indented. problem?
+            rv.log(cat("tuning APL<->KC weights; tuning begin (",
                         "target=", p.kc.sp_target,
                         " acc=", p.kc.sp_acc,
                         ")"));
@@ -611,9 +639,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     2*ceil(-log(p.kc.sp_target))/double(p.kc.N));
         }
 
+        // TODO did change in indentation on this do (and enclosed block) matter?
         /* Continue tuning until we reach the desired sparsity. */
         do {
-            rv.log(cat("** t", omp_get_thread_num(), " @ top"));
+            //rv.log(cat("** t", omp_get_thread_num(), " @ top"));
 #pragma omp barrier
 
 #pragma omp single
@@ -635,14 +664,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 }
 
                 rv.log(cat( "* i=", rv.kc.tuning_iters,
-                            ", sp=", sp, 
-                            ", d=", delta,
+                            ", sp=", sp,
+                            ", wAPLKC_delta=", delta,
                             ", lr=", lr));
 
                 rv.kc.tuning_iters++;
             }
 
-            rv.log(cat("** t", omp_get_thread_num(), " @ before testing"));
+            //rv.log(cat("** t", omp_get_thread_num(), " @ before testing"));
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
@@ -651,7 +680,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         Vm, spikes, nves, inh, Is);
                 KCmean_st.col(i/p.kc.apltune_subsample) = spikes.rowwise().sum();
             }
-            rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
+            //rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
 
 #pragma omp single
             {
@@ -668,7 +697,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         "]"));
         } while ((abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target))
                 && (rv.kc.tuning_iters <= p.kc.max_iters));
-        rv.log(cat("** t", omp_get_thread_num(), " @ exit"));
+        //rv.log(cat("** t", omp_get_thread_num(), " @ exit"));
 #pragma omp barrier
 #pragma omp single
         {
@@ -723,8 +752,8 @@ void sim_LN_layer(
 }
 void sim_PN_layer(
         ModelParams const& p, RunVars const& rv,
-        Matrix const& orn_t, Row const& inhA, Row const& inhB, 
-        Matrix& pn_t) {                                        
+        Matrix const& orn_t, Row const& inhA, Row const& inhB,
+        Matrix& pn_t) {
     std::normal_distribution<double> noise(p.pn.noise.mean, p.pn.noise.sd);
 
     Column spont  = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
@@ -736,7 +765,7 @@ void sim_PN_layer(
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         orn_delta = orn_t.col(t-1)-p.orn.data.spont;
         dPNdt = -pn_t.col(t-1) + spont;
-        dPNdt += 
+        dPNdt +=
             200.0*((orn_delta.array()+p.pn.offset)*p.pn.tanhsc/200.0*inh_PN).matrix().unaryExpr<double(*)(double)>(&tanh);
         add_randomly([&noise](){return noise(g_randgen);}, dPNdt);
 
@@ -756,11 +785,11 @@ void sim_FFAPL_layer(
     Column pn_spont = sample_PN_spont(p, rv);
 
     double (*coef_calc)(ModelParams const&, Column const&, Column const&);
-    coef_calc = 
+    coef_calc =
         p.ffapl.coef == "gini" ? ffapl_coef_gini :
         p.ffapl.coef == "lts" ? ffapl_coef_lts :
         (abort(), nullptr);
-        
+
     double dVdt;
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         coef_t(t) = coef_calc(p, pn_t.col(t-1), pn_spont);
@@ -779,7 +808,7 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is) { 
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is) {
     Vm.setZero();
     spikes.setZero();
     nves.setOnes();
@@ -794,7 +823,7 @@ void sim_KC_layer(
                 rv.kc.wKCAPL*(nves.col(t-1).array()*spikes.col(t-1).array()).matrix())(0,0)*1e4;
         double dinhdt = -inh(t-1) + Is(t-1);
 
-        dKCdt = 
+        dKCdt =
             (-Vm.col(t-1)
             +rv.kc.wPNKC*pn_t.col(t)
             -rv.kc.wAPLKC*inh(t-1)).array()
@@ -907,7 +936,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 #pragma omp for
         for (unsigned j = 0; j < simlist.size(); j++) {
             unsigned i = simlist[j];
-            Matrix& Vm_link = p.kc.save_vm_sims 
+            Matrix& Vm_link = p.kc.save_vm_sims
                 ? rv.kc.vm_sims.at(i)
                 : Vm_here;
             Matrix& spikes_link = p.kc.save_spike_recordings

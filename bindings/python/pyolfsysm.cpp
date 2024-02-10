@@ -96,9 +96,10 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("preset_wPNKC", &ModelParams::KC::preset_wPNKC)
         .def_readwrite("seed", &ModelParams::KC::seed)
         .def_readwrite("currents", &ModelParams::KC::currents)
-        .def_readwrite("enable_apl", &ModelParams::KC::enable_apl)
+        .def_readwrite("tune_apl_weights", &ModelParams::KC::tune_apl_weights)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
+        .def_readwrite("add_fixed_thr_to_spont", &ModelParams::KC::add_fixed_thr_to_spont)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
@@ -120,7 +121,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims);
 
 	/* TODO convert all values in DEFAULT_PARAMS to default kwargs on a python
-       constsructor */
+       constructor */
 
 	py::class_<RunVars>(m, "RunVars")
         .def_readwrite("orn", &RunVars::orn)
@@ -128,7 +129,13 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("pn", &RunVars::pn)
         .def_readwrite("ffapl", &RunVars::ffapl)
         .def_readwrite("kc", &RunVars::kc)
+        .def_readonly("log", &RunVars::log)
         .def(py::init<ModelParams const&>());
+
+    // TODO also expose 'disable'? cause problems w/ things writing to same file
+    // sequentially if not?
+    py::class_<Logger>(m, "RVLogger")
+        .def("redirect", py::overload_cast<const std::string &>(&Logger::redirect));
 
     py::class_<RunVars::ORN>(m, "RVORN")
         .def_readwrite("sims", &RunVars::ORN::sims);
@@ -153,6 +160,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wAPLKC", &RunVars::KC::wAPLKC)
         .def_readwrite("wKCAPL", &RunVars::KC::wKCAPL)
         .def_readwrite("pks", &RunVars::KC::pks)
+        .def_readwrite("spont_in", &RunVars::KC::spont_in)
         .def_readwrite("thr", &RunVars::KC::thr)
         .def_readwrite("responses", &RunVars::KC::responses)
         .def_readwrite("spike_counts", &RunVars::KC::spike_counts)
