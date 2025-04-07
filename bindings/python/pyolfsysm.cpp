@@ -104,6 +104,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
+        .def_readwrite("sp_factor_pre_APL", &ModelParams::KC::sp_factor_pre_APL)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)
@@ -148,6 +149,7 @@ PYBIND11_MODULE(olfsysm, m) {
     py::class_<RunVars::LN::InhB>(m, "RVLNInhB")
         .def_readwrite("sims", &RunVars::LN::InhB::sims);
 
+    // TODO why pn_sims and not sims here? any reason? change for consistency?
     py::class_<RunVars::PN>(m, "RVPN")
         .def_readwrite("pn_sims", &RunVars::PN::sims);
 

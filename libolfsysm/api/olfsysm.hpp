@@ -184,6 +184,7 @@ struct ModelParams {
         /* Optionally set a fixed KC firing threshold, instead of using the
          * normally generated thresholds. */
         double fixed_thr;
+        // TODO doc this
         bool add_fixed_thr_to_spont;
         bool use_fixed_thr;
 
@@ -205,6 +206,12 @@ struct ModelParams {
 
         /* The target sparsity. */
         double sp_target;
+
+        /* (sp_target * sp_factor_pre_APL) is sparsity (>sp_target) achieved by setting
+         * KC spike thresholds alone, then sparsity is brought down to sp_target by
+         * tuning APL. Must be >1, but small enough that (sp_target *
+         * sp_factor_pre_APL) <= 1.0 */
+        double sp_factor_pre_APL;
 
         /* Specifies the fraction +/- of the given target that is considered an
          * acceptable sparsity. */

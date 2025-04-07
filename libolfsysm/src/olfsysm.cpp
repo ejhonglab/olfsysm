@@ -42,6 +42,10 @@ std::string cat(Args&&... args) {
 }
 
 /* For random number generation. */
+// NOTE: g_randdev only used in definition of g_randgen
+// TODO TODO would this not need a mutex across threads? is one in use somewhere?
+// diff seed for each thread too?
+// https://stackoverflow.com/questions/21237905
 thread_local std::random_device g_randdev;
 thread_local std::mt19937 g_randgen{g_randdev()};
 
@@ -87,6 +91,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.use_homeostatic_thrs  = true;
     p.kc.thr_type              = "";
     p.kc.sp_target             = 0.1;
+    p.kc.sp_factor_pre_APL     = 2.0;
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 10.0;
     p.kc.max_iters             = 10;
@@ -424,20 +429,38 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
     if (p.kc.preset_wPNKC) return;
     if (p.kc.seed != 0) {
         g_randgen.seed(p.kc.seed);
+        rv.log(cat("g_randgen seed: ", p.kc.seed ));
     }
     unsigned nc = p.kc.nclaws;
     double pdp = p.kc.pn_drop_prop;
     if (p.kc.uniform_pns) {
         rv.log("building UNIFORM connectivity matrix");
+        // TODO also log nc? other things? what's going on w/ seed?
+        // TODO can i even repro old checks against matt's stuff from model_test.py?
+
+        // TODO delete
+        rv.log(cat("get_ngloms: ", get_ngloms(p) ));
+        // should be N KCs
+        rv.log(cat("wPNKC.rows(): ", rv.kc.wPNKC.rows() ));
+        // should be same as get_ngloms(p)?
+        rv.log(cat("wPNKC.cols(): ", rv.kc.wPNKC.cols() ));
+        //
         Row cxnd(1, get_ngloms(p));
         cxnd.setOnes();
+        // TODO modify to add logging / duplicate up here to inspect output of rng
         build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, cxnd, pdp);
     }
     else {
         rv.log("building WEIGHTED connectivity matrix");
         build_wPNKC_from_cxnd(rv.kc.wPNKC, nc, p.kc.cxn_distrib, pdp);
     }
+    // TODO what is this doing? currents size an issue?
+    // .currents not referenced anywhere else anyway...
     if (p.kc.currents.size()) {
+        // TODO delete (not actually running anyway)
+        rv.log("multiplying wPNKC by kc.currents.asDiagonal()");
+        //
+
         rv.kc.wPNKC *= p.kc.currents.asDiagonal();
         //rv.kc.wPNKC = rv.kc.wPNKC.array().colwise() * p.kc.currents.array();
     }
@@ -458,9 +481,12 @@ Column choose_KC_thresh_uniform(
     KCpks.resize(1, KCpks.size());                     // flatten
     std::sort(KCpks.data(), KCpks.data()+KCpks.size(),
             [](double a, double b){return a>b;});      // dec. order
+    // TODO TODO log what we would get if we used values +/- 1 from the index used for
+    // KCpks? (to try to figure out limits of precision in sparsity achievable through
+    // setting threshold alone)
     double thr_const = KCpks(std::min(
-                int(p.kc.sp_target*2.0*double(p.kc.N*tlist_sz)),
-                int(p.kc.N*tlist_sz)-1));
+        int(p.kc.sp_target * p.kc.sp_factor_pre_APL * double(p.kc.N*tlist_sz)),
+        int(p.kc.N*tlist_sz)-1));
     return thr_const + spont_in.array()*2.0;
 }
 Column choose_KC_thresh_homeostatic(
@@ -472,7 +498,7 @@ Column choose_KC_thresh_homeostatic(
      * lack of stl iterators in Eigen <=3.4. */
     Column thr = 2.0*spont_in;
     unsigned cols = KCpks.cols();
-    unsigned wanted = p.kc.sp_target*2.0*double(cols);
+    unsigned wanted = p.kc.sp_target * p.kc.sp_factor_pre_APL * double(cols);
     KCpks.transposeInPlace();
     KCpks.resize(1, KCpks.size());
     /* Choose a threshold for each KC by inspecting its sorted responses. */
@@ -504,6 +530,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     }
 
     /* Calculate spontaneous input to KCs. */
+    // TODO log stuff about PN spont to figure out if part of that isn't init'd
+    // properly?
     Column spont_in = rv.kc.wPNKC * sample_PN_spont(p, rv);
     rv.kc.spont_in = spont_in;
 
@@ -531,12 +559,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     }
     else {
         rv.log(cat("using FIXED threshold: ", p.kc.fixed_thr));
+        // TODO TODO would it ever make sense to have add_fixed_thr_to_spont=False?
+        // when? in any cases i use? doc
         if (p.kc.add_fixed_thr_to_spont) {
             // TODO delete + replace w/ similar commented line below
             // (after confirming the 2 things w/ factor 2 cancel out...)
             rv.log("adding fixed threshold to 2 * spontaneous PN input to each KC");
             //rv.log("adding fixed threshold to spontaneous PN input to each KC");
-
+            // TODO TODO what are units of spont_in? doc these as units of fixed_thr
             rv.kc.thr = p.kc.fixed_thr + spont_in.array()*2.0;
         } else {
             rv.kc.thr.setConstant(p.kc.fixed_thr);
@@ -548,7 +578,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     Matrix KCpks(p.kc.N, tlist.size()); KCpks.setZero();
 
     /* Used to store odor response data during APL tuning. */
-    Matrix KCmean_st(p.kc.N, 1+((tlist.size()-1)/p.kc.apltune_subsample));
+    Matrix KCmean_st(p.kc.N, 1+ ((tlist.size() - 1) / p.kc.apltune_subsample));
+    // TODO TODO should this not be computed on first iteration?
     /* Used to store the current sparsity.
      * Initially set to the below value because, given default model
      * parameters, it causes tuning to complete in just one iteration. */
@@ -588,7 +619,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         if (thrtype != TTFIXED) {
 #pragma omp single
             {
-                rv.log("choosing thresholds from spontaneous input");
+                rv.log(cat("choosing thresholds from spontaneous input (thrtype=",
+                           thrtype, ")"));
             }
 
             /* Measure voltages achieved by the KCs, and choose a threshold
@@ -617,6 +649,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                      thrtype == TTMIXED ? choose_KC_thresh_mixed :
                      choose_KC_thresh_uniform)
                     (p, KCpks, spont_in);
+                // TODO TODO compute + log sparsity here? (from KCpks)
+                // TODO + save into new rv variable, for use in al_analysis?
+                // (even worth? i assume that w/ reasonable pre-conditions, we can
+                // always get pretty bang-on here?)
             }
         }
 
@@ -636,7 +672,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.wAPLKC.setConstant(
                     2*ceil(-log(p.kc.sp_target)));
             rv.kc.wKCAPL.setConstant(
-                    2*ceil(-log(p.kc.sp_target))/double(p.kc.N));
+                    2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
         }
 
         // TODO did change in indentation on this do (and enclosed block) matter?
@@ -649,8 +685,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             {
                 /* Modify the APL<->KC weights in order to move in the
                  * direction of the target sparsity. */
-                double lr = p.kc.sp_lr_coeff/sqrt(double(rv.kc.tuning_iters));
-                double delta = (sp-p.kc.sp_target)*lr/p.kc.sp_target;
+                double lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters));
+                double delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
                 rv.kc.wAPLKC.array() += delta;
                 rv.kc.wKCAPL.array() += delta/double(p.kc.N);
 
@@ -678,7 +714,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 sim_KC_layer(p, rv,
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                         Vm, spikes, nves, inh, Is);
-                KCmean_st.col(i/p.kc.apltune_subsample) = spikes.rowwise().sum();
+                KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
             }
             //rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
 
@@ -695,7 +731,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         ", acc=", p.kc.sp_acc,
                         ", I=", p.kc.max_iters,
                         "]"));
-        } while ((abs(sp-p.kc.sp_target)>(p.kc.sp_acc*p.kc.sp_target))
+        } while ((abs(sp - p.kc.sp_target) > (p.kc.sp_acc * p.kc.sp_target))
                 && (rv.kc.tuning_iters <= p.kc.max_iters));
         //rv.log(cat("** t", omp_get_thread_num(), " @ exit"));
 #pragma omp barrier
@@ -713,6 +749,11 @@ void sim_ORN_layer(
         Matrix& orn_t) {
     /* Initialize with spontaneous activity. */
     orn_t = p.orn.data.spont*p.time.row_all();
+
+    // TODO TODO can orn_t go negative? i think i'm seeing that in some outputs???
+    // is that reasonable?
+    // TODO inspect some timecourses where it goes negative?
+    // TODO TODO see >=0 constraining line in sim_PN_layer (?)
 
     /* "Odor input to ORNs" (Kennedy comment)
      * Smoothed timeseries of spont...odor rate...spont */
@@ -754,6 +795,8 @@ void sim_PN_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& orn_t, Row const& inhA, Row const& inhB,
         Matrix& pn_t) {
+    // TODO verify this isn't actually making noise (both params 0? or sd at least?)?
+    // it should be seed-able if it is
     std::normal_distribution<double> noise(p.pn.noise.mean, p.pn.noise.sd);
 
     Column spont  = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
@@ -771,6 +814,9 @@ void sim_PN_layer(
 
         inh_PN = p.pn.inhsc/(p.pn.inhadd+0.25*inhA(t)+0.75*inhB(t));
         pn_t.col(t) = pn_t.col(t-1) + dPNdt*p.time.dt/p.pn.taum;
+
+        // TODO TODO why not do something like this in sim_ORN_layer case too?
+        // ann also handle the 2 cases the same way?
         pn_t.col(t) = (0.0 < pn_t.col(t).array()).select(pn_t.col(t), 0.0);
     }
 }
@@ -825,6 +871,7 @@ void sim_KC_layer(
 
         dKCdt =
             (-Vm.col(t-1)
+            // TODO maybe (part of?) pn_t is uninit'd?
             +rv.kc.wPNKC*pn_t.col(t)
             -rv.kc.wAPLKC*inh(t-1)).array()
             -use_ffapl*ffapl_t(t-1);
