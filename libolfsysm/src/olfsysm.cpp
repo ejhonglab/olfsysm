@@ -84,6 +84,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
     p.kc.tune_apl_weights      = true;
+    p.kc.preset_wAPLKC         = false;
+    p.kc.preset_wKCAPL         = false;
     p.kc.ignore_ffapl          = false;
     p.kc.fixed_thr             = 0;
     p.kc.add_fixed_thr_to_spont= false;
@@ -429,7 +431,7 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
     if (p.kc.preset_wPNKC) return;
     if (p.kc.seed != 0) {
         g_randgen.seed(p.kc.seed);
-        rv.log(cat("g_randgen seed: ", p.kc.seed ));
+        rv.log(cat("build_wPNKC: g_randgen seed=", p.kc.seed ));
     }
     unsigned nc = p.kc.nclaws;
     double pdp = p.kc.pn_drop_prop;
@@ -540,20 +542,17 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // (and put inside this conditional to avoid overwriting values set in python, via
     // pybind11)
     if (p.kc.tune_apl_weights) {
-        // TODO if this is helping, and i also need in other case, maybe set wAPLKC and
-        // wKCAPL via new entries in ModelParams, after initial calls that would use
-        // them below (and still initialize like this, unconditionally, up here)?
-        //
-        // TODO delete? resetting just below anyway...
-        // or did i really need these up top where i moved them from (why?)?
-        // (didn't want to overwrite values when passing in, but could make a
-        // conditional up there)
-        rv.kc.wAPLKC.setZero();
-        rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
-
-        // TODO in an else statement, check that wAPLKC and wKCAPL are appropriately
-        // initialized?
+        if (!p.kc.preset_wAPLKC) {
+            rv.kc.wAPLKC.setZero();
+        }
+        if (!p.kc.preset_wKCAPL) {
+            rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
+        }
     }
+    // TODO check that, in NOT p.kc.tune_apl_weights case, wAPLKC and wKCAPL are
+    // appropriately initialized? maybe also in preset_wAPLKC/preset_wKCAPL = true
+    // cases above?
+
     if (!p.kc.use_fixed_thr) {
         rv.kc.thr.setConstant(1e5); // higher than will ever be reached
     }
@@ -661,7 +660,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         if (p.kc.tune_apl_weights) {
 #pragma omp single
         {
-            // TODO fucked version seems to have this block more indented. problem?
             rv.log(cat("tuning APL<->KC weights; tuning begin (",
                         "target=", p.kc.sp_target,
                         " acc=", p.kc.sp_acc,
@@ -669,13 +667,23 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
             rv.kc.tuning_iters = 1;
             /* Starting values for to-be-tuned APL<->KC weights. */
-            rv.kc.wAPLKC.setConstant(
-                    2*ceil(-log(p.kc.sp_target)));
-            rv.kc.wKCAPL.setConstant(
-                    2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
+            if (!p.kc.preset_wAPLKC) {
+                // e.g. 3 w/ sp_target=0.1
+                rv.kc.wAPLKC.setConstant(
+                        2*ceil(-log(p.kc.sp_target)));
+            }
+            if (!p.kc.preset_wKCAPL) {
+                rv.kc.wKCAPL.setConstant(
+                        2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
+            }
+            // TODO TODO TODO delete. just for checking code counting # < 0
+            int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
+            int n_wKCAPL_lt0 = (rv.kc.wKCAPL.array() < 0.0).count();
+            rv.log(cat("(initial) n_wAPLKC_lt0: ", n_wAPLKC_lt0));
+            rv.log(cat("(initial) n_wKCAPL_lt0: ", n_wKCAPL_lt0));
+            //
         }
 
-        // TODO did change in indentation on this do (and enclosed block) matter?
         /* Continue tuning until we reach the desired sparsity. */
         do {
             //rv.log(cat("** t", omp_get_thread_num(), " @ top"));
@@ -687,12 +695,31 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                  * direction of the target sparsity. */
                 double lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters));
                 double delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
+                // TODO TODO TODO try to come up w/ an equiv calc that preserves
+                // behavior in old case, but also works w/ new vector wAPLKC/wKCAPL?
+                // TODO TODO maybe store initial values in separate vectors (for
+                // preset_* = true cases), then just change scale here (rather than
+                // `+=`)?
                 rv.kc.wAPLKC.array() += delta;
                 rv.kc.wKCAPL.array() += delta/double(p.kc.N);
 
+                // TODO TODO if adding support for scaling vector wAPLKC / wKCAPL
+                // (derived from connectome), probably want to abort (so we can change
+                // tuning params and re-run) rather than clip values (which would break
+                // overall shape of vector(s) from connectome). or otherwise take steps
+                // to avoid this state (would probably be better if we didn't have to
+                // abort).
                 /* If we learn too fast in the negative direction we could end
                  * up with negative weights. */
                 if (delta < 0.0) {
+                    int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
+                    int n_wKCAPL_lt0 = (rv.kc.wKCAPL.array() < 0.0).count();
+                    rv.log(cat("n_wAPLKC_lt0: ", n_wAPLKC_lt0));
+                    rv.log(cat("n_wKCAPL_lt0: ", n_wKCAPL_lt0));
+
+                    // TODO TODO at least log that this is happening (doesn't already
+                    // mean we have any negative weights, just b/c we are in this block
+                    // tho... would need to know if there are any < 0)?
                     rv.kc.wAPLKC = (rv.kc.wAPLKC.array() < 0.0).select(
                             0.0, rv.kc.wAPLKC);
                     rv.kc.wKCAPL = (rv.kc.wKCAPL.array() < 0.0).select(
@@ -703,6 +730,25 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                             ", sp=", sp,
                             ", wAPLKC_delta=", delta,
                             ", lr=", lr));
+
+                // TODO delete
+                // for debugging + trying to support scaling of arbitrary positive
+                // vector wAPLKC/wKCAPL inputs
+                if (p.kc.preset_wAPLKC) {
+                    double wAPLKC_mean = rv.kc.wAPLKC.mean();
+                    // TODO delete (assuming above also works, which i expect it to)
+                    //double wAPLKC_mean = rv.kc.wAPLKC.array().mean();
+                    // TODO if keeping, try to combine w/  previous .log call above?
+                    rv.log(cat("wAPLKC_mean: ", wAPLKC_mean));
+                }
+                if (p.kc.preset_wKCAPL) {
+                    double wKCAPL_mean = rv.kc.wKCAPL.mean();
+                    // TODO delete (assuming above also works, which i expect it to)
+                    //double wKCAPL_mean = rv.kc.wKCAPL.array().mean();
+                    // TODO if keeping, try to combine w/  previous .log call above?
+                    rv.log(cat("wKCAPL_mean: ", wKCAPL_mean));
+                }
+                //
 
                 rv.kc.tuning_iters++;
             }

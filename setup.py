@@ -104,5 +104,18 @@ setup(
     install_requires=['pybind11>=2.2'],
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
+
+    # TODO try to get hc_data.csv installed
+    #
+    # installs under root of venv (which is both sys.prefix and sys.exec_prefix in my
+    # testing), which i'm not thrilled about. that would also be /usr if for some reason
+    # pip was run as root
+    #data_files=[('', ['hc_data.csv'])],
+    #data_files=[('olfsysm', ['hc_data.csv'])],
+    #
+    # did not work
+    #include_package_data=True,
+    #
+    # MANIFEST.in specifying `include hc_data.csv` also did not work
 )
 

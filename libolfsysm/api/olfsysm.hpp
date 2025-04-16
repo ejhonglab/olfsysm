@@ -177,6 +177,12 @@ struct ModelParams {
         /* Whether to simulate the APL at all.*/
         bool tune_apl_weights;
 
+        // TODO TODO doc how these will interact w/ tune_apl_weights
+        /* Set to true if using a pre-loaded APL->KC weight vector. */
+        bool preset_wAPLKC;
+        /* Set to true if using a pre-loaded KC->APL weight vector. */
+        bool preset_wKCAPL;
+
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
         bool ignore_ffapl;

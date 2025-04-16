@@ -97,6 +97,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("seed", &ModelParams::KC::seed)
         .def_readwrite("currents", &ModelParams::KC::currents)
         .def_readwrite("tune_apl_weights", &ModelParams::KC::tune_apl_weights)
+        .def_readwrite("preset_wAPLKC", &ModelParams::KC::preset_wAPLKC)
+        .def_readwrite("preset_wKCAPL", &ModelParams::KC::preset_wKCAPL)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("add_fixed_thr_to_spont", &ModelParams::KC::add_fixed_thr_to_spont)
