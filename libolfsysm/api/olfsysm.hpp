@@ -360,6 +360,18 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
+        /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
+         * scalars are tuned rather than wAPLKC/wKCAPL themselves.
+         *
+         * In these preset cases, wAPLKC/wKCAPL are vectors, whose relative
+         * relationships we don't want to accidentally change by clipping some entries
+         * to 0.
+         *
+         * Also want to keep 0 entries as 0 at output of scaling, rather than adding
+         * constant across all elements of these vectors. */
+        double wAPLKC_scale;
+        double wKCAPL_scale;
+
         /* Peak membrane potentials achieved on the training set before
          * applying firing thresholds. */
         Matrix pks;
