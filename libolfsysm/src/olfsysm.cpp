@@ -544,6 +544,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // TODO do i actually need these vars? don't i still want to assign scaled
     // wAPLKC/wKCAPL vectors into rv.kc.wAPLKC/wKCAPL at the end
     /* Should only be used in preset_w[APLKC|KCAPL] = true cases */
+    // TODO add tests to see if i can use these in `!preset_w[APLKC|KCAPL]` cases
+    // (without changing output) -> unify code below if they pass?
+    // (probably can, as two paths both converged in one tuning step, and produced same
+    // wAPLKC scalar as a result [one from wAPLKC, and the other from wAPLKC_scale])
     Column _wAPLKC_scaled(p.kc.N, 1);
     Row _wKCAPL_scaled(1, p.kc.N);
 
@@ -665,6 +669,36 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             }
         }
 
+        // TODO if i move the stuff in this `#pragma omp single` block up enough, can i
+        // avoid need to switch back to single threaded? (without it here,
+        // `use_connectome_APL_weights=True` sensitivity analysis check repro-ing output
+        // w/ fixed wAPLKC/wKCAPL is failing, b/c crazy high values on output
+        // wAPLKC/etc)
+#pragma omp single
+        {
+        if (!p.kc.tune_apl_weights && p.kc.preset_wAPLKC) {
+            // TODO delete prints (and in similar branch below)?
+            double wAPLKC_mean = rv.kc.wAPLKC.mean();
+            rv.log(cat("(before scaling) wAPLKC_mean: ", wAPLKC_mean));
+
+            rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC;
+
+            wAPLKC_mean = rv.kc.wAPLKC.mean();
+            rv.log(cat("(after scaling)  wAPLKC_mean: ", wAPLKC_mean));
+        }
+        if (!p.kc.tune_apl_weights && p.kc.preset_wKCAPL) {
+            double wKCAPL_mean = rv.kc.wKCAPL.mean();
+            rv.log(cat("(before scaling) wKCAPL_mean: ", wKCAPL_mean));
+
+            rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL;
+
+            wKCAPL_mean = rv.kc.wKCAPL.mean();
+            rv.log(cat("(after scaling)  wKCAPL_mean: ", wKCAPL_mean));
+        }
+        }
+
+        // TODO if `!tune_apl_weights` just return here, so i can de-ident code below?
+        // or does some or it need to run?
         /* Enter this region only if APL use is enabled; if disabled, just exit
          * (at this point APL->KC weights are set to 0). */
         if (p.kc.tune_apl_weights) {
@@ -698,8 +732,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
                 _wKCAPL_scaled = rv.kc.wKCAPL_scale * rv.kc.wKCAPL;
             }
-            // TODO TODO have code fail (terminate w/o achieving target sp) [or
-            // backtrack somehow] if count of either changes (don't want to add 0s)
+            // TODO have code fail (terminate w/o achieving target sp) [or backtrack
+            // somehow] if count of either changes (don't want to add 0s)
             int n_wAPLKC_lte0_initial = (rv.kc.wAPLKC.array() <= 0.0).count();
             int n_wKCAPL_lte0_initial = (rv.kc.wKCAPL.array() <= 0.0).count();
             rv.log(cat("n_wAPLKC_lte0_initial: ", n_wAPLKC_lte0_initial));
@@ -718,11 +752,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 double lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters));
                 double delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
 
-                // TODO TODO TODO try to come up w/ an equiv calc that preserves
-                // behavior in old case, but also works w/ new vector wAPLKC/wKCAPL?
-                // TODO TODO maybe store initial values in separate vectors (for
-                // preset_* = true cases), then just change scale here (rather than
-                // `+=`)?
                 if (!p.kc.preset_wAPLKC) {
                     rv.kc.wAPLKC.array() += delta;
                 } else {
@@ -737,12 +766,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     _wKCAPL_scaled *= rv.kc.wKCAPL_scale;
                 }
 
-                // TODO TODO if adding support for scaling vector wAPLKC / wKCAPL
-                // (derived from connectome), probably want to abort (so we can change
-                // tuning params and re-run) rather than clip values (which would break
-                // overall shape of vector(s) from connectome). or otherwise take steps
-                // to avoid this state (would probably be better if we didn't have to
-                // abort).
+                // TODO probably want to abort (so we can change tuning params and
+                // re-run) rather than clip values (which would break overall shape of
+                // vector(s) from connectome). or otherwise take steps to avoid this
+                // state (would probably be better if we didn't have to abort).
                 /* If we learn too fast in the negative direction we could end
                  * up with negative weights. */
                 if (delta < 0.0) {
@@ -751,7 +778,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // adding any extra 0 values)?
                     // TODO always use _*_scaled versions of wAPLKC/wKCAPL vars,
                     // regardless of preset_w[APLKC|KCAPL], so we can backtrack (or some
-                    // nicer way of doing that?)
+                    // nicer way of doing that?)?
 
                     if (!p.kc.preset_wAPLKC) {
                         int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
