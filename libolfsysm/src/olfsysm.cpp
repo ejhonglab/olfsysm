@@ -90,6 +90,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.fixed_thr             = 0;
     p.kc.add_fixed_thr_to_spont= false;
     p.kc.use_fixed_thr         = false;
+    p.kc.use_vector_thr        = false;
     p.kc.use_homeostatic_thrs  = true;
     p.kc.thr_type              = "";
     p.kc.sp_target             = 0.1;
@@ -98,11 +99,18 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.sp_lr_coeff           = 10.0;
     p.kc.max_iters             = 10;
     p.kc.apltune_subsample     = 1;
+
+    // TODO doc how each of these are diff (w/ units if i can). not currently mentioned
+    // in .hpp file
     p.kc.taum                  = 0.01;
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
+
     p.kc.tau_r                 = 1.0;
+    // olfsysm.hpp says that setting this to 0 should disable synaptic depression
+    // (tau_r above is another parameter for synaptic depression)
     p.kc.ves_p                 = 0.0;
+
     p.kc.save_vm_sims          = false;
     p.kc.save_spike_recordings = false;
     p.kc.save_nves_sims        = false;
@@ -250,6 +258,12 @@ RunVars::KC::KC(ModelParams const& p) :
     thr(p.kc.N, 1),
     responses(p.kc.N, get_nodors(p)),
     spike_counts(p.kc.N, get_nodors(p)),
+    // TODO why is it the first dimension that is either #-odors / 0? is that just to
+    // further enforce that no memory allocated, but practicely does it mean these
+    // variables won't actually be used?
+    // TODO what shape are they actually, in both save_vm_sims=True and =False
+    // cases? (in python, these all appear as empty lists if corresponding save_* flag
+    // is False)
     vm_sims(p.kc.save_vm_sims ? get_nodors(p) : 0,
             Matrix(p.kc.N, p.time.steps_all())),
     spike_recordings(p.kc.save_spike_recordings ? get_nodors(p) : 0,
@@ -300,6 +314,8 @@ void load_hc_data(ModelParams& p, std::string const& fpath) {
     unsigned const N_HC_GLOMS  = 23;  // all good HC gloms
     unsigned const N_ODORS_ALL = 186; // all odors in Kennedy's HC data file
 
+    // TODO is it an issue if input data exceeds these sizes? or where else if resizing
+    // happening? just setting directly via pybind11 work? add tests to check?
     p.orn.data.delta.resize(N_HC_GLOMS, N_HC_ODORS);
     p.orn.data.spont.resize(N_HC_GLOMS, 1);
 
@@ -329,6 +345,9 @@ void load_hc_data(ModelParams& p, std::string const& fpath) {
 
     /* Load connectivity distribution data. */
     p.kc.cxn_distrib.resize(1, N_HC_GLOMS);
+    // TODO move cxn_distrib init to default params (out from load_hc_data at least)?
+    // or move to separate fn to just init that (and only call that fn, not
+    // load_hc_data, for cases in mb_model where we only need cxn_distrib)?
     /* Data presumably taken from some real measurements.
      * Taken from Kennedy source. */
     p.kc.cxn_distrib <<
@@ -468,6 +487,8 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
         //
 
         rv.kc.wPNKC *= p.kc.currents.asDiagonal();
+        // TODO delete. did i add this line or was it from matt? i assume it's equiv to
+        // above?
         //rv.kc.wPNKC = rv.kc.wPNKC.array().colwise() * p.kc.currents.array();
     }
 }
@@ -541,15 +562,28 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     Column spont_in = rv.kc.wPNKC * sample_PN_spont(p, rv);
     rv.kc.spont_in = spont_in;
 
-    // TODO do i actually need these vars? don't i still want to assign scaled
-    // wAPLKC/wKCAPL vectors into rv.kc.wAPLKC/wKCAPL at the end
-    /* Should only be used in preset_w[APLKC|KCAPL] = true cases */
-    // TODO add tests to see if i can use these in `!preset_w[APLKC|KCAPL]` cases
-    // (without changing output) -> unify code below if they pass?
-    // (probably can, as two paths both converged in one tuning step, and produced same
-    // wAPLKC scalar as a result [one from wAPLKC, and the other from wAPLKC_scale])
-    Column _wAPLKC_scaled(p.kc.N, 1);
-    Row _wKCAPL_scaled(1, p.kc.N);
+    Column wAPLKC_unscaled(p.kc.N, 1);
+    Row wKCAPL_unscaled(1, p.kc.N);
+
+    if (p.kc.preset_wAPLKC) {
+        // TODO delete
+        rv.log(cat("INITIAL rv.kc.wAPLKC.mean(): ", rv.kc.wAPLKC.mean()));
+
+        // should be a deep copy
+        wAPLKC_unscaled = rv.kc.wAPLKC;
+
+        // TODO delete
+        rv.log(cat("INITIAL wAPLKC_unscaled.mean(): ", wAPLKC_unscaled.mean()));
+    }
+    if (p.kc.preset_wKCAPL) {
+        // TODO delete
+        rv.log(cat("INITIAL rv.kc.wKCAPL.mean(): ", rv.kc.wKCAPL.mean()));
+
+        wKCAPL_unscaled = rv.kc.wKCAPL;
+
+        // TODO delete
+        rv.log(cat("INITIAL wKCAPL_unscaled.mean(): ", wKCAPL_unscaled.mean()));
+    }
 
     /* Set starting values for the things we'll tune. */
     // TODO matter? seems to be overwritten below in this case anyway...
@@ -567,22 +601,44 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // appropriately initialized? maybe also in preset_wAPLKC/preset_wKCAPL = true
     // cases above?
 
-    if (!p.kc.use_fixed_thr) {
-        rv.kc.thr.setConstant(1e5); // higher than will ever be reached
-    }
-    else {
-        rv.log(cat("using FIXED threshold: ", p.kc.fixed_thr));
-        // TODO TODO would it ever make sense to have add_fixed_thr_to_spont=False?
-        // when? in any cases i use? doc
+    if (!p.kc.use_vector_thr) {
+        if (!p.kc.use_fixed_thr) {
+            rv.kc.thr.setConstant(1e5); // higher than will ever be reached
+        }
+        else {
+            rv.log(cat("using FIXED threshold: ", p.kc.fixed_thr));
+            // TODO would it ever make sense to have add_fixed_thr_to_spont=False?
+            // when? in any cases i use? doc
+            if (p.kc.add_fixed_thr_to_spont) {
+                // TODO delete + replace w/ similar commented line below
+                // (after confirming the 2 things w/ factor 2 cancel out...)
+                rv.log("adding fixed threshold to 2 * spontaneous PN input to each KC");
+                //rv.log("adding fixed threshold to spontaneous PN input to each KC");
+                // TODO TODO what are units of spont_in? doc these as units of fixed_thr
+                rv.kc.thr = p.kc.fixed_thr + spont_in.array()*2.0;
+            } else {
+                rv.kc.thr.setConstant(p.kc.fixed_thr);
+            }
+        }
+    } else {
+        rv.log("using prespecified vector KC thresholds");
+        // TODO even want to allow `add_fixed_thr_to_spont = False`? don't think it's
+        // useful now
         if (p.kc.add_fixed_thr_to_spont) {
-            // TODO delete + replace w/ similar commented line below
-            // (after confirming the 2 things w/ factor 2 cancel out...)
-            rv.log("adding fixed threshold to 2 * spontaneous PN input to each KC");
-            //rv.log("adding fixed threshold to spontaneous PN input to each KC");
-            // TODO TODO what are units of spont_in? doc these as units of fixed_thr
-            rv.kc.thr = p.kc.fixed_thr + spont_in.array()*2.0;
-        } else {
-            rv.kc.thr.setConstant(p.kc.fixed_thr);
+            rv.log("adding threshold to 2 * spontaneous PN input to each KC");
+
+            // TODO delete
+            // TODO do i need .array() here? also, i assuming changing <x>.array() also
+            // changes values in <x> (assuming it's a Matrix/similar)?
+            rv.log(cat("(before adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
+
+            // TODO this line working as intended? (do need LHS .array() to avoid err,
+            // at least w/ RHS as it is here)
+            rv.kc.thr.array() += spont_in.array()*2.0;
+
+            // TODO delete
+            // TODO do i need .array() here?
+            rv.log(cat("(after adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
         }
     }
 
@@ -629,12 +685,21 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Row inh(1, p.time.steps_all());
         Row Is(1, p.time.steps_all());
 
-        if (thrtype != TTFIXED) {
+        // TODO delete (assuming i want this for use_vector_thr. why don't i for
+        // TTFIXED?)
+        // if (thrtype != TTFIXED && !p.kc.use_vector_thr) {
+        if (thrtype != TTFIXED && !p.kc.use_vector_thr) {
 #pragma omp single
             {
+                // TODO print str value for thrtype instead? (may need to add something
+                // to invert mapping above. seems like some cases above currently don't
+                // use the existing string p.kc.thr_type [but that could be changed?])
                 rv.log(cat("choosing thresholds from spontaneous input (thrtype=",
                            thrtype, ")"));
             }
+
+            // TODO TODO maybe i still want to sim_KC_layer in use_vector_thr case
+            // (just not use it to pick a thr)?
 
             /* Measure voltages achieved by the KCs, and choose a threshold
              * based on that. */
@@ -649,12 +714,21 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
 #pragma omp single
             {
+                // TODO TODO need to redefine these after end of fit_sparseness
+                // (so they are actually accurate and useful in mb_model's use to
+                // compute per-subtype thresholds) (currently just hardcoding thresholds
+                // rather than trying to compute them from pks in python)
                 rv.kc.pks = KCpks;
                 /*for (unsigned w = 0; w < rv.kc.pks.rows(); w++) {
                     for (unsigned z = 0; z < rv.kc.pks.cols(); z++) {
                         if (rv.kc.pks(w,z) < -1e20) abort();
                     }
                 }*/
+
+                // TODO TODO make a new variable, like rv.kc.pks, but only set at the
+                // end (so as to also include the APL's influence). store the same peak
+                // KC Vms (or whatever exact quantity pks is)? (same thing comment above
+                // is asking for, just into a new variable)
 
                 /* Finish picking thresholds. */
                 rv.kc.thr =
@@ -677,25 +751,22 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 #pragma omp single
         {
         if (!p.kc.tune_apl_weights && p.kc.preset_wAPLKC) {
-            // TODO delete prints (and in similar branch below)?
-            double wAPLKC_mean = rv.kc.wAPLKC.mean();
-            rv.log(cat("(before scaling) wAPLKC_mean: ", wAPLKC_mean));
+            // TODO delete
+            rv.log(cat("FIXED rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
 
-            rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC;
-
-            wAPLKC_mean = rv.kc.wAPLKC.mean();
-            rv.log(cat("(after scaling)  wAPLKC_mean: ", wAPLKC_mean));
+            rv.kc.wAPLKC = rv.kc.wAPLKC_scale * wAPLKC_unscaled;
         }
         if (!p.kc.tune_apl_weights && p.kc.preset_wKCAPL) {
-            double wKCAPL_mean = rv.kc.wKCAPL.mean();
-            rv.log(cat("(before scaling) wKCAPL_mean: ", wKCAPL_mean));
+            // TODO delete
+            rv.log(cat("FIXED rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
 
-            rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL;
-
-            wKCAPL_mean = rv.kc.wKCAPL.mean();
-            rv.log(cat("(after scaling)  wKCAPL_mean: ", wKCAPL_mean));
+            rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
         }
         }
+
+        // TODO TODO in use_vector_thr=True case, want to at least log/save the
+        // mean response rate before APL (esp if rv.kc.thr not set appropriately there,
+        // which maybe could have been used in python to compute that?)
 
         // TODO if `!tune_apl_weights` just return here, so i can de-ident code below?
         // or does some or it need to run?
@@ -719,18 +790,22 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Starting values for to-be-tuned APL<->KC weights. */
             if (!p.kc.preset_wAPLKC) {
                 // e.g. 3 w/ sp_target=0.1
-                rv.kc.wAPLKC.setConstant(
-                        2*ceil(-log(p.kc.sp_target)));
+                rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
             } else {
                 rv.kc.wAPLKC_scale = 2*ceil(-log(p.kc.sp_target));
-                _wAPLKC_scaled = rv.kc.wAPLKC_scale * rv.kc.wAPLKC;
+                // TODO delete
+                rv.log(cat("INITIAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
+
+                rv.kc.wAPLKC = rv.kc.wAPLKC_scale * wAPLKC_unscaled;
             }
             if (!p.kc.preset_wKCAPL) {
-                rv.kc.wKCAPL.setConstant(
-                        2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
+                rv.kc.wKCAPL.setConstant(2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
             } else {
                 rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
-                _wKCAPL_scaled = rv.kc.wKCAPL_scale * rv.kc.wKCAPL;
+                // TODO delete
+                rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+
+                rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
             }
             // TODO have code fail (terminate w/o achieving target sp) [or backtrack
             // somehow] if count of either changes (don't want to add 0s)
@@ -751,35 +826,41 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                  * direction of the target sparsity. */
                 double lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters));
                 double delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
+                // TODO log initial value of delta?
 
                 if (!p.kc.preset_wAPLKC) {
+                    // TODO why using .array() for +=, but not for direct assignment
+                    // operations? is .array() actually necessary in this case?
+                    // what does .array() do?
                     rv.kc.wAPLKC.array() += delta;
                 } else {
                     rv.kc.wAPLKC_scale += delta;
-                    _wAPLKC_scaled *= rv.kc.wAPLKC_scale;
+
+                    // TODO delete?
+                    rv.log(cat("rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
+
+                    rv.kc.wAPLKC = rv.kc.wAPLKC_scale * wAPLKC_unscaled;
                 }
 
                 if (!p.kc.preset_wKCAPL) {
                     rv.kc.wKCAPL.array() += delta / double(p.kc.N);
                 } else {
                     rv.kc.wKCAPL_scale += delta / double(p.kc.N);
-                    _wKCAPL_scaled *= rv.kc.wKCAPL_scale;
+
+                    // TODO delete?
+                    rv.log(cat("rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+
+                    rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
                 }
 
-                // TODO probably want to abort (so we can change tuning params and
+                // TODO TODO probably want to abort (so we can change tuning params and
                 // re-run) rather than clip values (which would break overall shape of
                 // vector(s) from connectome). or otherwise take steps to avoid this
                 // state (would probably be better if we didn't have to abort).
+                // (could give people a message to choose different step size param)
                 /* If we learn too fast in the negative direction we could end
                  * up with negative weights. */
                 if (delta < 0.0) {
-                    // TODO TODO need special handling for preset_wAPLKC/wKCAPL
-                    // cases in here now (prob, but runs so far also don't seem to be
-                    // adding any extra 0 values)?
-                    // TODO always use _*_scaled versions of wAPLKC/wKCAPL vars,
-                    // regardless of preset_w[APLKC|KCAPL], so we can backtrack (or some
-                    // nicer way of doing that?)?
-
                     if (!p.kc.preset_wAPLKC) {
                         int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
                         rv.log(cat("n_wAPLKC_lt0: ", n_wAPLKC_lt0));
@@ -800,15 +881,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     }
                 }
 
-                if (p.kc.preset_wAPLKC) {
-                    // TODO log wAPLKC_scale for debugging
-                    rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC;
-                }
-                if (p.kc.preset_wKCAPL) {
-                    // TODO log wKCAPL_scale for debugging
-                    rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL;
-                }
-
                 rv.log(cat( "* i=", rv.kc.tuning_iters,
                             ", sp=", sp,
                             ", wAPLKC_delta=", delta,
@@ -819,15 +891,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 // vector wAPLKC/wKCAPL inputs
                 if (p.kc.preset_wAPLKC) {
                     double wAPLKC_mean = rv.kc.wAPLKC.mean();
-                    // TODO delete (assuming above also works, which i expect it to)
-                    //double wAPLKC_mean = rv.kc.wAPLKC.array().mean();
                     // TODO if keeping, try to combine w/  previous .log call above?
                     rv.log(cat("wAPLKC_mean: ", wAPLKC_mean));
                 }
                 if (p.kc.preset_wKCAPL) {
                     double wKCAPL_mean = rv.kc.wKCAPL.mean();
-                    // TODO delete (assuming above also works, which i expect it to)
-                    //double wKCAPL_mean = rv.kc.wKCAPL.array().mean();
                     // TODO if keeping, try to combine w/  previous .log call above?
                     rv.log(cat("wKCAPL_mean: ", wKCAPL_mean));
                 }
@@ -844,11 +912,32 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                         Vm, spikes, nves, inh, Is);
                 KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
+
+//#pragma omp critical
+                // TODO delete?
+                ////KCpks.col(i) = Vm.rowwise().maxCoeff(); // - spont_in*2.0;
+                // TODO probably restore
+                //KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
+                ////KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*10.0;
             }
             //rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
 
 #pragma omp single
             {
+                // TODO delete
+                //rv.log(cat("KCpks.mean(): ", KCpks.mean()));
+                //rv.log(cat("spont_in.mean(): ", spont_in.mean()));
+                //
+                // TODO restore? (+ fix surrounding) (or probably better set, set
+                // post-APL peaks into new rv.kc variable...)
+                // don't think i could use same way as i do for prior pks [which I use
+                // in python to set thresholds, in a similar manner to how they are used
+                // in here] tho, so might be pointless.
+                // more complicated by this point, since also depend on activity of all
+                // other KCs, so don't think i can as easily use to set e.g. a single
+                // KC's APL weights.
+                //rv.kc.pks = KCpks;
+
                 KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
                 sp = KCmean_st.mean();
             }
@@ -869,6 +958,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.tuning_iters--;
         }
     }}
+    // TODO delete?
+    rv.log(cat("FINAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
+    rv.log(cat("FINAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+
+    // TODO always log tuned parameters at end (fixed_thr, wAPLKC/wKCAPL when not
+    // preset, or wAPLKC_scale/wKCAPL_scale when preset)
     rv.log("done fitting sparseness");
 }
 
@@ -1000,10 +1095,10 @@ void sim_KC_layer(
 
         dKCdt =
             (-Vm.col(t-1)
-            // TODO maybe (part of?) pn_t is uninit'd?
             +rv.kc.wPNKC*pn_t.col(t)
             -rv.kc.wAPLKC*inh(t-1)).array()
             -use_ffapl*ffapl_t(t-1);
+
         Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
         inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
         Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
@@ -1072,6 +1167,11 @@ void run_FFAPL_sims(ModelParams const& p, RunVars& rv) {
 void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     if (regen) {
         rv.log("generating new KC replicate");
+        // TODO want to add optional flag to allow fit_sparseness to run w/o re-gening
+        // wPNKC? likely not relevant if i only need multiple run_KC_sims calls for
+        // deterministic wPNKC (e.g. from hemibrain)? would just want to be able to get
+        // rv.kc.pks and then pick thresholds based on that in python, with another
+        // run_KC_sims call after
         build_wPNKC(p, rv);
         fit_sparseness(p, rv);
     }
@@ -1124,6 +1224,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             Matrix& inh_link = p.kc.save_inh_sims
                 ? rv.kc.inh_sims.at(i)
                 : inh_here;
+            // TODO TODO where does this one get saved to?
             Matrix& Is_link = p.kc.save_Is_sims
                 ? rv.kc.Is_sims.at(i)
                 : Is_here;

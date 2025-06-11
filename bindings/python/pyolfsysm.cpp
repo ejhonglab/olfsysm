@@ -103,6 +103,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("add_fixed_thr_to_spont", &ModelParams::KC::add_fixed_thr_to_spont)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
+        .def_readwrite("use_vector_thr", &ModelParams::KC::use_vector_thr)
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)

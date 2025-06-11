@@ -170,6 +170,7 @@ struct ModelParams {
 
         /* Multiplicative current weights assigned to each PN. If left empty,
          * then this is treated as a row of ones. */
+        // TODO use this for subtype specific weights? or do odor inputs overwrite this?
         Eigen::VectorXd currents;
 
         // TODO TODO reword matt's doc. not true. (APL still used, weights just
@@ -193,6 +194,8 @@ struct ModelParams {
         // TODO doc this
         bool add_fixed_thr_to_spont;
         bool use_fixed_thr;
+        /* If True, set rv.kc.thr directly */
+        bool use_vector_thr;
 
         /* Use homeostatic (instead of uniform) KC thresholding.
          * Is overridden by use_fixed_thr. */
