@@ -11,19 +11,18 @@
 /* Used for thread-safe logging. */
 class Logger {
 private:
-    std::ofstream fout;
-    std::mutex mtx;
-
+    mutable std::ofstream fout;   // must be mutable for writing in const context
+    mutable std::mutex mtx;       // must be mutable to allow locking in const context
 public:
     Logger();
     /* Throw an error. */
     Logger(Logger const& other);
 
     /* Log a message. */
-    void operator()(std::string const&);
+    void operator()(std::string const& msg) const;
 
     /* Log a blank line. */
-    void operator()();
+    void operator()() const;
 
     /* Begin appending output to the given file. */
     void redirect(std::string const& path);
@@ -258,6 +257,9 @@ struct ModelParams {
         bool save_nves_sims;
         bool save_inh_sims;
         bool save_Is_sims;
+
+        std::vector<long long> kc_ids;
+        bool wPNKC_one_row_per_claw;
     } kc;
 
     /* Feedforward APL params. */
@@ -363,6 +365,8 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
+        
+
         /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
          * scalars are tuned rather than wAPLKC/wKCAPL themselves.
          *
@@ -411,6 +415,13 @@ struct RunVars {
 
         /* Initialize matrices with the correct sizes and quantities. */
         KC(ModelParams const&);
+
+        /*Vector of the KC associated with each claw*/
+        Eigen::VectorXi claw_to_kc;
+
+        /*Vector of the compartment associated with each claw*/
+        Eigen::VectorXi claw_compartments;
+
     } kc;
 
     /* Logger for this run. */

@@ -103,7 +103,6 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("add_fixed_thr_to_spont", &ModelParams::KC::add_fixed_thr_to_spont)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
-        .def_readwrite("use_vector_thr", &ModelParams::KC::use_vector_thr)
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
@@ -122,7 +121,12 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("save_spike_recordings", &ModelParams::KC::save_spike_recordings)
         .def_readwrite("save_nves_sims", &ModelParams::KC::save_nves_sims)
         .def_readwrite("save_inh_sims", &ModelParams::KC::save_inh_sims)
-        .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims);
+        .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims)
+        // expose the new kc_ids vector
+        .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
+        // expose the flag that controls one-row-per-claw behavior
+        .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw);
+
 
 	/* TODO convert all values in DEFAULT_PARAMS to default kwargs on a python
        constructor */
@@ -176,7 +180,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("nves_sims", &RunVars::KC::nves_sims)
         .def_readwrite("inh_sims", &RunVars::KC::inh_sims)
         .def_readwrite("Is_sims", &RunVars::KC::Is_sims)
-        .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters);
+        .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
+        .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
+        ;
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(
         Load HC data from file.
