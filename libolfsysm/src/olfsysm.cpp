@@ -12,6 +12,18 @@
 #include <cassert>
 #include <unordered_set>
 #include <iomanip>
+#include <set>
+
+
+/* So code can be compiled single threaded, to support debugging.
+ * Only other OMP references should be in the preprocessor directives, which I think can
+ * just be ignored (though that will generate compilation warning, which is good).
+ * https://stackoverflow.com/questions/7847900 */
+#ifdef _OPENMP
+   #include <omp.h>
+#else
+   #define omp_get_thread_num() 0
+#endif
 
 
 
@@ -1123,16 +1135,34 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 // for debugging + trying to support scaling of arbitrary positive
                 // vector wAPLKC/wKCAPL inputs
                 if (p.kc.preset_wAPLKC) {
-                    double wAPLKC_mean = rv.kc.wAPLKC.mean();
-                    // TODO if keeping, try to combine w/  previous .log call above?
-                    rv.log(cat("wAPLKC_mean: ", wAPLKC_mean));
+                    // collect unique APL→KC scales
+                    std::set<double> uniqA;
+                    for (int i = 0; i < rv.kc.wAPLKC.rows(); ++i)
+                        uniqA.insert(rv.kc.wAPLKC(i, 0));
+
+                    // build a string of the uniques
+                    std::ostringstream ossA;
+                    ossA << "wAPLKC unique scales: ";
+                    for (double v : uniqA)
+                        ossA << v << " ";
+                    rv.log(ossA.str());
                 }
+
                 if (p.kc.preset_wKCAPL) {
-                    double wKCAPL_mean = rv.kc.wKCAPL.mean();
-                    // TODO if keeping, try to combine w/  previous .log call above?
-                    rv.log(cat("wKCAPL_mean: ", wKCAPL_mean));
+                    // collect unique KC→APL scales
+                    std::set<double> uniqK;
+                    for (int i = 0; i < rv.kc.wKCAPL.cols(); ++i)
+                        uniqK.insert(rv.kc.wKCAPL(0, i));
+
+                    std::ostringstream ossK;
+                    ossK << "wKCAPL unique scales: ";
+                    for (double v : uniqK)
+                        ossK << v << " ";
+                    rv.log(ossK.str());
                 }
-                //
+                
+
+
 
                 rv.kc.tuning_iters++;
             }
@@ -1239,6 +1269,32 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.tuning_iters--;
         }
     }}
+
+    // Declare exactly the same temporaries used inside the tuner:
+    Matrix Vm_end(p.kc.N,    p.time.steps_all());
+    Matrix spikes_end(p.kc.N, p.time.steps_all());
+    Matrix nves_end(p.kc.N,   p.time.steps_all());
+    Row inh_end(1, p.time.steps_all()), Is_end(1, p.time.steps_all());
+
+    // Build a response matrix exactly as in the tuning loop: one column per subsampled odor
+    unsigned nCols = 1 + ((tlist.size() - 1) / p.kc.apltune_subsample);
+    Matrix resp(p.kc.N, nCols);
+
+    for (unsigned i = 0; i < tlist.size(); i += p.kc.apltune_subsample) {
+        // run a KC sim exactly as you do above
+        sim_KC_layer(p, rv,
+            rv.pn.sims[tlist[i]],
+            rv.ffapl.vm_sims[tlist[i]],
+            Vm_end, spikes_end, nves_end, inh_end, Is_end);
+
+            // sum across time, then binarize  
+        resp.col(i / p.kc.apltune_subsample) =
+            (spikes_end.rowwise().sum().array() > 0.0).cast<double>();
+    }
+
+    double overallS = resp.mean();
+    rv.log(cat("Overall sparsity after tuning: ", overallS));
+
     // TODO delete?
     rv.log(cat("FINAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
     rv.log(cat("FINAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
@@ -1592,7 +1648,11 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         // run_KC_sims call after
         build_wPNKC(p, rv);
         fit_sparseness(p, rv);
+
+        
     }
+
+   
 
     rv.log("running KC sims");
     std::vector<unsigned> simlist = get_simlist(p);
@@ -1649,7 +1709,6 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             Matrix& Is_link = p.kc.save_Is_sims
                 ? rv.kc.Is_sims.at(i)
                 : Is_here;
-
             sim_KC_layer(
                     p, rv,
                     rv.pn.sims[i], rv.ffapl.vm_sims[i],
@@ -1662,6 +1721,17 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             rv.kc.spike_counts.col(i) = respcol;
         }
     }
+    double final_sp = rv.kc.responses.mean();  
+    double final_sc = rv.kc.spike_counts.mean();
+    rv.log(cat("Post-sim global sparsity (C++): ", final_sp));
+    rv.log(cat("Post-sim spike_count (C++): ", final_sc));
+    // ---- log first 10 APL->KC scales ----
+    //   head(10) takes the first 10 entries of the vector
+    rv.log(cat("wAPLKC first 10:\n", rv.kc.wAPLKC.col(0).head(10).transpose()));
+
+    // ---- log first 10 KC->APL scales ----
+    rv.log(cat("wKCAPL first 10:\n", rv.kc.wKCAPL.col(0). head(10).transpose()));
+
 }
 
 void remove_before(unsigned step, Matrix& timecourse) {

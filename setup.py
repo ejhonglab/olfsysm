@@ -3,9 +3,11 @@
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import sys
+import os
 import setuptools
 
 __version__ = '0.0.1'
+
 
 
 class get_pybind_include(object):
@@ -22,6 +24,23 @@ class get_pybind_include(object):
         import pybind11
         return pybind11.get_include(self.user)
 
+ 
+# install via `FORCE_SINGLE_THREAD=1 pip install -v .` to disable multithreading
+# (to help with debugging)
+# NOTE: seems I need to `rm -rf build/ tmp/ *.so` (from olfsysm root. same place I'm
+# running `pip install` from) like tianpei had, to get this change to be reflected in
+# build outputs.
+force_single_thread = bool(int(os.environ.get('FORCE_SINGLE_THREAD', False)))
+if not force_single_thread:
+    libraries = ['gomp']
+    extra_compile_args = ['-fopenmp', '-fpic']
+    extra_link_args = ['-lgomp']
+else:
+    libraries = []
+    # -fpic doesn't seem to be (exclusively, at least) OpenMP related
+    extra_compile_args = ['-fpic']
+    extra_link_args = []
+
 
 ext_modules = [
     Extension(
@@ -33,9 +52,12 @@ ext_modules = [
             get_pybind_include(),
             get_pybind_include(user=True)
         ],
-        libraries=['gomp'],
-        extra_compile_args = ['-fopenmp', '-fpic'],
-        extra_link_args = ['-lgomp'],
+        # libraries=['gomp'],
+        # extra_compile_args = ['-fopenmp', '-fpic'],
+        # extra_link_args = ['-lgomp'],
+        libraries=libraries,
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
         language='c++'
     ),
 ]
