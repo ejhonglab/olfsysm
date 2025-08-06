@@ -33,6 +33,16 @@
 
 
 
+/* So code can be compiled single threaded, to support debugging.
+ * Only other OMP references should be in the preprocessor directives, which I think can
+ * just be ignored (though that will generate compilation warning, which is good).
+ * https://stackoverflow.com/questions/7847900 */
+#ifdef _OPENMP
+   #include <omp.h>
+#else
+   #define omp_get_thread_num() 0
+#endif
+
 Logger::Logger() {}
 Logger::Logger(Logger const&) {
     throw std::runtime_error("Can't copy Logger instances.");
@@ -406,6 +416,10 @@ void load_hc_data(ModelParams& p, std::string const& fpath) {
     // TODO move cxn_distrib init to default params (out from load_hc_data at least)?
     // or move to separate fn to just init that (and only call that fn, not
     // load_hc_data, for cases in mb_model where we only need cxn_distrib)?
+    // TODO check these values against values parsed from Caron 2013 supplementary table
+    // 1? would need to OCR... (+ use that to define for more than the hallem glomeruli?
+    // or at least save that as a CSV somewhere, for use in al_analysis.mb_model, if not
+    // in here?)
     /* Data presumably taken from some real measurements.
      * Taken from Kennedy source. */
     p.kc.cxn_distrib <<
