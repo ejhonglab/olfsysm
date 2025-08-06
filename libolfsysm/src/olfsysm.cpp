@@ -782,8 +782,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix nves(p.kc.N, p.time.steps_all());
-        Row inh(1, p.time.steps_all());
-        Row Is(1, p.time.steps_all());
+        Matrix inh(n_compartments, p.time.steps_all());
+        Matrix Is (n_compartments, p.time.steps_all());
 
         // TODO delete (assuming i want this for use_vector_thr. why don't i for
         // TTFIXED?)
@@ -1274,7 +1274,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     Matrix Vm_end(p.kc.N,    p.time.steps_all());
     Matrix spikes_end(p.kc.N, p.time.steps_all());
     Matrix nves_end(p.kc.N,   p.time.steps_all());
-    Row inh_end(1, p.time.steps_all()), Is_end(1, p.time.steps_all());
+    Row inh_end(n_compartments, p.time.steps_all()), Is_end(n_compartments, p.time.steps_all());
 
     // Build a response matrix exactly as in the tuning loop: one column per subsampled odor
     unsigned nCols = 1 + ((tlist.size() - 1) / p.kc.apltune_subsample);
