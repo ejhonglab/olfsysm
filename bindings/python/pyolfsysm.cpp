@@ -109,6 +109,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("sp_factor_pre_APL", &ModelParams::KC::sp_factor_pre_APL)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
+        .def_readwrite("sp_lr_coeff_cl", &ModelParams::KC::sp_lr_coeff_cl)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)
         .def_readwrite("apltune_subsample", &ModelParams::KC::apltune_subsample)
@@ -126,6 +127,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
         // expose the flag that controls one-row-per-claw behavior
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw);
+
 
 
 	/* TODO convert all values in DEFAULT_PARAMS to default kwargs on a python
@@ -181,6 +183,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("inh_sims", &RunVars::KC::inh_sims)
         .def_readwrite("Is_sims", &RunVars::KC::Is_sims)
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
+        .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
         ;
 
@@ -194,7 +197,12 @@ PYBIND11_MODULE(olfsysm, m) {
 
     m.def("fit_sparseness", &fit_sparseness, R"pbdoc(
         Set KC spike thresholds, and tune APL<->KC weights until reaching the
-        desired sparsity.
+        desired sparsity specific for KC.
+    )pbdoc");
+
+    m.def("fit_sparseness_claw", &fit_sparseness_claw, R"pbdoc(
+        Set KC spike thresholds, and tune APL<->KC weights until reaching the
+        desired sparsity specific for claw.
     )pbdoc");
 
     m.def("sim_ORN_layer", &sim_ORN_layer, R"pbdoc(
