@@ -1,3 +1,11 @@
 dist/
 *.egg-info/
 tags
+build/
+tmp/
+*.so
+*.pyd
+*.o
+*.obj
+*.egg-info/
+__pycache__/

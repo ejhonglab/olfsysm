@@ -603,7 +603,7 @@ Column choose_KC_thresh_mixed(
     return (uniform+hstatic)/2.0;
 }
 
-void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool comp) {
+void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp) {
     rv.log("fitting sparseness");
 
     std::vector<unsigned> tlist = p.kc.tune_from;
@@ -1864,7 +1864,7 @@ void sim_ORN_layer(
 
     /* "Odor input to ORNs" (Kennedy comment)
      * Smoothed timeseries of spont...odor rate...spont */
-    Matrix odor = orn_t + p.orn.data.delta.col(odorid)*p.time.stim.row_all();
+    Matrix   odor = orn_t + p.orn.data.delta.col(odorid)*p.time.stim.row_all();
     smoothts_exp(odor, 0.02/p.time.dt); // where does 0.02 come from!?
 
     double mul = p.time.dt/p.orn.taum;
