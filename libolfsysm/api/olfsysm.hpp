@@ -422,6 +422,9 @@ struct RunVars {
         /*Vector of the KC associated with each claw*/
         Eigen::VectorXi claw_to_kc;
 
+        /*map of claw to kc*/
+        std::vector<std::vector<int>> kc_to_claws; 
+
         /*Vector of the compartment associated with each claw*/
         Eigen::VectorXi claw_compartments;
 
