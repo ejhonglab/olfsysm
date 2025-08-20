@@ -110,8 +110,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.preset_wPNKC          = false;
     p.kc.seed                  = 0;
     p.kc.tune_apl_weights      = true;
-    p.kc.preset_wAPLKC         = true;
-    p.kc.preset_wKCAPL         = true;
+    p.kc.preset_wAPLKC         = false;
+    p.kc.preset_wKCAPL         = false;
     p.kc.ignore_ffapl          = false;
     p.kc.fixed_thr             = 0;
     p.kc.add_fixed_thr_to_spont= false;
@@ -306,6 +306,7 @@ RunVars::KC::KC(ModelParams const& p) :
     tuning_iters(0)
 {
     if (p.kc.wPNKC_one_row_per_claw) {
+        std::cerr << "[KC] ctor begin\n";
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
         claw_to_kc.resize(raw.size());
 
@@ -325,7 +326,9 @@ RunVars::KC::KC(ModelParams const& p) :
 
         // Optional safety check: confirm number of unique KCs matches expected N
         assert(nextIndex == int(p.kc.N) && "Number of unique KC IDs must equal p.kc.N");
+        std::cerr << "[KC] ctor end; claws=" << claw_to_kc.size() << '\n';
     } else {
+        std::cerr << "claw_to_kc are not created\n";
         claw_to_kc.resize(0);  // For clarity, make sure it's empty
     }
 }
@@ -805,6 +808,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
         // wAPLKC/etc)
 #pragma omp single
         {
+        rv.log("after first sim_KC_layer reached");
         if (!p.kc.tune_apl_weights && p.kc.preset_wAPLKC) {
             // TODO delete
             rv.log(cat("FIXED rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
@@ -1064,6 +1068,7 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
     Column wAPLKC_unscaled(num_claws, 1); wAPLKC_unscaled.setOnes();  // default 1s
     Row    wKCAPL_unscaled(1, num_claws); wKCAPL_unscaled.setOnes();
 
+    
     if (p.kc.preset_wAPLKC) {
         // If the preset was per-KC length N, expand to claws using claw_to_kc
         if (preset_wAPLKC_KC.rows() == (Eigen::Index)p.kc.N && preset_wAPLKC_KC.cols() == 1) { // we actually don't need this branch? 
@@ -1091,7 +1096,6 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
             rv.log("ERROR: preset_wKCAPL has unexpected shape; falling back to ones.");
         }
     }
-
 
     // TODO do i actually need these vars? don't i still want to assign scaled
     // wAPLKC/wKCAPL vectors into rv.kc.wAPLKC/wKCAPL at the end
@@ -1174,11 +1178,10 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
             rv.log(cat("(after adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
         }
     }
-
+    rv.log("passed the p.kc.use_vector_thr thing");
     /* Used for measuring KC voltage; defined here to make it shared across all
      * threads.*/
     Matrix KCpks(p.kc.N, tlist.size()); KCpks.setZero();
-
     /* Used to store odor response data during APL tuning. */
     Matrix KCmean_st(p.kc.N, 1+ ((tlist.size() - 1) / p.kc.apltune_subsample));
     // TODO TODO should this not be computed on first iteration?
@@ -1190,7 +1193,11 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
      * as 1/sqrt(count) with each iteration. */
     rv.kc.tuning_iters = 0;
 
+    // how the f? is there something wrong with this line of code; 
+    int claw_compartment_size = rv.kc.claw_compartments.size();
+    rv.log(cat("claw_compartment_size: ", claw_compartment_size));
     int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1;
+    rv.log("passed some initialization steps");
 
     // TO BE REVIEWED
     // Map each KC to the set of compartments it has claws in
@@ -1213,15 +1220,16 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
         wAPLKC_scales[comp] = base + jitter;
         wKCAPL_scales[comp] = (base + jitter) / double(num_claws); 
     }
-
+    rv.log("passed the wAPLKC_scales initialization");
     // TO BE REVIEWED
     // Apply initial compartment-specific weights into the full claw-wise vectors
+    // Problem probability happened here; wAPLKC may not be decalred to the size of claws. 
     for (unsigned claw = 0; claw < num_claws; ++claw) {
         int comp = rv.kc.claw_compartments(claw);
         rv.kc.wAPLKC(claw, 0) = wAPLKC_scales[comp];
         rv.kc.wKCAPL(0, claw) = wKCAPL_scales[comp];
     }
-
+    rv.log("passed the wAPLKC initialization");
     std::vector<std::vector<int>> compartment_claws(n_compartments);
     for (unsigned claw = 0; claw < num_claws; ++claw) {
         int comp = rv.kc.claw_compartments(claw);
@@ -1971,11 +1979,9 @@ void sim_KC_layer(
     nves.setOnes();
     inh.setZero();
     Is.setZero();
-    
-    const bool wPNKC_one_row_per_claw = !KC_row;
 
     float use_ffapl = float(!p.kc.ignore_ffapl);
-    if(wPNKC_one_row_per_claw){
+    if(KC_row){
         Column dKCdt;
         for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
             double dIsdt = -Is(t-1) + (
@@ -2018,15 +2024,30 @@ void sim_KC_layer(
         }
     } else {
         if (claw_sp){
+            rv.log("enterd claw_sp = True branch of sim_KC_layer");
             unsigned num_claws = rv.kc.claw_to_kc.size();
+           
             assert(rv.kc.wKCAPL.rows()==1 && rv.kc.wKCAPL.cols()==num_claws);
             assert(rv.kc.wAPLKC.rows()==num_claws && rv.kc.wAPLKC.cols()==1);
             // build a KC→list<claws> map once (you can cache this outside the loop):
-            std::vector<std::vector<unsigned>> kc_to_claws(p.kc.N);
-            for (unsigned claw = 0; claw < num_claws; ++claw) {
-                unsigned kc = rv.kc.claw_to_kc[claw];
-                kc_to_claws[kc].push_back(claw);
-            }
+
+            // Sanity on mapping range
+            int max_kc = rv.kc.claw_to_kc.maxCoeff();
+            int min_kc = rv.kc.claw_to_kc.minCoeff();
+
+            // Strong invariants
+            assert(min_kc >= 0 && "claw_to_kc contains negative KC index");
+            assert(max_kc < int(p.kc.N) && "claw_to_kc index >= N");
+
+            
+
+            // something failed here!~!!!!!!!!    
+            // std::vector<std::vector<unsigned>> kc_to_claws(p.kc.N);
+            // for (unsigned claw = 0; claw < num_claws; ++claw) {
+            //     unsigned kc = rv.kc.claw_to_kc[claw];
+            //     kc_to_claws[kc].push_back(claw);
+            // }
+            // rv.log("kc_to_claw construction passed");
             // what if a KC has more than one claws: 
             for (unsigned t = p.time.start_step() + 1; t < p.time.steps_all(); ++t) {
                 // --- KC→APL drive per compartment ---
@@ -2037,7 +2058,6 @@ void sim_KC_layer(
                     double ves_spk = nves(kc, t - 1) * spikes(kc, t - 1); // should this be in KC? 
                     dIsdt(comp) += rv.kc.wKCAPL(0, claw) * ves_spk * 1e4; // wait what are the dimensions of declared dIsdt? 
                 }
-
                 // --- APL→KC inhibition derivative per compartment ---
                 Eigen::VectorXd dinhdt = -inh.col(t - 1) + Is.col(t - 1);
 
@@ -2055,7 +2075,6 @@ void sim_KC_layer(
                     unsigned kc = rv.kc.claw_to_kc[claw];
                     pn_drive[kc] += claw_drive[claw];   
                 }
-    
 
                 // --- Collapse compartmental inhibition back onto each KC ---
                 Eigen::VectorXd kc_inh(p.kc.N);
@@ -2066,7 +2085,6 @@ void sim_KC_layer(
                     // sum each claw’s compartmental inh, then scale by that claw’s APL→KC weight
                     kc_inh[kc] += inh(comp, t - 1) * rv.kc.wAPLKC(claw, 0);
                 }
-
                 // --- KC membrane potential ODE + FFAPL ---
                 Eigen::VectorXd dKCdt =
                     (-Vm.col(t - 1) + pn_drive - kc_inh).array()
@@ -2312,6 +2330,17 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
         
         // If KC_row = True, wAPLKC and wKCAPL will have length of number of KCs, otherwise they will have the length of number of claws 
         // Number of unique weights = number of compartments 
+        rv.log(cat("one_row_per_claw true or not: ", p.kc.wPNKC_one_row_per_claw));
+        rv.log(cat("kc_ids size: ", p.kc.kc_ids.size()));
+        const size_t n = std::min<size_t>(10, p.kc.kc_ids.size());
+        std::ostringstream oss;
+        oss << "kc_ids first " << n << ": ";
+        for (size_t i = 0; i < n; ++i) {
+            if (i) oss << ", ";
+            oss << p.kc.kc_ids[i];   // indices 0..n-1
+        }
+        rv.log(oss.str());
+        rv.log(cat("claw_to_kc size: ", rv.kc.claw_to_kc.size()));
         if (KC_row) {
             // wAPLKC should be one‐per‐KC
             fit_sparseness(p, rv, KC_row, claw_sp);
@@ -2321,7 +2350,6 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
             fit_sparseness_claw(p, rv, KC_row, claw_sp);
             // assert(rv.kc.wAPLKC.rows() == int(num_claws));
         }
-        
         // // For Debugging Purpose 
         // // Test: whether the index of wAPLKC and wKCAPL matches 
         // Eigen::VectorXd waplkc = rv.kc.wAPLKC;
@@ -2425,13 +2453,14 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
     rv.log("running KC sims");
     std::vector<unsigned> simlist = get_simlist(p);
     int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1; // test
+    rv.log("got num compartments");
 #pragma omp parallel
     {
         Matrix Vm_here;
         if (!p.kc.save_vm_sims) {
             Vm_here = Matrix(p.kc.N, p.time.steps_all());
         }
-
+        
         Matrix spikes_here;
         if (!p.kc.save_spike_recordings) {
             spikes_here = Matrix(p.kc.N, p.time.steps_all());
@@ -2458,9 +2487,19 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
         // Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix respcol;
         Matrix respcol_bin;
+        rv.log("declared size for all kinds of matrices");
 #pragma omp for
         for (unsigned j = 0; j < simlist.size(); j++) {
+            rv.log("entered loop");
             unsigned i = simlist[j];
+            rv.log(cat("Debug: Entering assignment section. i = ", i));
+            rv.log(cat("Debug: p.kc.save_vm_sims is ", (p.kc.save_vm_sims ? "true" : "false")));
+
+            if (p.kc.save_vm_sims) {
+                rv.log(cat("Debug: Attempting to access rv.kc.vm_sims at index ", i));
+                rv.log(cat("Debug: rv.kc.vm_sims current size is ", rv.kc.vm_sims.size()));
+            }
+
             Matrix& Vm_link = p.kc.save_vm_sims
                 ? rv.kc.vm_sims.at(i)
                 : Vm_here; 
@@ -2489,6 +2528,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
             rv.kc.spike_counts.col(i) = respcol;
         }
     }
+    rv.log("after running all sim_KC_layers");
     std::vector<unsigned> tlist = p.kc.tune_from;
     if (tlist.empty()) {
         for (unsigned i = 0; i < get_nodors(p); ++i) tlist.push_back(i);
