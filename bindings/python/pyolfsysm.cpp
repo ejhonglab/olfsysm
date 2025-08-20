@@ -184,6 +184,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("Is_sims", &RunVars::KC::Is_sims)
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
+        .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
         ;
 
