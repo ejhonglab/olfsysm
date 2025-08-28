@@ -119,7 +119,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.use_vector_thr        = false;
     p.kc.use_homeostatic_thrs  = true;
     p.kc.thr_type              = "";
-    p.kc.sp_target             = 0.1;
+    p.kc.sp_target             = 0.0915;
     p.kc.sp_factor_pre_APL     = 2.0;
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 1.0; 
@@ -138,11 +138,11 @@ ModelParams const DEFAULT_PARAMS = []() {
     // (tau_r above is another parameter for synaptic depression)
     p.kc.ves_p                 = 0.0;
 
-    p.kc.save_vm_sims          = false;
-    p.kc.save_spike_recordings = false;
-    p.kc.save_nves_sims        = false;
-    p.kc.save_inh_sims         = false;
-    p.kc.save_Is_sims          = false;
+    p.kc.save_vm_sims          = true;
+    p.kc.save_spike_recordings = true;
+    p.kc.save_nves_sims        = true;
+    p.kc.save_inh_sims         = true;
+    p.kc.save_Is_sims          = true;
 
     p.ffapl.taum         = p.kc.apl_taum;
     p.ffapl.w            = 1.0;             // appropriate for LTS
@@ -606,22 +606,65 @@ Column choose_KC_thresh_mixed(
     return (uniform+hstatic)/2.0;
 }
 
-void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp) {
+void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log("fitting sparseness");
 
     std::vector<unsigned> tlist = p.kc.tune_from;
     if (!tlist.size()) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
+    rv.log(cat("wAPLKC mean: ", rv.kc.wAPLKC.mean()));
+    unsigned num_claws = rv.kc.claw_to_kc.size();
+    if(!p.kc.wPNKC_one_row_per_claw){
+        rv.kc.wAPLKC.resize(p.kc.N,1);
+        rv.kc.wKCAPL.resize(1,p.kc.N);
+    }else {
+        rv.log("wAPLKC resized to num_claws");
+        rv.kc.wAPLKC.resize(num_claws,1);
+        rv.kc.wKCAPL.resize(1,num_claws);
+    }
+    int wAPLKC_nan_count = 0; 
+    // Check for NaN values in wAPLKC
+    for (int i = 0; i < rv.kc.wAPLKC.rows(); ++i) {
+        for (int j = 0; j < rv.kc.wAPLKC.cols(); ++j) {
+            if (std::isnan(rv.kc.wAPLKC(i, j))) {
+                wAPLKC_nan_count++; 
+            }
+        }
+    }
+    std::cout<< "Number of NaN found in wAPLKC: " << wAPLKC_nan_count << std::endl; 
 
+    int wKCAPL_nan_count = 0; 
+    // Check for NaN values in wKCAPL
+    for (int i = 0; i < rv.kc.wKCAPL.rows(); ++i) {
+        for (int j = 0; j < rv.kc.wKCAPL.cols(); ++j) {
+            if (std::isnan(rv.kc.wKCAPL(i, j))) {
+                wKCAPL_nan_count++;
+            }
+        }
+    }
+    std::cout<< "Number of NaN found in wAPLKC: " << wAPLKC_nan_count << std::endl; 
+
+    std::cout << "wAPLKC size" << rv.kc.wAPLKC.size() << std::endl;
+    std::cout << "wKCAPL szie" << rv.kc.wKCAPL.size() << std::endl;
     /* Calculate spontaneous input to KCs. */
     // TODO log stuff about PN spont to figure out if part of that isn't init'd
     // properly?
+
+    // Hmm, I was wondering if this makes sense, if wPNKC is length of KC,
+    // does it still make sense to calculate threshold using this matrix? 
     Column spont_in = rv.kc.wPNKC * sample_PN_spont(p, rv);
     rv.kc.spont_in = spont_in;
 
     Column wAPLKC_unscaled(p.kc.N, 1);
     Row wKCAPL_unscaled(1, p.kc.N);
+    if(p.kc.wPNKC_one_row_per_claw){
+        wAPLKC_unscaled.resize(num_claws, 1);
+        wKCAPL_unscaled.resize(1, num_claws);
+    }
+    
+    rv.log(cat("size wAPLKC_unscaled: ", wAPLKC_unscaled.size()));
+    
 
     if (p.kc.preset_wAPLKC) {
         // TODO delete
@@ -710,7 +753,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
     /* Used to store the current sparsity.
      * Initially set to the below value because, given default model
      * parameters, it causes tuning to complete in just one iteration. */
-    double sp = 0.0789;
+    double sp = 0.076;
     /* Used to count number of times looped; the 'learning rate' is decreased
      * as 1/sqrt(count) with each iteration. */
     rv.kc.tuning_iters = 0;
@@ -738,6 +781,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
     {
         /* Output matrices for the KC simulation. */
         Matrix Vm(p.kc.N, p.time.steps_all());
+        rv.log(cat("sive of Vm: ", p.kc.N));
         Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix nves(p.kc.N, p.time.steps_all());
         Row inh(1, p.time.steps_all());
@@ -765,7 +809,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
             for (unsigned i = 0; i < tlist.size(); i++) {
                 sim_KC_layer(p, rv,
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                        Vm, spikes, nves, inh, Is, KC_row, claw_sp);
+                        Vm, spikes, nves, inh, Is);
 #pragma omp critical
                 KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
             }
@@ -969,7 +1013,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
             for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
                 sim_KC_layer(p, rv,
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                        Vm, spikes, nves, inh, Is, KC_row, claw_sp);
+                        Vm, spikes, nves, inh, Is);
                 KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
 
 //#pragma omp critical
@@ -1004,7 +1048,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
             // TODO TODO why have multiple threads each printing these, if always the
             // same across each (actually true? indicate a bug?)
             rv.log(cat("** t", omp_get_thread_num(), " @ before bottom cond [",
-                        "sp=", sp,
+                        "sp=", sp, 
                         ", i=", rv.kc.tuning_iters,
                         ", tgt=", p.kc.sp_target,
                         ", acc=", p.kc.sp_acc,
@@ -1029,7 +1073,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp
 }
 
 
-void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp) {
+void fit_sparseness_claw(ModelParams const& p, RunVars& rv) {
     rv.log("test fit_sparseness_claw");
 
     std::vector<unsigned> tlist = p.kc.tune_from;
@@ -1050,13 +1094,13 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
     // BEFORE any resize, capture the preset vectors if present
     Column preset_wAPLKC_KC;   // expected shape: (p.kc.N, 1) if per-KC
     Row    preset_wKCAPL_KC;   // expected shape: (1, p.kc.N)
-
     if (p.kc.preset_wAPLKC) {
         preset_wAPLKC_KC = rv.kc.wAPLKC;   // deep copy of whatever Python set
     }
     if (p.kc.preset_wKCAPL) {
         preset_wKCAPL_KC = rv.kc.wKCAPL;   // deep copy
     }
+    rv.log(cat("preset_wAPLKC_KC mean: ", preset_wAPLKC_KC.mean()));
 
     // Now resize claw-wise containers and ZERO them to avoid UB
     rv.kc.wAPLKC.resize(num_claws, 1);
@@ -1096,7 +1140,7 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
             rv.log("ERROR: preset_wKCAPL has unexpected shape; falling back to ones.");
         }
     }
-
+    rv.log(cat("wAPLKC_unscaled mean: ", wAPLKC_unscaled.mean()));
     // TODO do i actually need these vars? don't i still want to assign scaled
     // wAPLKC/wKCAPL vectors into rv.kc.wAPLKC/wKCAPL at the end
     /* Should only be used in preset_w[APLKC|KCAPL] = true cases */
@@ -1376,7 +1420,7 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
             for (unsigned i = 0; i < tlist.size(); i++) {
                 sim_KC_layer(p, rv,
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                        Vm, spikes, nves, inh, Is, KC_row, claw_sp);
+                        Vm, spikes, nves, inh, Is);
 #pragma omp critical
                 KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
             }
@@ -1485,6 +1529,7 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
             // rv.kc.wAPLKC.setConstant(4.15e-315);
             // rv.kc.wKCAPL.setConstant(4.15e-318);
             // print tests: 
+            rv.log(cat("wAPLKC_unscaled mean: ", wAPLKC_unscaled.mean()));
             {
                 std::ostringstream oss;
                 oss << "test after compare: first 10 wAPLKC values: ";
@@ -1524,7 +1569,7 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
             for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
                 sim_KC_layer(p, rv,
                         rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                        Vm, spikes, nves, inh, Is, KC_row, claw_sp);
+                        Vm, spikes, nves, inh, Is);
                 KCmean_st.col(i / p.kc.apltune_subsample)  = spikes.rowwise().sum();
 
 //#pragma omp critical
@@ -1584,33 +1629,73 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
 
                 // Update scalars for each compartment
                 // TO BE REVIEWED
-                
+                // Per-compartment delta method
                 for (int comp = 0; comp < n_compartments; ++comp) {
-                    /* single delta method 
-                    double delta = (comp_sparsities[comp] - p.kc.sp_target) * lr / p.kc.sp_target;
-
-                    wAPLKC_scales[comp] += delta;
-                    wKCAPL_scales[comp] += delta / double(p.kc.N);
-                    */
-                    
-                    // per compartmental delta method
                     if (converged[comp]) continue;
 
                     double delta = (comp_sparsities[comp] - p.kc.sp_target) * lr / p.kc.sp_target;
-                    double delta_apl_kc = delta;
-                    
-                    // divide by number of claws in that compartment? 
-                    double delta_kc_apl = delta / std::max(1, comp_claw_count[comp]);
-                    if (!p.kc.preset_wAPLKC){
 
+                    // Apply the update based on the preset flag
+                    if (!p.kc.preset_wAPLKC) {
+                        // Existing logic for updating individual scales
+                        double delta_apl_kc = delta;
+                        double delta_kc_apl = delta / std::max(1, comp_claw_count[comp]);
+                        wAPLKC_scales[comp] += delta_apl_kc;
+                        wKCAPL_scales[comp] += delta_kc_apl;
                     } else {
-                        rv.log(cat("rv.kc.wAPLKC_scale ", rv.kc.wAPLKC_scale));
-                        
+                        // Multi-compartment scaling method
+                        wAPLKC_scales[comp] += delta;
+                        // rv.log(cat("rv.kc.wAPLKC_scale_comp", comp, ": ", wAPLKC_scales[comp]));
+                    }
+                }
+
+                // Push updated scalars into rv.kc weight vectors
+                for (unsigned claw = 0; claw < num_claws; ++claw) {
+                    int comp = rv.kc.claw_compartments(claw);
+                    assert(0 <= comp && comp < n_compartments);
+
+                    // Apply the scaling method based on the preset flag
+                    if (!p.kc.preset_wAPLKC) {
+                        rv.kc.wAPLKC(claw, 0) = wAPLKC_scales[comp];
+                    } else {
+                        // Use the scale from the corresponding compartment
+                        // to scale the unscaled weights
+                        rv.kc.wAPLKC(claw, 0) = wAPLKC_scales[comp] * wAPLKC_unscaled(claw, 0);
                     }
                     
-                    wAPLKC_scales[comp] += delta_apl_kc;
-                    wKCAPL_scales[comp] += delta_kc_apl;
+                    // Note: The logic for wKCAPL will be similar if you also have a preset flag for it
+                    if (!p.kc.preset_wKCAPL) {
+                        rv.kc.wKCAPL(0, claw) = wKCAPL_scales[comp];
+                    } else {
+                        rv.kc.wKCAPL(0, claw) = wKCAPL_scales[comp] * wKCAPL_unscaled(0, claw);
+                    }
                 }
+                // for (int comp = 0; comp < n_compartments; ++comp) {
+                //     /* single delta method 
+                //     double delta = (comp_sparsities[comp] - p.kc.sp_target) * lr / p.kc.sp_target;
+
+                //     wAPLKC_scales[comp] += delta;
+                //     wKCAPL_scales[comp] += delta / double(p.kc.N);
+                //     */
+                    
+                //     // per compartmental delta method
+                //     if (converged[comp]) continue;
+
+                //     double delta = (comp_sparsities[comp] - p.kc.sp_target) * lr / p.kc.sp_target;
+                //     double delta_apl_kc = delta;
+                    
+                //     // divide by number of claws in that compartment? 
+                //     double delta_kc_apl = delta / std::max(1, comp_claw_count[comp]);
+                //     if (!p.kc.preset_wAPLKC){
+                //         wAPLKC_scales[comp] += delta
+                //     } else {
+                //         rv.log(cat("rv.kc.wAPLKC_scale ", rv.kc.wAPLKC_scale));
+                        
+                //     }
+                    
+                //     wAPLKC_scales[comp] += delta_apl_kc;
+                //     wKCAPL_scales[comp] += delta_kc_apl;
+                // }
 
                 // Push updated scalars into rv.kc weight vectors
                 for (unsigned claw = 0; claw < num_claws; ++claw) {
@@ -1828,7 +1913,7 @@ void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool cl
         sim_KC_layer(p, rv,
             rv.pn.sims[tlist[i]],
             rv.ffapl.vm_sims[tlist[i]],
-            Vm_end, spikes_end, nves_end, inh_end, Is_end, KC_row, claw_sp);
+            Vm_end, spikes_end, nves_end, inh_end, Is_end);
 
             // sum across time, then binarize  
         resp.col(i / p.kc.apltune_subsample) =
@@ -1969,7 +2054,7 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
     ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, Vector const& ffapl_t,
-    Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is, bool KC_row, bool claw_sp)
+    Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is)
 {
     // Determine number of compartments
     // int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1;
@@ -1981,49 +2066,8 @@ void sim_KC_layer(
     Is.setZero();
 
     float use_ffapl = float(!p.kc.ignore_ffapl);
-    if(KC_row){
-        Column dKCdt;
-        for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
-            double dIsdt = -Is(t-1) + (
-                    rv.kc.wKCAPL*(nves.col(t-1).array()*spikes.col(t-1).array()).matrix())(0,0)*1e4;
-            double dinhdt = -inh(t-1) + Is(t-1);
-                
-                // claw-level drive: one entrty per claw
-                //  rv.kc.wPNKC: a matrix of size (nClaws x nGloms)
-                // pn_t.col(t): a vector of size (nGloms) givine the PN activity at time step t.  
-                // multiplication: standard matrix-vector, a length-nClaws VectorXd
-            Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);                // size = nClaws
-                
-                // collapse to true KC-level drive
-                // initialize KC-level accumulator
-                // pn_drive is a placeholder for the summed drive each KC will recieve 
-                // p.kc.N is the number of KCs
-            Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);           // size = nKCs
-            const Eigen::Index n_claws = rv.kc.claw_to_kc.size();
-            for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
-                unsigned kc = rv.kc.claw_to_kc[claw];  // already 0..N-1
-                pn_drive[kc] += claw_drive[claw];
-            }
-
-                // plug collapsed drive into your ODE exactly as before
-            dKCdt =
-                (-Vm.col(t-1)
-                + pn_drive
-                - rv.kc.wAPLKC * inh(t-1)).array()
-                - use_ffapl * ffapl_t(t-1);
-            Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
-            inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
-            Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
-
-            nves.col(t) = nves.col(t-1);
-            nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
-
-            auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-            spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
-            Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
-        }
-    } else {
-        if (claw_sp){
+    if(p.kc.wPNKC_one_row_per_claw){
+        if (p.kc.claw_sp){
             rv.log("enterd claw_sp = True branch of sim_KC_layer");
             unsigned num_claws = rv.kc.claw_to_kc.size();
            
@@ -2031,15 +2075,13 @@ void sim_KC_layer(
             assert(rv.kc.wAPLKC.rows()==num_claws && rv.kc.wAPLKC.cols()==1);
             // build a KC→list<claws> map once (you can cache this outside the loop):
 
-            // Sanity on mapping range
-            int max_kc = rv.kc.claw_to_kc.maxCoeff();
-            int min_kc = rv.kc.claw_to_kc.minCoeff();
+            // // Sanity on mapping range
+            // int max_kc = rv.kc.claw_to_kc.maxCoeff();
+            // int min_kc = rv.kc.claw_to_kc.minCoeff();
 
-            // Strong invariants
-            assert(min_kc >= 0 && "claw_to_kc contains negative KC index");
-            assert(max_kc < int(p.kc.N) && "claw_to_kc index >= N");
-
-            
+            // // Strong invariants
+            // assert(min_kc >= 0 && "claw_to_kc contains negative KC index");
+            // assert(max_kc < int(p.kc.N) && "claw_to_kc index >= N");
 
             // something failed here!~!!!!!!!!    
             // std::vector<std::vector<unsigned>> kc_to_claws(p.kc.N);
@@ -2107,69 +2149,146 @@ void sim_KC_layer(
                 Vm.col(t)     = thr_comp.select(0.0, Vm.col(t));
             }
         } else {
-            for (unsigned t = p.time.start_step() + 1; t < p.time.steps_all(); ++t) {
-                // KC→APL drive per compartment ---
-                // Initialize drive derivative for each compartment
-                // TO BE REVIEWED
-                Eigen::VectorXd dIsdt = -Is.col(t - 1);
-                for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
-                    int comp = rv.kc.claw_compartments(claw);
+            // Column dKCdt;
+            // for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
+            //     double dIsdt = -Is(t-1) + (
+            //             rv.kc.wKCAPL*(nves.col(t-1).array()*spikes.col(t-1).array()).matrix())(0,0)*1e4;
+            //     double dinhdt = -inh(t-1) + Is(t-1);
+                    
+            //         // claw-level drive: one entrty per claw
+            //         //  rv.kc.wPNKC: a matrix of size (nClaws x nGloms)
+            //         // pn_t.col(t): a vector of size (nGloms) givine the PN activity at time step t.  
+            //         // multiplication: standard matrix-vector, a length-nClaws VectorXd
+            //     Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);                // size = nClaws
+            //         // collapse to true KC-level drive
+            //         // initialize KC-level accumulator
+            //         // pn_drive is a placeholder for the summed drive each KC will recieve 
+            //         // p.kc.N is the number of KCs
+            //     Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);           // size = nKCs
+            //     const Eigen::Index n_claws = rv.kc.claw_to_kc.size();
+            //     for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
+            //         unsigned kc = rv.kc.claw_to_kc[claw];  // already 0..N-1
+            //         pn_drive[kc] += claw_drive[claw];
+            //     }
+
+            //         // plug collapsed drive into your ODE exactly as before
+            //     dKCdt =
+            //         (-Vm.col(t-1)
+            //         + pn_drive
+            //         - rv.kc.wAPLKC * inh(t-1)).array()
+            //         - use_ffapl * ffapl_t(t-1);
+            //     Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
+            //     inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
+            //     Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
+
+            //     nves.col(t) = nves.col(t-1);
+            //     nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
+
+            //     auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
+            //     spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
+            //     Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
+            // }
+            Column dKCdt;
+            double total_claw_drive = 0.0;
+            double total_pn_drive = 0.0;
+            double total_kc_apl_inh = 0.0;
+            for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
+                // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
+                Eigen::VectorXd kc_activity = (nves.col(t-1).array() * spikes.col(t-1).array()).matrix();
+
+                // Sum the weighted activity of all KCs to get a single APL input value.
+                // This resolves the dimension mismatch.
+                double kc_apl_drive = 0.0;
+                const Eigen::Index n_claws = rv.kc.claw_to_kc.size();
+                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
-                    double ves_spk = nves(kc, t - 1) * spikes(kc, t - 1);
-                    dIsdt(comp) += rv.kc.wKCAPL(0, kc) * ves_spk * 1e4;
+                    kc_apl_drive += rv.kc.wKCAPL(claw, 0) * kc_activity[kc];
                 }
+                
+                 double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
 
-                // APL→KC inhibition derivative per compartment
-                // TO BE REVIEWED
-                Eigen::VectorXd dinhdt = -inh.col(t - 1) + Is.col(t - 1);
-
-                // Integrate compartment signals forward in time
-                Is.col(t)  = Is.col(t - 1)
-                            + dIsdt * p.time.dt / p.kc.tau_apl2kc;
-                inh.col(t) = inh.col(t - 1)
-                            + dinhdt * p.time.dt / p.kc.apl_taum;
-
-                // PN→KC feedforward drive (per claw)
-                // TO BE REVIEWED
-                Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);
-                Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);
-                for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
-                    unsigned kc = rv.kc.claw_to_kc[claw];
+                double dinhdt = -inh(t-1) + Is(t-1);
+                // claw-level drive: one entrty per claw
+                // rv.kc.wPNKC: a matrix of size (nClaws x nGlos)
+                // pn_t.col(t): a vector of size (nGloms) givine the PN activity at time step t. 
+                // multiplication: standard matrix-vector, a length-nClaws VectorXd
+                Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);       // size = nClaws
+                
+                // collapse to true KC-level drive
+                // initialize KC-level accumulator
+                // pn_drive is a placeholder for the summed drive each KC will recieve 
+                // p.kc.N is the number of KCs
+                Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);      // size = nKCs
+                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
+                    unsigned kc = rv.kc.claw_to_kc[claw]; // already 0..N-1
                     pn_drive[kc] += claw_drive[claw];
                 }
 
-                // Collapse compartmental inhibition back onto each KC
-                // TO BE REVIEWED
-                Eigen::VectorXd kc_inh = Eigen::VectorXd::Zero(p.kc.N);
-                for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
+                // --- FIX: Map the APL inhibition from claw level to KC level ---
+                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N); // size = nKCs
+                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
-                    int comp = rv.kc.claw_compartments(claw);
-                    kc_inh[kc] += inh(comp, t - 1);
+                    // The APL inhibition is weighted by the APL->KC weight
+                    // and applied to the corresponding KC.
+                    kc_apl_inh[kc] += rv.kc.wAPLKC(claw, 0) * inh(t - 1);
                 }
-                kc_inh.array() *= rv.kc.wAPLKC.array();
+                
+                total_claw_drive += claw_drive.mean();
+                total_pn_drive += pn_drive.mean();
+                total_kc_apl_inh += kc_apl_inh.mean();    
+                // --- Now use the correctly sized KC-level inhibition ---
+                dKCdt =
+                    (-Vm.col(t-1)
+                    + pn_drive
+                    - kc_apl_inh).array() // Now this term has the correct size
+                    - use_ffapl * ffapl_t(t-1);
+                
+                Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
+                inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
+                Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
 
-                // KC membrane potential ODE and integration
-                // TO BE REVIEWED
-                Eigen::VectorXd dKCdt =
-                    (-Vm.col(t - 1) + pn_drive - kc_inh).array()
-                    - use_ffapl * ffapl_t(t - 1);
+                nves.col(t) = nves.col(t-1);
+                nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
 
-                Vm.col(t) = Vm.col(t - 1)
-                        + dKCdt * p.time.dt / p.kc.taum;
-
-                // Synaptic‐vesicle dynamics
-                // TO BE REVIEWED
-                nves.col(t) = nves.col(t - 1)
-                    + p.time.dt * ((1.0 - nves.col(t - 1).array()) / p.kc.tau_r).matrix()
-                    - (p.kc.ves_p * spikes.col(t - 1).array()
-                    * nves.col(t - 1).array()).matrix();
-
-                // Spike generation & reset
                 auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-                spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-                Vm.col(t)     = thr_comp.select(0.0, Vm.col(t));
+                spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
+                Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
             }
+            double num_time_steps = p.time.steps_all() - (p.time.start_step() + 1);
+
+            // Now you can calculate the mean outside the loop and log the values.
+            // rv.log(cat("After sim_KC_layer: ", "wAPLKC mean: ", rv.kc.wAPLKC.mean(),
+            //     ", claw_drive mean: ", total_claw_drive / num_time_steps,
+            //     ", pn_drive mean: ", total_pn_drive / num_time_steps,
+            //     ", kc_apl_inh mean: ", total_kc_apl_inh / num_time_steps,
+            //     ", Vm mean: ", Vm.mean(),
+            //     ", Spikes mean: ", spikes.mean()));
         }
+    } else {
+        Column dKCdt;
+        for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
+            double dIsdt = -Is(t-1) + (
+                    rv.kc.wKCAPL*(nves.col(t-1).array()*spikes.col(t-1).array()).matrix())(0,0)*1e4;
+            double dinhdt = -inh(t-1) + Is(t-1);
+
+            dKCdt =
+                (-Vm.col(t-1)
+                +rv.kc.wPNKC*pn_t.col(t)
+                -rv.kc.wAPLKC*inh(t-1)).array()
+                -use_ffapl*ffapl_t(t-1);
+
+            Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
+            inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
+            Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
+
+            nves.col(t) = nves.col(t-1);
+            nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
+
+            auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
+            spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
+            Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
+        }
+        // rv.log(cat("After sim_KC_layer: ", "wAPLKC mean: ", rv.kc.wAPLKC.mean(), ", ", "Vm mean: ", Vm.mean(), ", ", "Spikes mean: ", spikes.mean()));
     }
 }
 
@@ -2280,7 +2399,9 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
             sim_ORN_layer(p, rv, i, orn_t);
             sim_LN_layer(p, orn_t, inhA, inhB);
 #pragma omp critical
-            {
+            {   
+                rv.log(cat(orn_t.rows()));
+                rv.log(cat(orn_t.cols()));
                 rv.orn.sims[i] = orn_t;
                 rv.ln.inhA.sims[i] = inhA;
                 rv.ln.inhB.sims[i] = inhB;
@@ -2318,7 +2439,7 @@ void run_FFAPL_sims(ModelParams const& p, RunVars& rv) {
                 rv.ffapl.vm_sims[i], rv.ffapl.coef_sims[i]);
     }
 }
-void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, bool regen) {
+void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     if (regen) {
         rv.log("generating new KC replicate");
         // TODO want to add optional flag to allow fit_sparseness to run w/o re-gening
@@ -2341,13 +2462,18 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
         }
         rv.log(oss.str());
         rv.log(cat("claw_to_kc size: ", rv.kc.claw_to_kc.size()));
-        if (KC_row) {
+        if (p.kc.claw_sp) {
             // wAPLKC should be one‐per‐KC
-            fit_sparseness(p, rv, KC_row, claw_sp);
-            assert(rv.kc.wAPLKC.rows() == int(p.kc.N));
+            fit_sparseness_claw(p, rv);
+            assert(rv.kc.wAPLKC.rows() == int(rv.kc.claw_compartments.size()));
         } else {
             // wAPLKC should be one‐per‐claw
-            fit_sparseness_claw(p, rv, KC_row, claw_sp);
+            fit_sparseness(p, rv);
+            if (p.kc.wPNKC_one_row_per_claw){
+                assert(rv.kc.wAPLKC.rows() == int(rv.kc.claw_compartments.size()));
+            } else {
+                assert(rv.kc.wAPLKC.rows() == int(p.kc.N));
+            }
             // assert(rv.kc.wAPLKC.rows() == int(num_claws));
         }
         // // For Debugging Purpose 
@@ -2452,83 +2578,96 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
 
     rv.log("running KC sims");
     std::vector<unsigned> simlist = get_simlist(p);
-    int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1; // test
-    rv.log("got num compartments");
-#pragma omp parallel
-    {
-        Matrix Vm_here;
-        if (!p.kc.save_vm_sims) {
-            Vm_here = Matrix(p.kc.N, p.time.steps_all());
-        }
-        
-        Matrix spikes_here;
-        if (!p.kc.save_spike_recordings) {
-            spikes_here = Matrix(p.kc.N, p.time.steps_all());
-        }
+    if(p.kc.claw_sp){   
+        rv.log("got num compartments");
+    }
 
-        Matrix nves_here;
-        if (!p.kc.save_nves_sims) {
-            nves_here = Matrix(p.kc.N, p.time.steps_all());
-        }
+#pragma omp parallel 
+{
+    Matrix Vm_here;
+    if (!p.kc.save_vm_sims) {
+        Vm_here = Matrix(p.kc.N, p.time.steps_all());
+    } 
 
-        Matrix inh_here;
+    Matrix spikes_here;
+    if (!p.kc.save_spike_recordings) {
+        spikes_here = Matrix(p.kc.N, p.time.steps_all());
+    }
+
+    Matrix nves_here;
+    if (!p.kc.save_nves_sims) {
+        nves_here = Matrix(p.kc.N, p.time.steps_all());
+    }
+
+    Matrix inh_here;
+    Matrix Is_here;
+    if(p.kc.claw_sp){
+        int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1;
         if (!p.kc.save_inh_sims) {
-            // inh_here = Matrix(1, p.time.steps_all());
             inh_here = Matrix(n_compartments, p.time.steps_all());
         }
 
-        Matrix Is_here;
         if (!p.kc.save_Is_sims) {
-            // Is_here = Matrix(1, p.time.steps_all());
             Is_here = Matrix(n_compartments, p.time.steps_all());
         }
+    } else {
+        if (!p.kc.save_inh_sims) {
+            inh_here = Matrix(1, p.time.steps_all());
+        }
 
-        // Matrix Vm(p.kc.N, p.time.steps_all());
-        // Matrix spikes(p.kc.N, p.time.steps_all());
-        Matrix respcol;
-        Matrix respcol_bin;
-        rv.log("declared size for all kinds of matrices");
-#pragma omp for
-        for (unsigned j = 0; j < simlist.size(); j++) {
-            rv.log("entered loop");
-            unsigned i = simlist[j];
-            rv.log(cat("Debug: Entering assignment section. i = ", i));
-            rv.log(cat("Debug: p.kc.save_vm_sims is ", (p.kc.save_vm_sims ? "true" : "false")));
-
-            if (p.kc.save_vm_sims) {
-                rv.log(cat("Debug: Attempting to access rv.kc.vm_sims at index ", i));
-                rv.log(cat("Debug: rv.kc.vm_sims current size is ", rv.kc.vm_sims.size()));
-            }
-
-            Matrix& Vm_link = p.kc.save_vm_sims
-                ? rv.kc.vm_sims.at(i)
-                : Vm_here; 
-            Matrix& spikes_link = p.kc.save_spike_recordings
-                ? rv.kc.spike_recordings.at(i)
-                : spikes_here;
-            Matrix& nves_link = p.kc.save_nves_sims
-                ? rv.kc.nves_sims.at(i)
-                : nves_here;
-            Matrix& inh_link = p.kc.save_inh_sims
-                ? rv.kc.inh_sims.at(i)
-                : inh_here;
-            // TODO TODO where does this one get saved to?
-            Matrix& Is_link = p.kc.save_Is_sims
-                ? rv.kc.Is_sims.at(i)
-                : Is_here;
-            sim_KC_layer(
-                    p, rv,
-                    rv.pn.sims[i], rv.ffapl.vm_sims[i],
-                    Vm_link, spikes_link, nves_link, inh_link, Is_link, KC_row, claw_sp);
-            respcol = spikes_link.rowwise().sum();
-            respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
-
-#pragma omp critical
-            rv.kc.responses.col(i) = respcol_bin;
-            rv.kc.spike_counts.col(i) = respcol;
+        if (!p.kc.save_Is_sims) {
+            Is_here = Matrix(1, p.time.steps_all());
         }
     }
-    rv.log("after running all sim_KC_layers");
+    rv.log("first round of initialization of matrices passed");
+
+    rv.kc.responses.resize(p.kc.N, get_nodors(p));
+    rv.kc.spike_counts.resize(p.kc.N, get_nodors(p));
+    std::stringstream ss;
+    ss << "get_nodors(p): " << get_nodors(p);
+    rv.log(ss.str());    // Matrix Vm(p.kc.N, p.time.steps_all()); 
+    // Matrix spikes(p.kc.N, p.time.steps_all());
+    Matrix respcol;
+    Matrix respcol_bin; 
+#pragma omp for
+    for (unsigned j = 0; j < simlist.size(); j++) {
+        unsigned i = simlist[j];
+        Matrix& Vm_link = p.kc.save_vm_sims
+            ? rv.kc.vm_sims.at(i)
+            : Vm_here; 
+        Matrix& spikes_link = p.kc.save_spike_recordings
+            ? rv.kc.spike_recordings.at(i)
+            : spikes_here;
+        Matrix& nves_link = p.kc.save_nves_sims
+            ? rv.kc.nves_sims.at(i)
+            : nves_here;
+        Matrix& inh_link = p.kc.save_inh_sims
+            ? rv.kc.inh_sims.at(i)
+            : inh_here;
+        // TODO TODO where does this one get saved to?
+        Matrix& Is_link = p.kc.save_Is_sims
+            ? rv.kc.Is_sims.at(i)
+            : Is_here;
+        rv.log("after constructing all the matrices");
+        sim_KC_layer(
+            p, rv,
+            rv.pn.sims[i], rv.ffapl.vm_sims[i],
+            Vm_link, spikes_link, nves_link, inh_link, Is_link);
+        respcol = spikes_link.rowwise().sum();
+        respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
+        rv.log(cat("Stored respcol_bin for odor ", i, " has a mean of ", respcol_bin.mean()));
+
+#pragma omp critical
+        rv.kc.responses.col(i) = respcol_bin;
+        rv.log(cat("rv.kc.responses.col(i).mean(): ", rv.kc.responses.col(i).mean()));
+        rv.kc.spike_counts.col(i) = respcol;
+    } 
+} // The parallel region ends here.
+
+// **ALL of the following code has been moved here, outside the parallel region,
+// to ensure it runs only after all threads have completed.**
+
+if (p.kc.claw_sp){
     std::vector<unsigned> tlist = p.kc.tune_from;
     if (tlist.empty()) {
         for (unsigned i = 0; i < get_nodors(p); ++i) tlist.push_back(i);
@@ -2563,8 +2702,24 @@ void run_KC_sims(ModelParams const& p, RunVars& rv,  bool KC_row, bool claw_sp, 
     double final_sp = rv.kc.responses.mean();  
     // double final_sc = rv.kc.spike_counts.mean();
     rv.log(cat("Post-sim global sparsity (C++): ", final_sp));
+} else {
+    double final_sp = rv.kc.responses.mean();
+    if (rv.kc.responses.hasNaN()) {
+        rv.log("Warning: The rv.kc.responses matrix contains NaN values.");
 
+        // You can also iterate and print them for more detailed debugging
+        for (int r = 0; r < rv.kc.responses.rows(); ++r) {
+            for (int c = 0; c < rv.kc.responses.cols(); ++c) {
+                if (std::isnan(rv.kc.responses(r, c))) {
+                    rv.log(cat("NaN found at row ", r, ", column ", c));
+                }
+            }
+        }
+    }
+    rv.log(cat("Post-sim global sparsity (C++): ", final_sp));
 }
+}
+
 
 void remove_before(unsigned step, Matrix& timecourse) {
     Matrix intermediate = timecourse.block(
