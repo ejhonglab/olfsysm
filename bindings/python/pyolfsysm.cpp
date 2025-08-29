@@ -126,6 +126,7 @@ PYBIND11_MODULE(olfsysm, m) {
         // expose the new kc_ids vector
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
         // expose the flag that controls one-row-per-claw behavior
+        .def_readwrite("claw_sp", &ModelParams::KC::claw_sp)
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw);
 
 
