@@ -447,10 +447,10 @@ void build_wPNKC(ModelParams const& p, RunVars& rv);
 /* Set KC spike thresholds, and tune APL<->KC weights until reaching the
  * desired sparsity. */
 
-void fit_sparseness(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp);
+void fit_sparseness(ModelParams const& p, RunVars& rv);
 
 /* same as above but uses claw_number as the row for wAPLKC and wKCAPL*/
-void fit_sparseness_claw(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp);
+void fit_sparseness_claw(ModelParams const& p, RunVars& rv);
 
 /* Model ORN response for one odor. */
 void sim_ORN_layer(
@@ -480,7 +480,7 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, bool KC_row, bool claw_sp);
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
@@ -495,6 +495,6 @@ void run_FFAPL_sims(ModelParams const& p, RunVars& rv);
 /* Regenerate PN->KC connectivity, re-tune thresholds and APL, and run KC sims
  * for all odors.
  * Connectivity regeneration can be turned off by passing regen=false. */
-void run_KC_sims(ModelParams const& p, RunVars& rv, bool KC_row, bool claw_sp, bool regen=true);
+void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen=true);
 
 #endif
