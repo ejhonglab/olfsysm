@@ -212,6 +212,7 @@ inline unsigned get_ngloms(ModelParams const& mp) {
     return mp.orn.data.delta.rows();
 }
 inline unsigned get_nodors(ModelParams const& mp) {
+    std::cout<< "get_nodors: " << mp.orn.data.delta.cols() << std::endl;
     return mp.orn.data.delta.cols();
 }
 
@@ -1986,7 +1987,7 @@ void sim_LN_layer(
         inhA(t) = inhA(t-1) + dinhAdt*p.time.dt/p.ln.tauGA;
         inhB(t) = inhB(t-1) + dinhBdt*p.time.dt/p.ln.tauGB;
         inh_LN = p.ln.inhsc/(p.ln.inhadd+inhA(t));
-        potential(t) = potential(t-1) + dLNdt*p.time.dt/p.ln.taum;
+        potential(t) = potential(t-1) + dLNdt*p.time.dt/p.ln.taum;  
         //response(t) = potential(t) > lnp.thr ? potential(t)-lnp.thr : 0.0;
         response(t) = (potential(t)-p.ln.thr)*double(potential(t)>p.ln.thr);
     }
@@ -2254,7 +2255,7 @@ void sim_KC_layer(
                 spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
                 Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
             }
-            double num_time_steps = p.time.steps_all() - (p.time.start_step() + 1);
+            // double num_time_steps = p.time.steps_all() - (p.time.start_step() + 1);
 
             // Now you can calculate the mean outside the loop and log the values.
             // rv.log(cat("After sim_KC_layer: ", "wAPLKC mean: ", rv.kc.wAPLKC.mean(),
@@ -2400,8 +2401,7 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
             sim_LN_layer(p, orn_t, inhA, inhB);
 #pragma omp critical
             {   
-                rv.log(cat(orn_t.rows()));
-                rv.log(cat(orn_t.cols()));
+                rv.log(cat("Sim ", i, ": Rows = ", orn_t.rows(), ", Cols = ", orn_t.cols()));
                 rv.orn.sims[i] = orn_t;
                 rv.ln.inhA.sims[i] = inhA;
                 rv.ln.inhB.sims[i] = inhB;
@@ -2420,6 +2420,7 @@ void run_PN_sims(ModelParams const& p, RunVars& rv) {
     rv.log("running PN sims");
     std::vector<unsigned> simlist = get_simlist(p);
 #pragma omp parallel for
+    rv.log(cat("simlist size in run_PN_sims, ", simlist.size()));
     for (unsigned j = 0; j < simlist.size(); j++) {
         unsigned i = simlist[j];
         sim_PN_layer(
@@ -2431,6 +2432,7 @@ void run_PN_sims(ModelParams const& p, RunVars& rv) {
 void run_FFAPL_sims(ModelParams const& p, RunVars& rv) {
     std::vector simlist = get_simlist(p);
 #pragma omp parallel for
+    rv.log(cat("simlist size in run_FFAPL_sims, ", simlist.size()));
     for (unsigned j = 0; j < simlist.size(); j++) {
         unsigned i = simlist[j];
         sim_FFAPL_layer(
@@ -2578,6 +2580,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     rv.log("running KC sims");
     std::vector<unsigned> simlist = get_simlist(p);
+    rv.log(cat("simlist size in run_KC_sims, ", simlist.size()));
     if(p.kc.claw_sp){   
         rv.log("got num compartments");
     }
@@ -2759,11 +2762,12 @@ std::vector<unsigned> get_simlist(ModelParams const& p) {
     if (p.sim_only.empty()) {
         std::vector<unsigned> ret(get_nodors(p));
         std::iota(std::begin(ret), std::end(ret), 0);
+        std::cout << "construct simlist size: " << ret.size() << std::endl;
         return ret;
+    } else { // Corrected: Use curly braces { } for the else block
+        return p.sim_only;
     }
-    return p.sim_only;
 }
-
 
 // This version of fit_sparseness_KC has per-compartmental KC sparsity;
 //  where wAPLKC and wKCAPL has the length of num_KC
