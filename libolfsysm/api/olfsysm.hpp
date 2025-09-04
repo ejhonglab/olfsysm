@@ -368,7 +368,7 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
-        
+
 
         /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
          * scalars are tuned rather than wAPLKC/wKCAPL themselves.
@@ -423,12 +423,12 @@ struct RunVars {
         Eigen::VectorXi claw_to_kc;
 
         /*map of claw to kc*/
-        std::vector<std::vector<int>> kc_to_claws; 
+        std::vector<std::vector<int>> kc_to_claws;
 
         /*Vector of the compartment associated with each claw*/
         Eigen::VectorXi claw_compartments;
 
-        int nclaws_total; 
+        int nclaws_total;
     } kc;
 
     /* Logger for this run. */

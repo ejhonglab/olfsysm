@@ -9,3 +9,5 @@ tmp/
 *.obj
 *.egg-info/
 __pycache__/
+# how did setup.py.save get added by Tianpei? he didn't actually want it, did he?
+*.save
