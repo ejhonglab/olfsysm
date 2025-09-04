@@ -428,6 +428,7 @@ struct RunVars {
         /*Vector of the compartment associated with each claw*/
         Eigen::VectorXi claw_compartments;
 
+        int nclaws_total; 
     } kc;
 
     /* Logger for this run. */
