@@ -103,6 +103,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("add_fixed_thr_to_spont", &ModelParams::KC::add_fixed_thr_to_spont)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
+        .def_readwrite("use_vector_thr", &ModelParams::KC::use_vector_thr)
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
@@ -126,7 +127,6 @@ PYBIND11_MODULE(olfsysm, m) {
         // expose the new kc_ids vector
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
         // expose the flag that controls one-row-per-claw behavior
-        .def_readwrite("claw_sp", &ModelParams::KC::claw_sp)
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw);
 
 
@@ -200,11 +200,6 @@ PYBIND11_MODULE(olfsysm, m) {
     m.def("fit_sparseness", &fit_sparseness, R"pbdoc(
         Set KC spike thresholds, and tune APL<->KC weights until reaching the
         desired sparsity specific for KC.
-    )pbdoc");
-
-    m.def("fit_sparseness_claw", &fit_sparseness_claw, R"pbdoc(
-        Set KC spike thresholds, and tune APL<->KC weights until reaching the
-        desired sparsity specific for claw.
     )pbdoc");
 
     m.def("sim_ORN_layer", &sim_ORN_layer, R"pbdoc(

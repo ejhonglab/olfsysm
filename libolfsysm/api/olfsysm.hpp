@@ -262,7 +262,6 @@ struct ModelParams {
 
         std::vector<long long> kc_ids;
         bool wPNKC_one_row_per_claw;
-        bool claw_sp;
     } kc;
 
     /* Feedforward APL params. */
@@ -449,9 +448,6 @@ void build_wPNKC(ModelParams const& p, RunVars& rv);
  * desired sparsity. */
 
 void fit_sparseness(ModelParams const& p, RunVars& rv);
-
-/* same as above but uses claw_number as the row for wAPLKC and wKCAPL*/
-void fit_sparseness_claw(ModelParams const& p, RunVars& rv);
 
 /* Model ORN response for one odor. */
 void sim_ORN_layer(
