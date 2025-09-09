@@ -120,7 +120,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.use_vector_thr        = false;
     p.kc.use_homeostatic_thrs  = true;
     p.kc.thr_type              = "";
-    p.kc.sp_target             = 0.0915;
+    p.kc.sp_target             = 0.1;
     p.kc.sp_factor_pre_APL     = 2.0;
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 10.0;
@@ -134,17 +134,16 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
 
-    p.kc.tau_r
-                     = 1.0;
+    p.kc.tau_r                 = 1.0;
     // olfsysm.hpp says that setting this to 0 should disable synaptic depression
     // (tau_r above is another parameter for synaptic depression)
     p.kc.ves_p                 = 0.0;
 
-    p.kc.save_vm_sims          = true;
-    p.kc.save_spike_recordings = true;
-    p.kc.save_nves_sims        = true;
-    p.kc.save_inh_sims         = true;
-    p.kc.save_Is_sims          = true;
+    p.kc.save_vm_sims          = false;
+    p.kc.save_spike_recordings = false;
+    p.kc.save_nves_sims        = false;
+    p.kc.save_inh_sims         = false;
+    p.kc.save_Is_sims          = false;
 
     p.ffapl.taum         = p.kc.apl_taum;
     p.ffapl.w            = 1.0;             // appropriate for LTS
