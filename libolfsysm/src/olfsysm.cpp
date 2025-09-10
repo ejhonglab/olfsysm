@@ -980,14 +980,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 } else {
                     rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
                 }  
-                // Count unique values exactly
-                std::set<double> uniq(rv.kc.wAPLKC.data(),
-                                    rv.kc.wAPLKC.data() + rv.kc.wAPLKC.size());
-                rv.log(cat("wAPLKC unique count: ", uniq.size()));
-                // (optional) list them
-                for (double v : uniq) rv.log(cat("wAPLKC unique: ", v));
-                rv.log(cat("setConst initial rv.kc.wAPLKC sum: ", rv.kc.wAPLKC.sum()));
-                rv.log(cat("setConst initial rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
             } else {
                 rv.kc.wAPLKC_scale = 2*ceil(-log(p.kc.sp_target));
                 // TODO delete
