@@ -618,13 +618,20 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
     rv.log(cat("wAPLKC mean: ", rv.kc.wAPLKC.mean()));
+
+    // fix? I don't need to re-size this right? it should be sized up correctly already? 
+    // only in the situation when there's no preset_wAPLKC? 
     unsigned num_claws = rv.kc.claw_to_kc.size();
-    if (!p.kc.wPNKC_one_row_per_claw) {
-        rv.kc.wAPLKC.resize(p.kc.N,1);
-        rv.kc.wKCAPL.resize(1,p.kc.N);
+    if(!p.kc.preset_wAPLKC){
+        if(!p.kc.wPNKC_one_row_per_claw){
+            rv.log(cat("rv.kc.wAPLKC.size():", rv.kc.wAPLKC.size()));
+            rv.log(cat("rv.kc.wKCAPL.size():", rv.kc.wKCAPL.size()));
+        }else {
+            rv.log(cat("rv.kc.wAPLKC.size():", rv.kc.wAPLKC.size()));
+            rv.log(cat("rv.kc.wKCAPL.size():", rv.kc.wKCAPL.size()));
+        }
     } else {
-        rv.kc.wAPLKC.resize(num_claws,1);
-        rv.kc.wKCAPL.resize(1,num_claws);
+        rv.log("p.kc.preset_wAPLKC is true");
     }
     int wAPLKC_nan_count = 0;
     // Check for NaN values in wAPLKC
@@ -669,6 +676,29 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         spont_in = spont_in_ini;
     }
     rv.kc.spont_in = spont_in;
+    {
+        const auto& M = rv.kc.spont_in;          // Eigen::MatrixXd or VectorXd
+        const double mean = M.array().mean();
+        const double minv = M.minCoeff();
+        const double maxv = M.maxCoeff();
+
+        // Population variance
+        const double var_pop = (M.array() - mean).square().mean();
+        const double sd_pop  = std::sqrt(std::max(0.0, var_pop));
+
+        // Sample variance (use this if you prefer N-1 in the denominator)
+        const Eigen::Index N = M.size();
+        const double var_samp = (N > 1)
+            ? (M.array() - mean).square().sum() / double(N - 1)
+            : 0.0;
+        const double sd_samp = std::sqrt(std::max(0.0, var_samp));
+
+        rv.log(cat("spont_in mean: ", mean));
+        rv.log(cat("spont_in min: ",  minv));
+        rv.log(cat("spont_in max: ",  maxv));
+        rv.log(cat("spont_in sd(pop): ",  sd_pop));
+        rv.log(cat("spont_in sd(sample): ", sd_samp));
+    }
 
     Column wAPLKC_unscaled(p.kc.N, 1);
     Row wKCAPL_unscaled(1, p.kc.N);
@@ -692,6 +722,16 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
         // TODO delete
         rv.log(cat("INITIAL wAPLKC_unscaled.mean(): ", wAPLKC_unscaled.mean()));
+    } else {
+        rv.log(cat("INITIAL rv.kc.wAPLKC.mean(): ", rv.kc.wAPLKC.mean()));
+        {   // sample standard deviation (ddof=1)
+            const auto A = rv.kc.wAPLKC.array();
+            const Eigen::Index n = rv.kc.wAPLKC.size();
+            const double mu  = A.mean();
+            const double var = (A - mu).square().sum() / std::max<Eigen::Index>(1, n - 1);
+            const double sd  = std::sqrt(std::max(0.0, var));
+            rv.log(cat("INITIAL rv.kc.wAPLKC sd(): ", sd));
+        }        // should be a deep copy
     }
     if (p.kc.preset_wKCAPL) {
         // TODO delete
@@ -709,7 +749,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // TODO delete
         rv.log(cat("INITIAL wKCAPL_unscaled.mean(): ", wKCAPL_unscaled.mean()));
     }
-
+    
     /* Set starting values for the things we'll tune. */
     // TODO matter? seems to be overwritten below in this case anyway...
     // (and put inside this conditional to avoid overwriting values set in python, via
@@ -915,6 +955,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log(cat("tuning APL<->KC weights; tuning begin (",
                         "target=", p.kc.sp_target,
                         " acc=", p.kc.sp_acc,
+                        " thr=", rv.kc.thr.mean(),
                         ")"));
 
             rv.kc.tuning_iters = 1;
@@ -927,7 +968,26 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Starting values for to-be-tuned APL<->KC weights. */
             if (!p.kc.preset_wAPLKC) {
                 // e.g. 3 w/ sp_target=0.1
-                rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
+                if(p.kc.wPNKC_one_row_per_claw){
+                    const double base = 2.0 * ceil(-log(p.kc.sp_target));
+                    for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
+                        unsigned kc = rv.kc.claw_to_kc[claw];
+                        const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
+                        const double val = base / static_cast<double>(cnt ? cnt : 1);
+                        rv.kc.wAPLKC(claw, 0) = val;  // row vector
+                    }
+                    // rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
+                } else {
+                    rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
+                }  
+                // Count unique values exactly
+                std::set<double> uniq(rv.kc.wAPLKC.data(),
+                                    rv.kc.wAPLKC.data() + rv.kc.wAPLKC.size());
+                rv.log(cat("wAPLKC unique count: ", uniq.size()));
+                // (optional) list them
+                for (double v : uniq) rv.log(cat("wAPLKC unique: ", v));
+                rv.log(cat("setConst initial rv.kc.wAPLKC sum: ", rv.kc.wAPLKC.sum()));
+                rv.log(cat("setConst initial rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
             } else {
                 rv.kc.wAPLKC_scale = 2*ceil(-log(p.kc.sp_target));
                 // TODO delete
@@ -937,17 +997,27 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             }
             if (!p.kc.preset_wKCAPL) {
                 if(p.kc.wPNKC_one_row_per_claw){
-                    rv.kc.wKCAPL.setConstant(2*ceil(-log(p.kc.sp_target)) / double(num_claws));
+                    const double base = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
+                    for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
+                        unsigned kc = rv.kc.claw_to_kc[claw];
+                        const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
+                        const double val = base / static_cast<double>(cnt ? cnt : 1);
+                        rv.kc.wKCAPL(0, claw) = val;  // row vector
+                    }
                 } else {
                     rv.kc.wKCAPL.setConstant(2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
                 }
+                rv.log(cat("setConst initial rv.kc.wKCAPL sum: ", rv.kc.wKCAPL.sum()));
+                rv.log(cat("setConst initial rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
             } else {
-                if(p.kc.wPNKC_one_row_per_claw){
-                    rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(num_claws);
-                } else {
-                    rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
-                }
+                rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
+                // if(p.kc.wPNKC_one_row_per_claw){
+                //     rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(rv.kc.claw_to_kc.size());
+                // } else {
+                //     rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
+                // }
                 // TODO delete
+                // this definition is a big problem. how would the math work to accomplish this? 
                 rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
 
                 rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
@@ -978,6 +1048,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // operations? is .array() actually necessary in this case?
                     // what does .array() do?
                     rv.kc.wAPLKC.array() += delta;
+                    rv.log(cat("rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
                 } else {
                     rv.kc.wAPLKC_scale += delta;
 
@@ -989,16 +1060,25 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
                 if (!p.kc.preset_wKCAPL) {
                     if(p.kc.wPNKC_one_row_per_claw){
-                        rv.kc.wKCAPL.array() += delta / double(num_claws);
+                        double change = delta / double(p.kc.N);
+                        for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
+                            unsigned kc = rv.kc.claw_to_kc[claw];
+                            const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
+                            const double val = change / static_cast<double>(cnt ? cnt : 1);
+                            rv.kc.wKCAPL(0, claw) = val;  // row vector
+                        }
+                        // ? this as well? should we update different claws differently? 
                     } else {
                         rv.kc.wKCAPL.array() += delta / double(p.kc.N);
                     }
+                    rv.log(cat("rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
                 } else {
-                    if(p.kc.wPNKC_one_row_per_claw){
-                        rv.kc.wKCAPL_scale += delta / double(num_claws);
-                    } else {
-                        rv.kc.wKCAPL_scale += delta / double(p.kc.N);
-                    }
+                    rv.kc.wKCAPL_scale += delta / double(p.kc.N);
+                    // if(p.kc.wPNKC_one_row_per_claw){
+                    //     rv.kc.wKCAPL_scale += delta / double(rv.kc.claw_to_kc.size());
+                    // } else {
+                    //     rv.kc.wKCAPL_scale += delta / double(p.kc.N);
+                    // }
 
                     // TODO delete?
                     rv.log(cat("rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
@@ -1315,11 +1395,27 @@ void sim_KC_layer(
         }
     } else {
         Column dKCdt;
+        Eigen::VectorXd kc_apl_drive_ts;
+        const unsigned t0 = p.time.start_step() + 1;
+        const unsigned tN = p.time.steps_all();
+        const Eigen::Index T = static_cast<Eigen::Index>(tN - t0);
+        kc_apl_drive_ts.resize(T);
+        kc_apl_drive_ts.setZero();  
+        // vector to store kc_apl_drive in each iteration 
         for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
-            double dIsdt = -Is(t-1) + (
-                    rv.kc.wKCAPL*(nves.col(t-1).array()*spikes.col(t-1).array()).matrix())(0,0)*1e4;
+            // if(t == p.time.steps_all()-1){
+            //     rv.log(cat("last step: nves.col(t-1): ", nves.col(t-1).mean()));
+            //     rv.log(cat("last step: spikes.col(t-1): ", spikes.col(t-1).mean()));
+            // } 
+            Eigen::VectorXd kc_activity =
+                (nves.col(t-1).array() * spikes.col(t-1).array()).matrix();
+            // 1xN * Nx1 -> 1x1, then extract the (0,0) scalar
+            const double kc_apl_drive = (rv.kc.wKCAPL * kc_activity)(0,0);
+            kc_apl_drive_ts(static_cast<Eigen::Index>(t - t0)) = kc_apl_drive;
+            // use the scalar
+            const double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
             double dinhdt = -inh(t-1) + Is(t-1);
-
+            // store kc_apl_drive into the vecotr
             dKCdt =
                 (-Vm.col(t-1)
                 +rv.kc.wPNKC*pn_t.col(t)
@@ -1334,12 +1430,16 @@ void sim_KC_layer(
             nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
 
             auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
+            //Eigen::Index n_spiking = thr_comp.count();   // number of KCs above threshold
+            
             spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
             Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
         }
+        //rv.log(cat("kc_apl_drive mean: ", kc_apl_drive_ts.mean()));
+        // rv.log(cat("VM mean: ", Vm.mean()));
         // rv.log(cat("After sim_KC_layer: ", "wAPLKC mean: ", rv.kc.wAPLKC.mean(), ", ", "Vm mean: ", Vm.mean(), ", ", "Spikes mean: ", spikes.mean()));
     }
-}
+} 
 
 
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
@@ -1502,6 +1602,21 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         }
     }
     rv.log(cat("Post-sim global sparsity (C++): ", final_sp));
+    const Eigen::Index n_kc    = rv.kc.responses.rows();
+    const Eigen::Index n_odors = rv.kc.responses.cols();
+
+    // Sum of all responses (active KC–odor pairs)
+    const double total_active = rv.kc.responses.sum(); // 0/1 matrix → sum is a count
+    rv.log(cat("Total active KC-odor pairs: ", total_active, " / ",
+               double(n_kc) * double(n_odors)));
+
+    // Per-odor response (number of active KCs and fraction per odor)
+    for (Eigen::Index odor = 0; odor < n_odors; ++odor) {
+        const double col_sum  = rv.kc.responses.col(odor).sum();
+        const double col_frac = col_sum / double(n_kc);  // per-odor sparsity
+        rv.log(cat("Odor ", odor, ": active KCs = ", col_sum,
+                   " (sparsity = ", col_frac, ")"));
+    }
 }
 
 void remove_before(unsigned step, Matrix& timecourse) {
