@@ -617,18 +617,28 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     if (!tlist.size()) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
-    rv.log(cat("wAPLKC mean: ", rv.kc.wAPLKC.mean()));
 
     // fix? I don't need to re-size this right? it should be sized up correctly already? 
     // only in the situation when there's no preset_wAPLKC? 
     unsigned num_claws = rv.kc.claw_to_kc.size();
     if(!p.kc.preset_wAPLKC){
         if(!p.kc.wPNKC_one_row_per_claw){
-            rv.log(cat("rv.kc.wAPLKC.size():", rv.kc.wAPLKC.size()));
-            rv.log(cat("rv.kc.wKCAPL.size():", rv.kc.wKCAPL.size()));
+            // if(rv.kc.wAPLKC.cols() != p.kc.N){
+            //     rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
+            //     rv.kc.wAPLKC.resize(p.kc.N,1);
+            //     rv.kc.wKCAPL.resize(1,p.kc.N);
+            // }    
+            rv.log(cat("rv.kc.wAPLKC.rows():", rv.kc.wAPLKC.rows()));
+            rv.log(cat("rv.kc.wKCAPL.cols():", rv.kc.wKCAPL.cols()));
         }else {
-            rv.log(cat("rv.kc.wAPLKC.size():", rv.kc.wAPLKC.size()));
-            rv.log(cat("rv.kc.wKCAPL.size():", rv.kc.wKCAPL.size()));
+            // rv.log(cat("rv.kc.wAPLKC.cols():", rv.kc.wAPLKC.cols()));
+            // rv.log(cat("rv.kc.wKCAPL.rows():", rv.kc.wKCAPL.rows()));
+            // if(rv.kc.wAPLKC.cols() != num_claws){
+            //     rv.kc.wAPLKC.resize(num_claws,1);
+            //     rv.kc.wKCAPL.resize(1,num_claws);
+            // }
+            rv.log(cat("rv.kc.wAPLKC.rows():", rv.kc.wAPLKC.rows()));
+            rv.log(cat("rv.kc.wKCAPL.cols():", rv.kc.wKCAPL.cols()));
         }
     } else {
         rv.log("p.kc.preset_wAPLKC is true");
@@ -748,6 +758,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
         // TODO delete
         rv.log(cat("INITIAL wKCAPL_unscaled.mean(): ", wKCAPL_unscaled.mean()));
+    } else {
+        rv.log(cat("INITIAL rv.kc.wKCAPL.mean(): ", rv.kc.wKCAPL.mean()));
     }
     
     /* Set starting values for the things we'll tune. */
@@ -762,6 +774,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             if (p.kc.wPNKC_one_row_per_claw) {
                 rv.kc.wKCAPL.setConstant(1.0/float(num_claws));
             } else {
+                double preset_wKCAPL_base = 1.0/float(p.kc.N);
+                for (Eigen::Index i_c = 0; i_c < rv.kc.claw_to_kc.size(); ++i_c) {
+                    unsigned kc = rv.kc.claw_to_kc[i_c];
+                    const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
+                    const double val = preset_wKCAPL_base / static_cast<double>(cnt ? cnt : 1);
+                    rv.kc.wKCAPL(i_c, 0) = val;  // row vector
+                }
                 rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
             }
         }
@@ -980,6 +999,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 } else {
                     rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
                 }  
+                rv.log(cat("setConst initial rv.kc.wAPLKC sum: ", rv.kc.wAPLKC.sum()));
+                rv.log(cat("setConst initial rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
             } else {
                 rv.kc.wAPLKC_scale = 2*ceil(-log(p.kc.sp_target));
                 // TODO delete
@@ -1039,7 +1060,18 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // TODO why using .array() for +=, but not for direct assignment
                     // operations? is .array() actually necessary in this case?
                     // what does .array() do?
-                    rv.kc.wAPLKC.array() += delta;
+                    if(p.kc.wPNKC_one_row_per_claw){
+                        double change = delta ;
+                        for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
+                            unsigned kc = rv.kc.claw_to_kc[claw];
+                            const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
+                            const double val = change / static_cast<double>(cnt ? cnt : 1);
+                            rv.kc.wAPLKC(claw, 0) += val;  // row vector
+                        }
+                        // ? this as well? should we update different claws differently? 
+                    } else {
+                        rv.kc.wAPLKC.array() += delta;
+                    }
                     rv.log(cat("rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
                 } else {
                     rv.kc.wAPLKC_scale += delta;
@@ -1057,7 +1089,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                             unsigned kc = rv.kc.claw_to_kc[claw];
                             const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
                             const double val = change / static_cast<double>(cnt ? cnt : 1);
-                            rv.kc.wKCAPL(0, claw) = val;  // row vector
+                            rv.kc.wKCAPL(0, claw) += val;  // row vector
                         }
                         // ? this as well? should we update different claws differently? 
                     } else {
@@ -1188,6 +1220,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // TODO delete?
     rv.log(cat("FINAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
     rv.log(cat("FINAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+    rv.log(cat("FINAL rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
+    rv.log(cat("FINAL rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
 
     // TODO always log tuned parameters at end (fixed_thr, wAPLKC/wKCAPL when not
     // preset, or wAPLKC_scale/wKCAPL_scale when preset)
