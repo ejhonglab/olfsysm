@@ -610,6 +610,7 @@ Column choose_KC_thresh_mixed(
     return (uniform+hstatic)/2.0;
 }
 
+ 
 void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log("fitting sparseness");
 
@@ -772,7 +773,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         }
         if (!p.kc.preset_wKCAPL) {
             if (p.kc.wPNKC_one_row_per_claw) {
-                rv.kc.wKCAPL.setConstant(1.0/float(num_claws));
+                rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
             } else {
                 double preset_wKCAPL_base = 1.0/float(p.kc.N);
                 for (Eigen::Index i_c = 0; i_c < rv.kc.claw_to_kc.size(); ++i_c) {
@@ -781,7 +782,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     const double val = preset_wKCAPL_base / static_cast<double>(cnt ? cnt : 1);
                     rv.kc.wKCAPL(i_c, 0) = val;  // row vector
                 }
-                rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
             }
         }
     }
@@ -1324,7 +1324,7 @@ void sim_FFAPL_layer(
     double dVdt;
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         coef_t(t) = coef_calc(p, pn_t.col(t-1), pn_spont);
-        dVdt = -ffapl_t(t-1) + p.ffapl.w*coef_t(t)*pn_t.col(t-1).sum();
+        dVdt = -ffapl_t(t-1) + p.ffapl.w*coef_t(t)*pn_t.col(t-1).sum(); 
         ffapl_t(t) = ffapl_t(t-1) + dVdt*p.time.dt/p.ffapl.taum;
     }
 
@@ -1369,7 +1369,7 @@ void sim_KC_layer(
                 kc_apl_drive += rv.kc.wKCAPL(claw, 0) * kc_activity[kc];
             }
 
-             double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
+            double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
 
             double dinhdt = -inh(t-1) + Is(t-1);
             // claw-level drive: one entrty per claw
