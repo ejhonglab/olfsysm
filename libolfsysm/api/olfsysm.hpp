@@ -248,6 +248,10 @@ struct ModelParams {
         double apl_taum;
         double tau_apl2kc;
 
+        /* APL compartment coupling constants*/
+        std::vector<double> apl_coup_const;
+        int comp_num;
+
         /* Synaptic depression params; see Hennig 2013 equation 3. Synaptic
          * depression can be disabled by setting ves_p = 0. */
         double tau_r;
@@ -421,11 +425,14 @@ struct RunVars {
         /*Vector of the KC associated with each claw*/
         Eigen::VectorXi claw_to_kc;
 
-        /*map of claw to kc*/
+        /*map of claws to their kc*/
         std::vector<std::vector<int>> kc_to_claws;
 
         /*Vector of the compartment associated with each claw*/
         Eigen::VectorXi claw_compartments;
+
+        /*map of claws to their compartment */
+        std::vector<std::vector<int>> compartment_to_claws;
 
         int nclaws_total;
     } kc;
