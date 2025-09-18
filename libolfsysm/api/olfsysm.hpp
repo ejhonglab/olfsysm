@@ -249,7 +249,7 @@ struct ModelParams {
         double tau_apl2kc;
 
         /* APL compartment coupling constants*/
-        std::vector<double> apl_coup_const;
+        double apl_coup_const;
         int comp_num;
 
         /* Synaptic depression params; see Hennig 2013 equation 3. Synaptic
