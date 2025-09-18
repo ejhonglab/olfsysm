@@ -134,7 +134,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
 
-    p.kc.apl_coup_const        = std::vector<double>{-1.0};
+    p.kc.apl_coup_const        = -1;
     p.kc.comp_num              = 0;
 
     p.kc.tau_r                 = 1.0;
@@ -1366,12 +1366,12 @@ void sim_KC_layer(
 
     float use_ffapl = float(!p.kc.ignore_ffapl); 
     if (p.kc.wPNKC_one_row_per_claw) {
-        if(p.kc.apl_coup_const.size() != 1){
+        if(p.kc.apl_coup_const != -1){
             // --- setup (unchanged pieces omitted) ---
             // --- Setup ---
             const auto& claws_by_compartment = rv.kc.compartment_to_claws;
             const int num_comp = int(claws_by_compartment.size());
-            std::vector<double> g_diff = p.kc.apl_coup_const;  // diffusion coeff; can be 0.0
+            double g_diff = p.kc.apl_coup_const;  // diffusion coeff; can be 0.0
 
             Eigen::VectorXd inh_prev_per_comp  = Eigen::VectorXd::Zero(num_comp);
             Eigen::VectorXd Is_prev_per_comp   = Eigen::VectorXd::Zero(num_comp);
@@ -1421,8 +1421,9 @@ void sim_KC_layer(
                 for (int c = 0; c < num_comp; ++c) {
                     const int L = (c - 1 + num_comp) % num_comp;
                     const int R = (c + 1) % num_comp;
-                    dInh_comp_dt[c] += g_diff[c] * (inh_prev_per_comp[L] + inh_prev_per_comp[R]
+                    dInh_comp_dt[c] += g_diff * (inh_prev_per_comp[L] + inh_prev_per_comp[R]
                                                 - 2.0 * inh_prev_per_comp[c]);
+                    // dInh_comp_dt[c] += g_diff[c] * (inh_prev_per_comp[L]);
                 }
                 
 
@@ -1431,20 +1432,23 @@ void sim_KC_layer(
                 double dinhdt = dInh_comp_dt.sum();
 
                 // (3) PN -> claw -> KC; **global** APL feedback (the key line)
-                const Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);
+                Eigen::VectorXd claw_drive(rv.kc.wPNKC.rows());
+                claw_drive.noalias() = rv.kc.wPNKC * pn_t.col(t);                
                 pn_drive.setZero();
                 kc_apl_inh.setZero();
 
-                const double apl_scalar_prev = inh_prev;  // global APL seen by KCs
-
+                // use the *vector* per-compartment inhibition (previous step)
                 for (int comp = 0; comp < num_comp; ++comp) {
+                    const double apl_comp_prev = inh_prev_per_comp[comp];
+
                     for (int claw : claws_by_compartment[(size_t)comp]) {
                         const unsigned kc = rv.kc.claw_to_kc[(Eigen::Index)claw];
                         pn_drive[kc] += claw_drive[claw];
 
                         const double w_apl_kc = waplkc_colvec ? rv.kc.wAPLKC(claw, 0)
                                                             : rv.kc.wAPLKC(0, claw);
-                        kc_apl_inh[kc] += w_apl_kc * apl_scalar_prev;
+                        // compartment-specific inhibition:
+                        kc_apl_inh[kc] += w_apl_kc * apl_comp_prev;
                     }
                 }
 
