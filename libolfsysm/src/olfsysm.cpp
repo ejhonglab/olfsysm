@@ -103,6 +103,11 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.inhadd     = 31.4088;
     p.pn.noise.mean = 0.0;
     p.pn.noise.sd   = 0.0;
+    /* bouton related model param initialization*/
+    p.pn.Btn_num_per_glom = 10;
+    p.pn.preset_Btn       = false;       
+    p.pn.preset_wAPLBtn   = false; 
+    p.pn.preset_wBtnAPL   = false;
 
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
@@ -270,7 +275,8 @@ RunVars::LN::LN(ModelParams const& p) :
     inhB{std::vector<Vector>(get_nodors(p), Row(1, p.time.steps_all()))} {
 }
 RunVars::PN::PN(ModelParams const& p) :
-    sims(get_nodors(p), Matrix(get_ngloms(p), p.time.steps_all())) {
+    sims(get_nodors(p), Matrix(p.pn.preset_Btn ? get_ngloms(p) * p.pn.Btn_num_per_glom
+        : get_ngloms(p), p.time.steps_all())) {
 }
 RunVars::FFAPL::FFAPL(ModelParams const& p) :
     vm_sims(get_nodors(p), Row(1, p.time.steps_all())),
@@ -313,7 +319,10 @@ RunVars::KC::KC(ModelParams const& p) :
     // Is_sims(p.kc.save_Is_sims ? get_nodors(p) : 0,
     //         Matrix( (p.kc.apl_coup_const != -1) ? int(p.kc.comp_num) : 1,
     //                 p.time.steps_all() )),
-    tuning_iters(0)
+    tuning_iters(0),
+    // I guess this should be the defalt case? 
+    wAPLBtn( get_ngloms(p) * p.pn.Btn_num_per_glom, 1 ),
+    wBtnAPL( 1, get_ngloms(p) * p.pn.Btn_num_per_glom )
 {
     if (p.kc.wPNKC_one_row_per_claw) {
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
@@ -562,7 +571,7 @@ void build_wPNKC(ModelParams const& p, RunVars& rv) {
         //rv.kc.wPNKC = rv.kc.wPNKC.array().colwise() * p.kc.currents.array();
     }
 }
-Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
+Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {  
     /* Sample from halfway between time start and stim start to stim start. */
     unsigned sp_t1 =
         p.time.start_step()
@@ -570,7 +579,13 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
     unsigned sp_t2 =
         p.time.start_step()
         + unsigned((p.time.stim.start-p.time.start)/(p.time.dt));
-    return rv.pn.sims[0].block(0,sp_t1,get_ngloms(p),sp_t2-sp_t1).rowwise().mean();
+    int row_dim;
+    if(p.pn.preset_Btn){
+        row_dim = get_ngloms(p) * p.pn.Btn_num_per_glom;
+    } else {
+        row_dim = get_ngloms(p);
+    }
+    return rv.pn.sims[0].block(0,sp_t1,row_dim,sp_t2-sp_t1).rowwise().mean();
 }
 Column choose_KC_thresh_uniform(
         ModelParams const& p, Matrix& KCpks, Column const& spont_in) {
@@ -675,7 +690,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     /* Calculate spontaneous input to KCs. */
     // TODO log stuff about PN spont to figure out if part of that isn't init'd
     // properly?
-
     Column spont_in_ini = rv.kc.wPNKC * sample_PN_spont(p, rv);
     Column spont_in;
     if (p.kc.wPNKC_one_row_per_claw) {
@@ -1249,7 +1263,6 @@ void sim_ORN_layer(
         Matrix& orn_t) {
     /* Initialize with spontaneous activity. */
     orn_t = p.orn.data.spont*p.time.row_all();
-
     // TODO TODO can orn_t go negative? i think i'm seeing that in some outputs???
     // is that reasonable?
     // TODO inspect some timecourses where it goes negative?
@@ -1299,19 +1312,78 @@ void sim_PN_layer(
     // it should be seed-able if it is
     std::normal_distribution<double> noise(p.pn.noise.mean, p.pn.noise.sd);
 
-    Column spont  = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
-    pn_t          = p.orn.data.spont*p.time.row_all();
-    double inh_PN = 0.0;
-
-    Column orn_delta;
+    const int ng = get_ngloms(p);
+    Column spont   = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
+    Column spont_btn;
+    
+    // MOVED DECLARATIONS UP so they can be resized in the if/else block below.
+    Column orn_delta_btn;
     Column dPNdt;
-    for (unsigned t = 1; t < p.time.steps_all(); t++) {
-        orn_delta = orn_t.col(t-1)-p.orn.data.spont;
-        dPNdt = -pn_t.col(t-1) + spont;
-        dPNdt +=
-            200.0*((orn_delta.array()+p.pn.offset)*p.pn.tanhsc/200.0*inh_PN).matrix().unaryExpr<double(*)(double)>(&tanh);
-        add_randomly([&noise](){return noise(g_randgen);}, dPNdt);
+        
+    if(p.pn.preset_Btn){
+        // total bouton count
+        int total_btns = rv.pn.Btn_to_pn.size();
+        pn_t.resize(total_btns, p.time.steps_all());
+        spont_btn.resize(total_btns, 1);
+        
+        // ADDED: Resize loop variables now that we know their dimension.
+        orn_delta_btn.resize(total_btns, 1);
+        dPNdt.resize(total_btns, 1);
 
+        // fill each bouton row with its per-bouton baseline across time
+        for (int g = 0; g < ng; ++g) {
+            const auto& btns = rv.pn.pn_to_Btns[g];      // std::vector<int> of bouton indices for glom g
+            const int Bg = (int)btns.size();
+            // STEP 1: Calculate initialization value from RAW data. 
+            // const double per_btn_init = (Bg > 0) ? p.orn.data.spont(g) / double(Bg) : 0.0;
+            const double per_btn_init = (Bg > 0) ? p.orn.data.spont(g): 0.0;
+            // STEP 2: Calculate simulation baseline from the SCALED 'spont' variable. 
+            // const double per_btn_baseline = (Bg > 0) ? spont(g) / double(Bg) : 0.0;
+            const double per_btn_baseline = (Bg > 0) ? spont(g) : 0.0;
+
+            for (int k = 0; k < Bg; ++k) {
+                const int b = btns[k];                  // bouton row index in pn_t
+                spont_btn(b) = per_btn_baseline;
+                // Fill the full row (1×T): scalar * time row
+                pn_t.row(b) = per_btn_init * p.time.row_all();
+            }
+        }
+    } else {
+        pn_t = p.orn.data.spont*p.time.row_all();
+        
+        // ADDED: Resize dPNdt for the non-bouton case.
+        // orn_delta_btn is not used in this case, so it can remain size 0.
+        dPNdt.resize(ng, 1);
+    }
+    double inh_PN = 0.0;
+    Column orn_delta;
+    // Column orn_delta_btn; // Declarations were moved up
+    // Column dPNdt;         // Declarations were moved up
+    
+    for (unsigned t = 1; t < p.time.steps_all(); t++) {
+        Column orn_delta_glom = orn_t.col(t - 1) - p.orn.data.spont; // ng×1
+
+        if (p.pn.preset_Btn) {
+            // expand glomerulus delta → bouton delta with same sharing
+            for (int g = 0; g < ng; ++g) {
+                const auto& btns = rv.pn.pn_to_Btns[g];
+                const int Bg = static_cast<int>(btns.size());
+                // const double per_btn_delta = (Bg > 0) ? orn_delta_glom(g) / double(Bg) : 0.0; 
+                const double per_btn_delta = orn_delta_glom(g);
+                for (int k = 0; k < Bg; ++k) {
+                    // This line is now safe because orn_delta_btn has been resized.
+                    orn_delta_btn(btns[k]) = per_btn_delta;
+                }
+            }
+
+            dPNdt = -pn_t.col(t - 1) + spont_btn;
+            dPNdt += 200.0 * ((orn_delta_btn.array() + p.pn.offset) * p.pn.tanhsc / 200.0 * inh_PN)
+                                 .matrix().unaryExpr<double(*)(double)>(&tanh);
+        } else {
+            dPNdt = -pn_t.col(t - 1) + spont;
+            dPNdt += 200.0 * ((orn_delta_glom.array() + p.pn.offset) * p.pn.tanhsc / 200.0 * inh_PN)
+                                 .matrix().unaryExpr<double(*)(double)>(&tanh);
+        }
         inh_PN = p.pn.inhsc/(p.pn.inhadd+0.25*inhA(t)+0.75*inhB(t));
         pn_t.col(t) = pn_t.col(t-1) + dPNdt*p.time.dt/p.pn.taum;
 
@@ -1626,6 +1698,8 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
                     rv.ln.inhA.sims[i], rv.ln.inhB.sims[i]);
                     */
         }
+        rv.log(cat("orn_t.rows: ", orn_t.rows()));
+        rv.log(cat("orn_t.cols: ", orn_t.cols()));
     }
 }
 void run_PN_sims(ModelParams const& p, RunVars& rv) {

@@ -138,6 +138,13 @@ struct ModelParams {
             double mean;
             double sd;
         } noise;
+
+        /* bouton related*/
+        int Btn_num_per_glom; 
+        bool preset_Btn;
+        bool preset_wAPLBtn;
+        bool preset_wBtnAPL;
+
     } pn;
 
     /* KC params. */
@@ -348,6 +355,9 @@ struct RunVars {
     struct PN {
         std::vector<Matrix> sims;
 
+        std::vector<int> Btn_to_pn;
+
+        std::vector<std::vector<int>> pn_to_Btns;
         /* Initialize matrices with the correct sizes and quantities. */
         PN(ModelParams const&);
     } pn;
@@ -435,6 +445,20 @@ struct RunVars {
         std::vector<std::vector<int>> compartment_to_claws;
 
         int nclaws_total;
+
+        /* Bouton related stuff*/
+        /* ngloms x nboutons*/
+        Matrix wPNB;
+        
+        /* nboutons x nclaws*/ // wBKC x wPNB = wPNKC
+        Matrix wBKC; 
+
+        /* APL to bouton weights*/
+        Column wAPLBtn; 
+
+        /* bouton to APL weights*/
+        Row wBtnAPL;
+
     } kc;
 
     /* Logger for this run. */
