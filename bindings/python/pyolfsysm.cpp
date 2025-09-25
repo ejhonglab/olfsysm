@@ -69,7 +69,12 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tanhsc", &ModelParams::PN::tanhsc)
         .def_readwrite("inhsc", &ModelParams::PN::inhsc)
         .def_readwrite("inhadd", &ModelParams::PN::inhadd)
-        .def_readwrite("noise", &ModelParams::PN::noise);
+        .def_readwrite("noise", &ModelParams::PN::noise)
+        .def_readwrite("Btn_num_per_glom", &ModelParams::PN::Btn_num_per_glom)
+        .def_readwrite("preset_Btn", &ModelParams::PN::preset_Btn)
+        .def_readwrite("preset_wAPLBtn", &ModelParams::PN::preset_wAPLBtn) 
+        .def_readwrite("preset_wBtnAPL", &ModelParams::PN::preset_wBtnAPL);
+
     py::class_<ModelParams::PN::Noise>(m, "MPPNNoise")
         .def_readwrite("mean", &ModelParams::PN::Noise::mean)
         .def_readwrite("sd", &ModelParams::PN::Noise::sd);
@@ -129,7 +134,8 @@ PYBIND11_MODULE(olfsysm, m) {
         // expose the flag that controls one-row-per-claw behavior
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw) 
         .def_readwrite("comp_num", &ModelParams::KC::comp_num) 
-        .def_readwrite("apl_coup_const", &ModelParams::KC::apl_coup_const);
+        .def_readwrite("apl_coup_const", &ModelParams::KC::apl_coup_const)
+        ;
 
 
 
@@ -163,6 +169,8 @@ PYBIND11_MODULE(olfsysm, m) {
 
     // TODO why pn_sims and not sims here? any reason? change for consistency?
     py::class_<RunVars::PN>(m, "RVPN")
+        .def_readwrite("pn_to_Btns", &RunVars::PN::pn_to_Btns)
+        .def_readwrite("Btn_to_pn", &RunVars::PN::Btn_to_pn)
         .def_readwrite("pn_sims", &RunVars::PN::sims);
 
     py::class_<RunVars::FFAPL>(m, "RVFFAPL")
@@ -190,6 +198,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
         .def_readwrite("compartment_to_claws", &RunVars::KC::compartment_to_claws)
+        .def_readwrite("wAPLBtn", &RunVars::KC::wAPLBtn) 
+        .def_readwrite("wBtnAPL", &RunVars::KC::wBtnAPL) 
         ;
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(
