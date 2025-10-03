@@ -4,11 +4,6 @@
 
 #include <memory>
 
-/*
-#include <string>
-#include <vector>
-#include <exception>
-*/
 #include "olfsysm.hpp"
 
 namespace py = pybind11;
@@ -72,7 +67,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("noise", &ModelParams::PN::noise)
         .def_readwrite("Btn_num_per_glom", &ModelParams::PN::Btn_num_per_glom)
         .def_readwrite("preset_Btn", &ModelParams::PN::preset_Btn)
-        .def_readwrite("preset_wAPLBtn", &ModelParams::PN::preset_wAPLBtn) 
+        .def_readwrite("preset_wAPLBtn", &ModelParams::PN::preset_wAPLBtn)
         .def_readwrite("preset_wBtnAPL", &ModelParams::PN::preset_wBtnAPL);
 
     py::class_<ModelParams::PN::Noise>(m, "MPPNNoise")
@@ -129,11 +124,12 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("save_nves_sims", &ModelParams::KC::save_nves_sims)
         .def_readwrite("save_inh_sims", &ModelParams::KC::save_inh_sims)
         .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims)
+        .def_readwrite("save_claw_sims", &ModelParams::KC::save_claw_sims)
         // expose the new kc_ids vector
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
         // expose the flag that controls one-row-per-claw behavior
-        .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw) 
-        .def_readwrite("comp_num", &ModelParams::KC::comp_num) 
+        .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw)
+        .def_readwrite("comp_num", &ModelParams::KC::comp_num)
         .def_readwrite("apl_coup_const", &ModelParams::KC::apl_coup_const)
         ;
 
@@ -193,13 +189,14 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("nves_sims", &RunVars::KC::nves_sims)
         .def_readwrite("inh_sims", &RunVars::KC::inh_sims)
         .def_readwrite("Is_sims", &RunVars::KC::Is_sims)
+        .def_readwrite("claw_sims", &RunVars::KC::claw_sims)
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
         .def_readwrite("compartment_to_claws", &RunVars::KC::compartment_to_claws)
-        .def_readwrite("wAPLBtn", &RunVars::KC::wAPLBtn) 
-        .def_readwrite("wBtnAPL", &RunVars::KC::wBtnAPL) 
+        .def_readwrite("wAPLBtn", &RunVars::KC::wAPLBtn)
+        .def_readwrite("wBtnAPL", &RunVars::KC::wBtnAPL)
         ;
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(

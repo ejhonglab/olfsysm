@@ -10,7 +10,6 @@ import setuptools
 __version__ = '0.0.1'
 
 
-
 class get_pybind_include(object):
     """Helper class to determine the pybind11 include path
 
@@ -24,23 +23,6 @@ class get_pybind_include(object):
     def __str__(self):
         import pybind11
         return pybind11.get_include(self.user)
-
- 
-# install via `FORCE_SINGLE_THREAD=1 pip install -v .` to disable multithreading
-# (to help with debugging)
-# NOTE: seems I need to `rm -rf build/ tmp/ *.so` (from olfsysm root. same place I'm
-# running `pip install` from) like tianpei had, to get this change to be reflected in
-# build outputs.
-force_single_thread = bool(int(os.environ.get('FORCE_SINGLE_THREAD', False)))
-if not force_single_thread:
-    libraries = ['gomp']
-    extra_compile_args = ['-fopenmp', '-fpic']
-    extra_link_args = ['-lgomp']
-else:
-    libraries = []
-    # -fpic doesn't seem to be (exclusively, at least) OpenMP related
-    extra_compile_args = ['-fpic']
-    extra_link_args = []
 
 
 # TODO more proper way than an env var? where do pip's new --config-settings go? e.g.
