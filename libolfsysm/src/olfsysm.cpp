@@ -82,18 +82,27 @@ thread_local std::mt19937 g_randgen{g_randdev()};
  *    necessary to suppress some spurious assert failures that would often otherwise get
  *    tripped within the Eigen code
  */
-// Adapted from indiv's answer in https://stackoverflow.com/questions/37473
 // TODO log as custom exception type (in pybind11 bindings file) to indicate it's an
 // error from within c++ code (or maybe convert to AssertionError?)?
 // see: https://pybind11.readthedocs.io/en/stable/advanced/exceptions.html
 // TODO also include the print_stack_trace(2) call source does after part i copied?
 // (would need to pull in more code, and may want to do it a diff way...)
-#define check(expr) do {                                    \
- if (!(expr)) {                                             \
-   throw std::invalid_argument(cat(                         \
-     __FILE__, ":", __LINE__, " in `", __PRETTY_FUNCTION__, \
-    "`\ncheck `", #expr, "` failed"));                      \
- };               } while(0)
+// TODO add (sep version?) w/ optional message
+//
+// NOTE: will still just abort if any of these fails within multithreaded sections!!!
+//
+// NOTE: could potentially use __FUNCTION__ instead of __func__, if later is ever
+// unavailable (may be the case on some compilers?). see:
+// https://stackoverflow.com/questions/4384765
+//
+// Adapted from indiv's answer in https://stackoverflow.com/questions/37473
+#define check(expr) do {                                                               \
+    if (!(expr)) {                                                                     \
+        throw std::invalid_argument(cat(                                               \
+            __FILE__, ":", __LINE__, " in `", __func__, "` check `", #expr, "` failed" \
+        ));                                                                            \
+    }                                                                                  \
+} while(0)
 
 ModelParams const DEFAULT_PARAMS = []() {
     ModelParams p;
@@ -314,6 +323,7 @@ RunVars::KC::KC(ModelParams const& p) :
         get_ngloms(p)
     ),
 
+    // TODO try to use something other than p.kc.kc_ids.size()?
     wAPLKC(p.kc.wPNKC_one_row_per_claw ? int(p.kc.kc_ids.size()) : int(p.kc.N), 1),
     wKCAPL(1, p.kc.wPNKC_one_row_per_claw ? int(p.kc.kc_ids.size()) : int(p.kc.N)),
 
@@ -391,6 +401,45 @@ RunVars::KC::KC(ModelParams const& p) :
     } else {
         claw_to_kc.resize(0);  // For clarity, make sure it's empty
     }
+}
+
+bool all_nonneg(Matrix& mat) {
+    // TODO this actually have any perfomance benefit over: (mat.array() >= 0).all()?
+    // does Eigen evaluate >= 0 for all elements of matrix before all, or one-by-one
+    // (terminating after first False)? benchmark, if not clear from docs?
+    for (int i=0; i<mat.rows(); ++i) {
+        for (int j=0; j<mat.cols(); ++j) {
+            if (mat(i,j) < 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// TODO also include checking of wPNKC (-> rename)? or another fn that does both?
+void check_APL_weights(ModelParams const& p, RunVars& rv) {
+    check(rv.kc.wAPLKC.cols() == 1);
+    check(rv.kc.wKCAPL.rows() == 1);
+
+    if (!p.kc.wPNKC_one_row_per_claw) {
+        check(rv.kc.wAPLKC.rows() == p.kc.N);
+        check(rv.kc.wKCAPL.cols() == p.kc.N);
+    } else {
+        // TODO use something else for num_claws? refactor to consistently use the same
+        // thing everywhere?
+        unsigned num_claws = rv.kc.claw_to_kc.size();
+
+        check(rv.kc.wAPLKC.rows() == num_claws);
+        check(rv.kc.wKCAPL.cols() == num_claws);
+    }
+
+    // TODO also check no +/- inf values? some builtin check for that, like np.isfinite?
+    check(!rv.kc.wAPLKC.hasNaN());
+    check(all_nonneg(rv.kc.wAPLKC));
+
+    check(!rv.kc.wKCAPL.hasNaN());
+    check(all_nonneg(rv.kc.wKCAPL));
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -687,41 +736,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
 
-    unsigned num_claws = rv.kc.claw_to_kc.size();
-
-    check(rv.kc.wAPLKC.cols() == 1);
-    check(rv.kc.wKCAPL.rows() == 1);
-
-    if (!p.kc.wPNKC_one_row_per_claw) {
-        check(rv.kc.wAPLKC.rows() == p.kc.N);
-        check(rv.kc.wKCAPL.cols() == p.kc.N);
-    } else {
-        check(rv.kc.wAPLKC.rows() == num_claws);
-        check(rv.kc.wKCAPL.cols() == num_claws);
-    }
-
-    // TODO refactor to a fn that asserts no NaN (-> share w/ wKCAPL checking below)
-    // (+ also have it check no negative values)
-    int wAPLKC_nan_count = 0;
-    for (int i = 0; i < rv.kc.wAPLKC.rows(); ++i) {
-        for (int j = 0; j < rv.kc.wAPLKC.cols(); ++j) {
-            if (std::isnan(rv.kc.wAPLKC(i, j))) {
-                wAPLKC_nan_count++;
-            }
-        }
-    }
-    // TODO work?
-    check(wAPLKC_nan_count == 0);
-
-    int wKCAPL_nan_count = 0;
-    for (int i = 0; i < rv.kc.wKCAPL.rows(); ++i) {
-        for (int j = 0; j < rv.kc.wKCAPL.cols(); ++j) {
-            if (std::isnan(rv.kc.wKCAPL(i, j))) {
-                wKCAPL_nan_count++;
-            }
-        }
-    }
-    check(wKCAPL_nan_count == 0);
+    // TODO assert w[APLKC|KCAPL]_scale are default 1.0 if preset_*=false?
 
     /* Calculate spontaneous input to KCs. */
     // TODO log stuff about PN spont to figure out if part of that isn't init'd
@@ -737,6 +752,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         const auto& claw_to_kc = rv.kc.claw_to_kc;  // std::vector<unsigned>
         for (int claw = 0; claw < claw_to_kc.size(); ++claw) {
             unsigned kc = claw_to_kc[claw];
+            // TODO what does tianpei mean by "bad mapping"? instead check we don't have
+            // any such cases?
             // guard (in case of bad mapping)
             if (kc < (unsigned)spont_in.size()) {
                 spont_in(kc) += spont_in_ini((Eigen::Index)claw);
@@ -746,32 +763,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         spont_in = spont_in_ini;
     }
     rv.kc.spont_in = spont_in;
-    {
-        const auto& M = rv.kc.spont_in;          // Eigen::MatrixXd or VectorXd
-        const double mean = M.array().mean();
-        const double minv = M.minCoeff();
-        const double maxv = M.maxCoeff();
 
-        // Population variance
-        const double var_pop = (M.array() - mean).square().mean();
-        const double sd_pop  = std::sqrt(std::max(0.0, var_pop));
-
-        // Sample variance (use this if you prefer N-1 in the denominator)
-        const Eigen::Index N = M.size();
-        const double var_samp = (N > 1)
-            ? (M.array() - mean).square().sum() / double(N - 1)
-            : 0.0;
-        const double sd_samp = std::sqrt(std::max(0.0, var_samp));
-
-        // TODO delete? or refactor and restore similar calcs + debug prints on APL
-        // weights?
-        rv.log(cat("spont_in mean: ", mean));
-        rv.log(cat("spont_in min: ",  minv));
-        rv.log(cat("spont_in max: ",  maxv));
-        rv.log(cat("spont_in sd(pop): ",  sd_pop));
-        rv.log(cat("spont_in sd(sample): ", sd_samp));
-    }
-
+    // TODO only do here if preset_*=true (or move below, and do somewhere all
+    // wAPLKC/wKCAPL will be initialized?)
     // TODO delete? (/refactor to share mean/min/max/sd summary w/ spont_in?)
     rv.log(cat("INITIAL rv.kc.wAPLKC.mean(): ", rv.kc.wAPLKC.mean()));
     rv.log(cat("INITIAL rv.kc.wKCAPL.mean(): ", rv.kc.wKCAPL.mean()));
@@ -779,18 +773,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log(cat("INITIAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
     rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
 
-    Column wAPLKC_unscaled(p.kc.N, 1);
-    Row wKCAPL_unscaled(1, p.kc.N);
-    if (p.kc.wPNKC_one_row_per_claw) {
-        wAPLKC_unscaled.resize(num_claws, 1);
-        wKCAPL_unscaled.resize(1, num_claws);
-    }
-
-    // TODO are preset_wAPLKC and wPNKC_one_row_per_claw mutually exclusive?
-    // adapt wPNKC_one_row_per_claw code to initialize w[APLKC|KC] similar
-    // to how preset_w[APLKC|KCAPL]=true code does, and then use scale
-    // *_scale params at output?
-
+    Column wAPLKC_unscaled;
+    Row wKCAPL_unscaled;
     if (p.kc.preset_wAPLKC) {
         // should be a deep copy
         wAPLKC_unscaled = rv.kc.wAPLKC;
@@ -799,14 +783,36 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         wKCAPL_unscaled = rv.kc.wKCAPL;
     }
 
+    // TODO are preset_wAPLKC and wPNKC_one_row_per_claw mutually exclusive?
+    // adapt wPNKC_one_row_per_claw code to initialize w[APLKC|KC] similar
+    // to how preset_w[APLKC|KCAPL]=true code does, and then use scale
+    // *_scale params at output?
+
     /* Set starting values for the things we'll tune. */
     // TODO matter? seems to be overwritten below in this case anyway...
     // (and put inside this conditional to avoid overwriting values set in python, via
     // pybind11)
     if (p.kc.tune_apl_weights) {
-        if (!p.kc.preset_wAPLKC) {
-            rv.kc.wAPLKC.setZero();
-        }
+        // TODO TODO should this not also be set to 0 in the preset_wAPLKC=true
+        // case? how else do we exclude the effect of the APL when picking thresholds in
+        // below? (i suppose if all wAPLKC weights are 0, it's ok if we initialize
+        // wKCAPL to whatever up here, since APL should still be disabled?)
+        // (could save this value in preset_wAPLKC=true case, and restore after picking
+        // threshold)
+        // (or maybe as long as either wKCAPL OR wAPLKC are all 0, same effect on
+        // thresholds [=no effect of APL in both cases], but might rather set at least
+        // wKCAPL all 0 so that checks on inh/Is can work correctly?)
+        // (changing code to set this to 0 in preset_wAPLKC case [and restoring after
+        // initial sim_KC_layer calls to pick thresholds] did not seem to change
+        // outcomes of any current tests, but does still make sense to me)
+        // TODO delete (was the old code the comments above referring to)
+        //if (!p.kc.preset_wAPLKC) {
+        //    rv.kc.wAPLKC.setZero();
+        rv.kc.wAPLKC.setZero();
+
+        // TODO TODO was there ever some reason this still was not also initialized to 0
+        // (and then set back after picking thresholds)? change to behave that way and
+        // see if any output changes?
         if (!p.kc.preset_wKCAPL) {
             if (p.kc.wPNKC_one_row_per_claw) {
                 // TODO refactor to share w/ other code doing similar
@@ -824,6 +830,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             }
         }
     }
+
+    check_APL_weights(p, rv);
 
     if (!p.kc.use_vector_thr) {
         if (!p.kc.use_fixed_thr) {
@@ -865,12 +873,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log(cat("(after adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
         }
     }
-
-    // TODO delete print
-    rv.log(cat("p.kc.N at KCpks declaration, ", p.kc.N));
     /* Used for measuring KC voltage; defined here to make it shared across all
      * threads.*/
-    Matrix KCpks(p.kc.N, tlist.size()); KCpks.setZero();
+    Matrix KCpks(p.kc.N, tlist.size());
+    KCpks.setZero();
 
     /* Used to store odor response data during APL tuning. */
     Matrix KCmean_st(p.kc.N, 1+ ((tlist.size() - 1) / p.kc.apltune_subsample));
@@ -915,24 +921,20 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     /* Break up into threads. */
 #pragma omp parallel
     {
+        // TODO is it necessary to define these matrices after the OMP parallel
+        // statement? why? what would be different if they were defined above? is this
+        // not potentially allocating memory per thread (just perhaps not b/c of eigen's
+        // features)?
         /* Output matrices for the KC simulation. */
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix nves(p.kc.N, p.time.steps_all());
-        Matrix inh;
-        Matrix Is;
-        Matrix claw_currents;
-        // if(!std::isnan(p.kc.apl_coup_const)){
-        // if(p.kc.apl_coup_const != -1){
-        //     inh = Matrix(rv.kc.compartment_to_claws.size(), p.time.steps_all());
-        //     Is = Matrix(rv.kc.compartment_to_claws.size(), p.time.steps_all());
-        // } else {
-        inh= Matrix(1, p.time.steps_all());
-        Is = Matrix(1, p.time.steps_all());
-        claw_currents = Matrix(1, p.time.steps_all());
-        // TODO delete (assuming i want this for use_vector_thr. why don't i for
-        // TTFIXED?)
-        // if (thrtype != TTFIXED && !p.kc.use_vector_thr) {
+        Matrix inh(1, p.time.steps_all());
+        Matrix Is(1, p.time.steps_all());
+        Matrix claw_currents(1, p.time.steps_all());
+
+        // TODO assuming i want this for use_vector_thr. why don't i want to do below
+        // for TTFIXED?
         if (thrtype != TTFIXED && !p.kc.use_vector_thr) {
 #pragma omp single
             {
@@ -943,32 +945,31 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                            thrtype, ")"));
             }
 
-            // TODO TODO maybe i still want to sim_KC_layer in use_vector_thr case
+            // TODO maybe i still want to sim_KC_layer in use_vector_thr case
             // (just not use it to pick a thr)?
 
             /* Measure voltages achieved by the KCs, and choose a threshold
              * based on that. */
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i++) {
-                sim_KC_layer(p, rv,
-                        rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                        Vm, spikes, nves, inh, Is, claw_currents);
+                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
+                    Vm, spikes, nves, inh, Is, claw_currents
+                );
+                // TODO is fn above not modifying these values for some reason? (doesn't
+                // seem that was it. same outcome when evaluated in sim_KC_layer)
+                // TODO TODO how are these checks passing, if we indeed have
+                // non-zero wAPLKC & wKCAPL weights here (in preset_wAPLKC=true case,
+                // by accident. fixed this behavior for wAPLKC, but still confusing b/c
+                // wKCAPL should still be >0 here, right?)?
+                check(inh.isZero());
+                check(Is.isZero());
 #pragma omp critical
                 KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
             }
 
 #pragma omp single
             {
-                // TODO TODO need to redefine these after end of fit_sparseness
-                // (so they are actually accurate and useful in mb_model's use to
-                // compute per-subtype thresholds) (currently just hardcoding thresholds
-                // rather than trying to compute them from pks in python)
                 rv.kc.pks = KCpks;
-
-                // TODO TODO make a new variable, like rv.kc.pks, but only set at the
-                // end (so as to also include the APL's influence). store the same peak
-                // KC Vms (or whatever exact quantity pks is)? (same thing comment above
-                // is asking for, just into a new variable)
 
                 /* Finish picking thresholds. */
                 rv.kc.thr =
@@ -976,7 +977,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                      thrtype == TTMIXED ? choose_KC_thresh_mixed :
                      choose_KC_thresh_uniform)
                     (p, KCpks, spont_in);
-                // TODO TODO compute + log sparsity here? (from KCpks)
+                // TODO compute + log sparsity here? (from KCpks)
                 // TODO + save into new rv variable, for use in al_analysis?
                 // (even worth? i assume that w/ reasonable pre-conditions, we can
                 // always get pretty bang-on here?)
@@ -990,31 +991,46 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // wAPLKC/etc)
 #pragma omp single
         {
-        if (!p.kc.tune_apl_weights && p.kc.preset_wAPLKC) {
-            // TODO delete
-            rv.log(cat("FIXED rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
+            if (p.kc.preset_wAPLKC) {
+                if (p.kc.tune_apl_weights) {
+                    // is it gauranteed that subsequent code will not be run by other
+                    // threads, until after this single block completes (don't want
+                    // other threads using uninitialized data)? or how to guarantee?
+                    // yes, other threads wait unless a nowait clause is added:
+                    // https://www.openmp.org/spec-html/5.0/openmpsu38.html
+                    //
+                    // TODO should i not also be zeroing and then resetting wKCAPL here
+                    // too? why did matt not do that above (make sense that APL will
+                    // have no influence w/ even this 0, but inh/Is still 0 above [when
+                    // i'm not expecting, when wKCAPL is non-zero])
+                    rv.kc.wAPLKC = wAPLKC_unscaled;
+                } else {
+                    // TODO delete
+                    rv.log(cat("FIXED rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
 
-            rv.kc.wAPLKC = rv.kc.wAPLKC_scale * wAPLKC_unscaled;
-        }
-        if (!p.kc.tune_apl_weights && p.kc.preset_wKCAPL) {
-            // TODO delete
-            rv.log(cat("FIXED rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+                    rv.kc.wAPLKC = rv.kc.wAPLKC_scale * wAPLKC_unscaled;
+                }
+            }
+            if (!p.kc.tune_apl_weights && p.kc.preset_wKCAPL) {
+                // TODO delete
+                rv.log(cat("FIXED rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
 
-            rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
+                rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
+            }
         }
-        }
-
-        // TODO TODO in use_vector_thr=True case, want to at least log/save the
-        // mean response rate before APL (esp if rv.kc.thr not set appropriately there,
-        // which maybe could have been used in python to compute that?)
 
         // TODO if `!tune_apl_weights` just return here, so i can de-ident code below?
-        // or does some or it need to run?
+        // or does some or it need to run? (we are still inside a parallel block tho.
+        // would have to at least synchronize or something, no? or could we break up
+        // large current parallel block w/ two smaller ones, one above and one below?)
         /* Enter this region only if APL use is enabled; if disabled, just exit
          * (at this point APL->KC weights are set to 0). */
         if (p.kc.tune_apl_weights) {
 #pragma omp single
         {
+            // TODO delete
+            rv.log("");
+            //
             rv.log(cat("tuning APL<->KC weights; tuning begin (",
                         "target=", p.kc.sp_target,
                         " acc=", p.kc.sp_acc,
@@ -1037,7 +1053,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         unsigned kc = rv.kc.claw_to_kc[claw];
                         const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
                         const double val = base / static_cast<double>(cnt ? cnt : 1);
-                        rv.kc.wAPLKC(claw, 0) = val;  // row vector
+                        rv.kc.wAPLKC(claw, 0) = val;
                     }
                 } else {
                     rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
@@ -1068,35 +1084,25 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.log(cat("setConst initial rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
             } else {
                 rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
-                // if(p.kc.wPNKC_one_row_per_claw){
-                //     rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(rv.kc.claw_to_kc.size());
-                // } else {
-                //     rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
-                // }
-                // TODO delete
-                // this definition is a big problem. how would the math work to accomplish this?
                 rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
-
                 rv.kc.wKCAPL = rv.kc.wKCAPL_scale * wKCAPL_unscaled;
             }
-            // TODO have code fail (terminate w/o achieving target sp) [or backtrack
-            // somehow] if count of either changes (don't want to add 0s)
-            int n_wAPLKC_lt0_initial = (rv.kc.wAPLKC.array() < 0.0).count();
-            int n_wKCAPL_lt0_initial = (rv.kc.wKCAPL.array() < 0.0).count();
-            // TODO factor into same fn we should put no-NaN checking in, and have that
-            // fn also check all values >=0
-            check(n_wAPLKC_lt0_initial == 0);
-            check(n_wKCAPL_lt0_initial == 0);
+
+            // TODO keep this check? only do this one, and remove earlier check?
+            // do again (/only?) at end of fit_sparseness (prob not needed...)?
+            check_APL_weights(p, rv);
 
             // to check we don't add additional 0 entries later (which would not be able
-            // to be updated on any future iterations)
+            // to be updated on any future iterations).
+            // code below will currently fail if count of either changes (don't want to
+            // add 0s). no current implementation of backtracking or any other way to
+            // rectify the situation without failing.
             n_wAPLKC_eq0_initial = (rv.kc.wAPLKC.array() == 0.0).count();
             n_wKCAPL_eq0_initial = (rv.kc.wKCAPL.array() == 0.0).count();
         }
 
         /* Continue tuning until we reach the desired sparsity. */
         do {
-            //rv.log(cat("** t", omp_get_thread_num(), " @ top"));
 #pragma omp barrier
 
 #pragma omp single
@@ -1226,46 +1232,29 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.kc.tuning_iters++;
             }
 
-            //rv.log(cat("** t", omp_get_thread_num(), " @ before testing"));
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
-                sim_KC_layer(p, rv,
-                        rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                        Vm, spikes, nves, inh, Is, claw_currents);
+                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
+                    Vm, spikes, nves, inh, Is, claw_currents
+                );
+                if (inh.isZero()) {
+                    // TODO also assert no spikes?
+                    rv.log(cat(
+                        "odor ", i, " had all 0 inh (presumably no response either)!"
+                    ));
+                }
                 KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
-
-//#pragma omp critical
-                // TODO delete?
-                ////KCpks.col(i) = Vm.rowwise().maxCoeff(); // - spont_in*2.0;
-                // TODO probably restore
-                //KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
-                ////KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*10.0;
             }
-            //rv.log(cat("** t", omp_get_thread_num(), " @ after testing"));
 
 #pragma omp single
             {
-                // TODO delete
-                //rv.log(cat("KCpks.mean(): ", KCpks.mean()));
-                //rv.log(cat("spont_in.mean(): ", spont_in.mean()));
-                //
-                // TODO restore? (+ fix surrounding) (or probably better set, set
-                // post-APL peaks into new rv.kc variable...)
-                // don't think i could use same way as i do for prior pks [which I use
-                // in python to set thresholds, in a similar manner to how they are used
-                // in here] tho, so might be pointless.
-                // more complicated by this point, since also depend on activity of all
-                // other KCs, so don't think i can as easily use to set e.g. a single
-                // KC's APL weights.
-                //rv.kc.pks = KCpks;
-
                 KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
                 sp = KCmean_st.mean();
             }
 
-            // TODO TODO why have multiple threads each printing these, if always the
-            // same across each (actually true? indicate a bug?)
+            // TODO why have multiple threads each printing these, if always the
+            // same across each? move log into single thread block above?
             rv.log(cat("** t", omp_get_thread_num(), " @ before bottom cond [",
                         "sp=", sp,
                         ", i=", rv.kc.tuning_iters,
@@ -1275,10 +1264,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         "]"));
         } while ((abs(sp - p.kc.sp_target) > (p.kc.sp_acc * p.kc.sp_target))
                 && (rv.kc.tuning_iters <= p.kc.max_iters));
-        //rv.log(cat("** t", omp_get_thread_num(), " @ exit"));
 #pragma omp barrier
 #pragma omp single
         {
+            // TODO what is point of this? does loop above give us 1 above the
+            // tuning_iters we want? even if only the initial tuning, and no subsequent
+            // loop iterations? why not move after parallel block (put in conditional on
+            // tune_apl_weights=true) instead of in this separate single-thread block at
+            // end?
             rv.kc.tuning_iters--;
         }
     }}
@@ -1291,6 +1284,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // TODO always log tuned parameters at end (fixed_thr, wAPLKC/wKCAPL when not
     // preset, or wAPLKC_scale/wKCAPL_scale when preset)
     rv.log("done fitting sparseness");
+    // TODO delete
+    rv.log("");
 }
 
 void sim_ORN_layer(
@@ -1463,12 +1458,18 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
     ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, Vector const& ffapl_t,
-    Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is, Matrix& claw_currents)
-{
+    Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is,
+    Matrix& claw_currents) {
+    /* Args:
+     * - inh: APL potential timeseries
+     * - Is: KC->APL synapse current (across all KCs) timeseries
+     * */
+
     // Determine number of compartments
     // int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1;
     Vm.setZero();
     spikes.setZero();
+    // TODO why setOnes here?
     nves.setOnes();
     inh.setZero();
     Is.setZero();
@@ -1481,7 +1482,7 @@ void sim_KC_layer(
         // TODO TODO work?
         claw_currents.resize(n_claws, p.time.steps_all());
 
-        if(p.kc.apl_coup_const != -1){
+        if (p.kc.apl_coup_const != -1){
             // --- setup (unchanged pieces omitted) ---
             // --- Setup ---
             const auto& claws_by_compartment = rv.kc.compartment_to_claws;
@@ -1499,6 +1500,8 @@ void sim_KC_layer(
             double inh_curr = inh_prev;
             double Is_curr  = Is_prev;
 
+            // TODO TODO TODO shouldn't rest of values be filled in? am i missing
+            // something?
             inh(0,0) = inh_prev;   // log scalar aggregates (global)
             Is(0,0)  = Is_prev;
 
@@ -1507,6 +1510,8 @@ void sim_KC_layer(
             Eigen::VectorXd pn_drive(p.kc.N);
             Eigen::VectorXd kc_apl_inh(p.kc.N);
 
+            // TODO better names for these (/ remove need for them -> delete)
+            // (why are they sometimes not a rowvec/colvec, b/c they are matrices then?)
             const bool wkcapl_rowvec = (rv.kc.wKCAPL.rows() == 1);
             const bool waplkc_colvec = (rv.kc.wAPLKC.cols() == 1);
 
@@ -1546,6 +1551,17 @@ void sim_KC_layer(
                 double dIsdt  = dIs_comp_dt.sum();
                 double dinhdt = dInh_comp_dt.sum();
 
+                // TODO TODO TODO (delete this comment) can the separate claws actually
+                // be inhibited separately, in current model? and is the
+                // multicompartment APL the only context in which that matters (no,
+                // right?)? but maybe we need non-uniform weights within KCs for it to
+                // start to matter? try varying w/ radius?
+                // TODO add test that at least in multicompartment versions, there can
+                // be diff activity per claws within a KC?
+                // TODO TODO is the current implementation of inhibition from APL->claw
+                // reasonable? what did olsen paper say about pre vs post-synaptic
+                // inhibition again?
+
                 // (3) PN -> claw -> KC; **global** APL feedback (the key line)
                 Eigen::VectorXd claw_drive(rv.kc.wPNKC.rows());
                 claw_drive.noalias() = rv.kc.wPNKC * pn_t.col(t);
@@ -1560,6 +1576,9 @@ void sim_KC_layer(
                         const unsigned kc = rv.kc.claw_to_kc[(Eigen::Index)claw];
                         pn_drive[kc] += claw_drive[claw];
 
+                        // TODO delete need for this (seems it's effectively 1D either
+                        // way. just have both branches initialize w/ consistent dim
+                        // order...)
                         const double w_apl_kc = waplkc_colvec ? rv.kc.wAPLKC(claw, 0)
                                                             : rv.kc.wAPLKC(0, claw);
                         // compartment-specific inhibition:
@@ -1579,6 +1598,8 @@ void sim_KC_layer(
                 Is_curr  = Is_prev  + (p.time.dt / p.kc.tau_apl2kc) * dIsdt;
                 inh_curr = inh_prev + (p.time.dt / p.kc.apl_taum)   * dinhdt;
 
+                // TODO TODO TODO shouldn't rest of values be filled in? why just
+                // Is(0,...)? check that first component of shape is length 1?
                 Is(0,t)  = Is_curr;   // log global
                 inh(0,t) = inh_curr;
 
@@ -1620,28 +1641,44 @@ void sim_KC_layer(
                 // claw-level drive: one entrty per claw
                 // rv.kc.wPNKC: a matrix of size (nClaws x nGlos)
                 // pn_t.col(t): a vector of size (nGloms) givine the PN activity at time step t.
-                // multiplication: standard matrix-vector, a length-nClaws VectorXd
-                // TODO TODO TODO TODO if this is correct, maybe i don't need claw_sims
+                // TODO TODO TODO if this is correct, maybe i don't need claw_sims
                 // after all? just use pn sims and wPNKC to recompute in python?
                 // delete all claw_sims stuff?
-                Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);       // size = nClaws
+                // (at least for versions where there is per-compartment coupling, will
+                // then still need claw sims then)
+                //
+                // if there are per-claw APL weights with meaningful variation in #
+                // synapses per claw w/in a given KC, could also differ across claws
+                // there, but could still compute in python since we should also have
+                // the per-claw wPNKC there (no feedback), right? or does fact that APL
+                // weights are scaled mean we still need to run the model (maybe just to
+                // get the scale factor?)
+                //
+                // multiplication: standard matrix-vector, a length-nClaws VectorXd
+                // size = nClaws
+                Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);
 
                 // collapse to true KC-level drive
                 // initialize KC-level accumulator
                 // pn_drive is a placeholder for the summed drive each KC will recieve
                 // p.kc.N is the number of KCs
 
-                // TODO TODO TODO TODO does this assume a fixed # of claws per KC?
-                Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);      // size = nKCs
+                Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);
                 for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw]; // already 0..N-1
                     pn_drive[kc] += claw_drive[claw];
                 }
 
                 // --- FIX: Map the APL inhibition from claw level to KC level ---
-                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N); // size = nKCs
+                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N);
                 for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
+                    // TODO TODO maybe this shouldn't be allowed to bring
+                    // claw_drive[claw] below 0 (apply inh per claw, then sum, rather
+                    // than summing each separate?)? (may only matter in combination
+                    // with either a per-claw [prob what we want] or per-KC threshold,
+                    // which we should prob add if we don't have yet)
+                    //
                     // The APL inhibition is weighted by the APL->KC weight
                     // and applied to the corresponding KC.
                     kc_apl_inh[kc] += rv.kc.wAPLKC(claw, 0) * inh(t - 1);
@@ -1674,24 +1711,24 @@ void sim_KC_layer(
         Eigen::VectorXd kc_apl_drive_ts;
         const unsigned t0 = p.time.start_step() + 1;
         const unsigned tN = p.time.steps_all();
+        // TODO describe what this is doing
         const Eigen::Index T = static_cast<Eigen::Index>(tN - t0);
         kc_apl_drive_ts.resize(T);
         kc_apl_drive_ts.setZero();
         // vector to store kc_apl_drive in each iteration
         for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
-            // if(t == p.time.steps_all()-1){
-            //     rv.log(cat("last step: nves.col(t-1): ", nves.col(t-1).mean()));
-            //     rv.log(cat("last step: spikes.col(t-1): ", spikes.col(t-1).mean()));
-            // }
             Eigen::VectorXd kc_activity =
                 (nves.col(t-1).array() * spikes.col(t-1).array()).matrix();
+
             // 1xN * Nx1 -> 1x1, then extract the (0,0) scalar
+            // TODO add assertion shape is actually (1,1) like we expect, before
+            // subsetting?
             const double kc_apl_drive = (rv.kc.wKCAPL * kc_activity)(0,0);
             kc_apl_drive_ts(static_cast<Eigen::Index>(t - t0)) = kc_apl_drive;
             // use the scalar
+            // TODO what is the 1e4 for?
             const double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
             double dinhdt = -inh(t-1) + Is(t-1);
-            // store kc_apl_drive into the vecotr
             dKCdt =
                 (-Vm.col(t-1)
                 +rv.kc.wPNKC*pn_t.col(t)
@@ -1706,15 +1743,35 @@ void sim_KC_layer(
             nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
 
             auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-            //Eigen::Index n_spiking = thr_comp.count();   // number of KCs above threshold
+            // either go to 1 or _stay_ at 0.
+            spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+            // TODO add assertion that checks spikes max is 1? or that unique values are
+            // 0/1?
 
-            spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
-            Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
+            // TODO describe how exactly this is working
+            // very abrupt repolarization!
+            Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
         }
-        //rv.log(cat("kc_apl_drive mean: ", kc_apl_drive_ts.mean()));
-        // rv.log(cat("VM mean: ", Vm.mean()));
-        // rv.log(cat("After sim_KC_layer: ", "wAPLKC mean: ", rv.kc.wAPLKC.mean(), ", ", "Vm mean: ", Vm.mean(), ", ", "Spikes mean: ", spikes.mean()));
     }
+    // TODO TODO assert nves is all 1, if ves_p == 0 (which it should be)?
+
+    // TODO TODO TODO even if it seems true that inh/Is are all 0 on the first calls,
+    // when picking threshold: *why* are they 0 there, when it doesnt seem like i was
+    // always properly setting wAPLKC/wKCAPL to 0 for those calls [in case where
+    // preset_*=true, i.e. use_connectome_APL_weights=True in python fit_mb_model]?
+    // (is there something else that changed across the two calls in fit_sparseness?)
+    // TODO delete
+    rv.log(cat(
+        "rv.kc.wAPLKC.isZero(): ", rv.kc.wAPLKC.isZero(),
+        " (rv.kc.wAPLKC.array() == 0).all(): ", (rv.kc.wAPLKC.array() == 0.0).all(),
+        "\nrv.kc.wKCAPL.isZero(): ", rv.kc.wKCAPL.isZero(),
+        " (rv.kc.wKCAPL.array() == 0).all(): ", (rv.kc.wKCAPL.array() == 0.0).all(),
+        "\ninh.isZero(): ", inh.isZero(),
+        " (inh.array() == 0.0).all(): ", (inh.array() == 0.0).all(),
+        "\nIs.isZero(): ", Is.isZero(),
+        " (Is.array() == 0.0).all(): ", (Is.array() == 0.0).all()
+    ));
+    //
 }
 
 
@@ -1728,9 +1785,6 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
 #pragma omp for
         for (unsigned j = 0; j < simlist.size(); j++) {
             unsigned i = simlist[j];
-            // TODO TODO how does orn_t populate all odors, since it's never redefined?
-            // does it not? delete matt's old long-commented code below after figuring
-            // it out
             sim_ORN_layer(p, rv, i, orn_t);
             sim_LN_layer(p, orn_t, inhA, inhB);
 #pragma omp critical
@@ -1739,16 +1793,10 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
                 rv.ln.inhA.sims[i] = inhA;
                 rv.ln.inhB.sims[i] = inhB;
             }
-            // TODO delete after addressing comment above
-            /*
-            sim_ORN_layer(p, rv, i, rv.orn.sims[i]);
-            sim_LN_layer(
-                    p, rv.orn.sims[i],
-                    rv.ln.inhA.sims[i], rv.ln.inhB.sims[i]);
-            */
         }
     }
 }
+
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
     std::vector<unsigned> simlist = get_simlist(p);
 #pragma omp parallel for
@@ -1760,6 +1808,7 @@ void run_PN_sims(ModelParams const& p, RunVars& rv) {
                 rv.pn.sims[i]);
     }
 }
+
 void run_FFAPL_sims(ModelParams const& p, RunVars& rv) {
     std::vector simlist = get_simlist(p);
 #pragma omp parallel for
@@ -1771,7 +1820,16 @@ void run_FFAPL_sims(ModelParams const& p, RunVars& rv) {
                 rv.ffapl.vm_sims[i], rv.ffapl.coef_sims[i]);
     }
 }
+
 void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
+    // TODO only do once? how? delete?
+    // these should be defined in Eigen/src/Core/util/Macros.h
+    // https://stackoverflow.com/questions/21497064
+    // TODO factor into fn also printing OpenMP version into?
+    rv.log(cat("EIGEN_WORLD_VERSION: ", EIGEN_WORLD_VERSION));
+    rv.log(cat("EIGEN_MAJOR_VERSION: ", EIGEN_MAJOR_VERSION));
+    rv.log(cat("EIGEN_MINOR_VERSION: ", EIGEN_MINOR_VERSION));
+    //
     if (regen) {
         // TODO use this in other places i'm currently defining # claws some other way?
         // TODO move this def outside of the `if (regen) { ... }` conditional?
@@ -1785,6 +1843,13 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         // rv.kc.pks and then pick thresholds based on that in python, with another
         // run_KC_sims call after
         fit_sparseness(p, rv);
+
+        // TODO delete? redundant w/ check currently at start of fit_sparseness, at
+        // least if it's true that `claw_compartments.size() == claw_to_kc.size()`
+        // (add assertion for this latter thing, in fit_sparseness?)?
+        // (may want to move / duplicate all checks at start of fit_sparesness to end of
+        // that fn tho, only if there's a change they could be resized somewhere in
+        // fit_sparesness)
         if (p.kc.wPNKC_one_row_per_claw){
             check(rv.kc.wAPLKC.rows() == int(rv.kc.claw_compartments.size()));
         } else {
@@ -1794,95 +1859,84 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     std::vector<unsigned> simlist = get_simlist(p);
 
-
 #pragma omp parallel
-{
-    Matrix Vm_here;
-    if (!p.kc.save_vm_sims) {
-        Vm_here = Matrix(p.kc.N, p.time.steps_all());
-    }
+    {
+        Matrix Vm_here;
+        if (!p.kc.save_vm_sims) {
+            Vm_here = Matrix(p.kc.N, p.time.steps_all());
+        }
 
-    Matrix spikes_here;
-    if (!p.kc.save_spike_recordings) {
-        spikes_here = Matrix(p.kc.N, p.time.steps_all());
-    }
+        Matrix spikes_here;
+        if (!p.kc.save_spike_recordings) {
+            spikes_here = Matrix(p.kc.N, p.time.steps_all());
+        }
 
-    Matrix nves_here;
-    if (!p.kc.save_nves_sims) {
-        nves_here = Matrix(p.kc.N, p.time.steps_all());
-    }
-    Matrix inh_here;
-    if (!p.kc.save_inh_sims) {
-        inh_here = Matrix(1, p.time.steps_all());
+        Matrix nves_here;
+        if (!p.kc.save_nves_sims) {
+            nves_here = Matrix(p.kc.N, p.time.steps_all());
+        }
+        Matrix inh_here;
+        if (!p.kc.save_inh_sims) {
+            inh_here = Matrix(1, p.time.steps_all());
 
-    }
+        }
 
-    Matrix Is_here;
-    if (!p.kc.save_Is_sims) {
-        Is_here = Matrix(1, p.time.steps_all());
-    }
+        Matrix Is_here;
+        if (!p.kc.save_Is_sims) {
+            Is_here = Matrix(1, p.time.steps_all());
+        }
 
-    Matrix claw_here;
-    if (!p.kc.save_claw_sims) {
-        // TODO TODO get # claws (matter? will it always be successfully resized later?)
-        claw_here = Matrix(p.kc.N, p.time.steps_all());
-    }
+        Matrix claw_here;
+        if (!p.kc.save_claw_sims) {
+            // TODO TODO get # claws (matter? will it always be successfully resized
+            // later?)
+            claw_here = Matrix(p.kc.N, p.time.steps_all());
+        }
 
-    // TODO doc why we now have to do this (/ delete)
-    // rv.kc.responses.resize(p.kc.N, get_nodors(p));
-    // rv.kc.spike_counts.resize(p.kc.N, get_nodors(p));
-    //rv.log(cat("rv.kc.responses.rows(): ", rv.kc.responses.rows()));
-    //rv.log(cat("rv.kc.responses.cols(): ", rv.kc.responses.cols()));
-    // rv.log(cat("Is_here.rows(): ", rv.kc.inh_sims[0].rows()));
-    // rv.log(cat("Is_here.cols(): ", rv.kc.inh_sims[0].cols()));
-
-    Matrix respcol;
-    Matrix respcol_bin;
+        Matrix respcol;
+        Matrix respcol_bin;
 #pragma omp for
-    for (unsigned j = 0; j < simlist.size(); j++) {
-        unsigned i = simlist[j];
-        Matrix& Vm_link = p.kc.save_vm_sims
-            ? rv.kc.vm_sims.at(i)
-            : Vm_here;
-        Matrix& spikes_link = p.kc.save_spike_recordings
-            ? rv.kc.spike_recordings.at(i)
-            : spikes_here;
-        Matrix& nves_link = p.kc.save_nves_sims
-            ? rv.kc.nves_sims.at(i)
-            : nves_here;
-        Matrix& inh_link = p.kc.save_inh_sims
-            ? rv.kc.inh_sims.at(i)
-            : inh_here;
-        Matrix& Is_link = p.kc.save_Is_sims
-            ? rv.kc.Is_sims.at(i)
-            : Is_here;
-        Matrix& claw_link = p.kc.save_claw_sims
-            ? rv.kc.claw_sims.at(i)
-            : claw_here;
+        for (unsigned j = 0; j < simlist.size(); j++) {
+            unsigned i = simlist[j];
+            Matrix& Vm_link = p.kc.save_vm_sims
+                ? rv.kc.vm_sims.at(i)
+                : Vm_here;
+            Matrix& spikes_link = p.kc.save_spike_recordings
+                ? rv.kc.spike_recordings.at(i)
+                : spikes_here;
+            Matrix& nves_link = p.kc.save_nves_sims
+                ? rv.kc.nves_sims.at(i)
+                : nves_here;
+            Matrix& inh_link = p.kc.save_inh_sims
+                ? rv.kc.inh_sims.at(i)
+                : inh_here;
+            Matrix& Is_link = p.kc.save_Is_sims
+                ? rv.kc.Is_sims.at(i)
+                : Is_here;
+            Matrix& claw_link = p.kc.save_claw_sims
+                ? rv.kc.claw_sims.at(i)
+                : claw_here;
 
-        // TODO TODO TODO are we only saving dynamics for a subset of the calls i care
-        // about? (why don't other sim_KC_layer calls also take args for these?)
-        sim_KC_layer(
-            p, rv,
-            rv.pn.sims[i], rv.ffapl.vm_sims[i],
-            Vm_link, spikes_link, nves_link, inh_link, Is_link, claw_link);
-        respcol = spikes_link.rowwise().sum();
-        respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
+            sim_KC_layer(
+                p, rv, rv.pn.sims[i], rv.ffapl.vm_sims[i], Vm_link, spikes_link,
+                nves_link, inh_link, Is_link, claw_link
+            );
+            respcol = spikes_link.rowwise().sum();
+            respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
 
 #pragma omp critical
-        rv.kc.responses.col(i) = respcol_bin;
-        rv.kc.spike_counts.col(i) = respcol;
-    }
-} // The parallel region ends here.
+            rv.kc.responses.col(i) = respcol_bin;
+            rv.kc.spike_counts.col(i) = respcol;
+        }
+    } // The parallel region ends here.
 
-// **ALL of the following code has been moved here, outside the parallel region,
-// to ensure it runs only after all threads have completed.**
+    // **ALL of the following code has been moved here, outside the parallel region,
+    // to ensure it runs only after all threads have completed.**
 
     double final_sp = rv.kc.responses.mean();
     if (rv.kc.responses.hasNaN()) {
         rv.log("Warning: The rv.kc.responses matrix contains NaN values.");
 
-        // You can also iterate and print them for more detailed debugging
         for (int r = 0; r < rv.kc.responses.rows(); ++r) {
             for (int c = 0; c < rv.kc.responses.cols(); ++c) {
                 if (std::isnan(rv.kc.responses(r, c))) {
@@ -1891,7 +1945,12 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             }
         }
     }
+    // TODO TODO check no NaN in responses? (-> delete loop printing them above)
+    // (equiv to some NaN check on an input? just check that?)
+
     rv.log(cat("Post-sim global sparsity (C++): ", final_sp));
+    // TODO delete (/put behind some kind of verbose/debug flag)
+    /*
     const Eigen::Index n_kc    = rv.kc.responses.rows();
     const Eigen::Index n_odors = rv.kc.responses.cols();
 
@@ -1907,6 +1966,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         rv.log(cat("Odor ", odor, ": active KCs = ", col_sum,
                    " (sparsity = ", col_frac, ")"));
     }
+    */
 }
 
 void remove_before(unsigned step, Matrix& timecourse) {

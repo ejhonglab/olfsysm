@@ -140,7 +140,7 @@ struct ModelParams {
         } noise;
 
         /* bouton related*/
-        int Btn_num_per_glom; 
+        int Btn_num_per_glom;
         bool preset_Btn;
         bool preset_wAPLBtn;
         bool preset_wBtnAPL;
@@ -382,8 +382,6 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
-
-
         /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
          * scalars are tuned rather than wAPLKC/wKCAPL themselves.
          *
@@ -453,12 +451,12 @@ struct RunVars {
         /* Bouton related stuff*/
         /* ngloms x nboutons*/
         Matrix wPNB;
-        
+
         /* nboutons x nclaws*/ // wBKC x wPNB = wPNKC
-        Matrix wBKC; 
+        Matrix wBKC;
 
         /* APL to bouton weights*/
-        Column wAPLBtn; 
+        Column wAPLBtn;
 
         /* bouton to APL weights*/
         Row wBtnAPL;
