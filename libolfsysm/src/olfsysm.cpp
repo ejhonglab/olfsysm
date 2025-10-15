@@ -193,6 +193,8 @@ ModelParams const DEFAULT_PARAMS = []() {
 
     p.kc.kc_ids.clear();
     p.kc.wPNKC_one_row_per_claw = false;
+    p.kc.allow_net_inh_per_claw = false;
+
     return p;
 }();
 
@@ -375,9 +377,10 @@ RunVars::KC::KC(ModelParams const& p) :
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
         claw_to_kc.resize(raw.size());
 
-        // TODO just do at runtime?
-        // TODO TODO otherwise need to loop over claw_sims (std::vector of Matrix),
-        // resizing reach Matrix to some 2d shape
+        // TODO just do at runtime? didn't seem to work up here (prob b/c need to resize
+        // for each odor, not once on the outer vector of Matrix objects...?)?
+        // TODO otherwise need to loop over claw_sims (std::vector of Matrix),
+        // resizing reach Matrix to some 2d shape (currently doing inside sim_KC_layer)
         //claw_sims.resize(p.kc.save_claw_sims ? get_nodors(p) : 0, raw.size(),
         //    p.time.steps_all());
 
@@ -673,7 +676,7 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
         p.time.start_step()
         + unsigned((p.time.stim.start-p.time.start)/(p.time.dt));
     int row_dim;
-    if(p.pn.preset_Btn){
+    if (p.pn.preset_Btn) {
         row_dim = get_ngloms(p) * p.pn.Btn_num_per_glom;
     } else {
         row_dim = get_ngloms(p);
@@ -931,7 +934,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Matrix nves(p.kc.N, p.time.steps_all());
         Matrix inh(1, p.time.steps_all());
         Matrix Is(1, p.time.steps_all());
-        Matrix claw_currents(1, p.time.steps_all());
+        // NOTE: rv.kc.nclaws_total currently initialized at start of run_KC_sims, right
+        // before fit_sparseness call
+        Matrix claw_sims(rv.kc.nclaws_total, p.time.steps_all());
 
         // TODO assuming i want this for use_vector_thr. why don't i want to do below
         // for TTFIXED?
@@ -953,7 +958,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i++) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                    Vm, spikes, nves, inh, Is, claw_currents
+                    Vm, spikes, nves, inh, Is, claw_sims
                 );
                 // TODO is fn above not modifying these values for some reason? (doesn't
                 // seem that was it. same outcome when evaluated in sim_KC_layer)
@@ -1068,7 +1073,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.kc.wAPLKC = rv.kc.wAPLKC_scale * wAPLKC_unscaled;
             }
             if (!p.kc.preset_wKCAPL) {
-                if(p.kc.wPNKC_one_row_per_claw){
+                if (p.kc.wPNKC_one_row_per_claw) {
                     const double base = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
                     for (Eigen::Index claw = 0; claw < rv.kc.claw_to_kc.size(); ++claw) {
                         unsigned kc = rv.kc.claw_to_kc[claw];
@@ -1236,7 +1241,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 #pragma omp for
             for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                    Vm, spikes, nves, inh, Is, claw_currents
+                    Vm, spikes, nves, inh, Is, claw_sims
                 );
                 if (inh.isZero()) {
                     // TODO also assert no spikes?
@@ -1288,10 +1293,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     rv.log("");
 }
 
-void sim_ORN_layer(
-        ModelParams const& p, RunVars const& rv,
-        int odorid,
-        Matrix& orn_t) {
+void sim_ORN_layer(ModelParams const& p, RunVars const& rv, int odorid, Matrix& orn_t) {
     /* Initialize with spontaneous activity. */
     orn_t = p.orn.data.spont*p.time.row_all();
     // TODO TODO can orn_t go negative? i think i'm seeing that in some outputs???
@@ -1309,10 +1311,8 @@ void sim_ORN_layer(
         orn_t.col(t) = orn_t.col(t-1)*(1.0-mul) + odor.col(t)*mul;
     }
 }
-void sim_LN_layer(
-        ModelParams const& p,
-        Matrix const& orn_t,
-        Row& inhA, Row& inhB) {
+
+void sim_LN_layer(ModelParams const& p, Matrix const& orn_t, Row& inhA, Row& inhB) {
     Row potential(1, p.time.steps_all()); potential.setConstant(300.0);
     Row response(1, p.time.steps_all());  response.setOnes();
     inhA.setConstant(50.0);
@@ -1335,10 +1335,10 @@ void sim_LN_layer(
         response(t) = (potential(t)-p.ln.thr)*double(potential(t)>p.ln.thr);
     }
 }
-void sim_PN_layer(
-        ModelParams const& p, RunVars const& rv,
-        Matrix const& orn_t, Row const& inhA, Row const& inhB,
-        Matrix& pn_t) {
+
+void sim_PN_layer(ModelParams const& p, RunVars const& rv, Matrix const& orn_t,
+    Row const& inhA, Row const& inhB, Matrix& pn_t) {
+
     // TODO verify this isn't actually making noise (both params 0? or sd at least?)?
     // it should be seed-able if it is
     std::normal_distribution<double> noise(p.pn.noise.mean, p.pn.noise.sd);
@@ -1347,11 +1347,10 @@ void sim_PN_layer(
     Column spont   = p.orn.data.spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
     Column spont_btn;
 
-    // MOVED DECLARATIONS UP so they can be resized in the if/else block below.
     Column orn_delta_btn;
     Column dPNdt;
 
-    if(p.pn.preset_Btn){
+    if (p.pn.preset_Btn) {
         // total bouton count
         int total_btns = rv.pn.Btn_to_pn.size();
         pn_t.resize(total_btns, p.time.steps_all());
@@ -1363,7 +1362,8 @@ void sim_PN_layer(
 
         // fill each bouton row with its per-bouton baseline across time
         for (int g = 0; g < ng; ++g) {
-            const auto& btns = rv.pn.pn_to_Btns[g];      // std::vector<int> of bouton indices for glom g
+            // std::vector<int> of bouton indices for glom g
+            const auto& btns = rv.pn.pn_to_Btns[g];
             const int Bg = (int)btns.size();
             // STEP 1: Calculate initialization value from RAW data.
             // const double per_btn_init = (Bg > 0) ? p.orn.data.spont(g) / double(Bg) : 0.0;
@@ -1388,8 +1388,6 @@ void sim_PN_layer(
     }
     double inh_PN = 0.0;
     Column orn_delta;
-    // Column orn_delta_btn; // Declarations were moved up
-    // Column dPNdt;         // Declarations were moved up
 
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         Column orn_delta_glom = orn_t.col(t - 1) - p.orn.data.spont; // ng×1
@@ -1455,11 +1453,12 @@ void sim_FFAPL_layer(
         ffapl_t = ffapl_t.array() - spont;
     }
 }
+
 void sim_KC_layer(
     ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, Vector const& ffapl_t,
     Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is,
-    Matrix& claw_currents) {
+    Matrix& claw_sims) {
     /* Args:
      * - inh: APL potential timeseries
      * - Is: KC->APL synapse current (across all KCs) timeseries
@@ -1479,10 +1478,15 @@ void sim_KC_layer(
         const Eigen::Index n_claws = rv.kc.claw_to_kc.size();
         // TODO log n_claws
 
-        // TODO TODO work?
-        claw_currents.resize(n_claws, p.time.steps_all());
+        // TODO try to move outside of sim_KC_layer (at least the resize()?)?
+        // (still need? delete?)
+        // TODO this able to correct for initial size not being specified
+        // correctly? (yes, seems so. may be slower doing it in here tho)
+        claw_sims.resize(n_claws, p.time.steps_all());
 
-        if (p.kc.apl_coup_const != -1){
+        claw_sims.setZero();
+
+        if (p.kc.apl_coup_const != -1) {
             // --- setup (unchanged pieces omitted) ---
             // --- Setup ---
             const auto& claws_by_compartment = rv.kc.compartment_to_claws;
@@ -1562,14 +1566,13 @@ void sim_KC_layer(
                 // reasonable? what did olsen paper say about pre vs post-synaptic
                 // inhibition again?
 
-                // (3) PN -> claw -> KC; **global** APL feedback (the key line)
                 Eigen::VectorXd claw_drive(rv.kc.wPNKC.rows());
                 claw_drive.noalias() = rv.kc.wPNKC * pn_t.col(t);
                 pn_drive.setZero();
                 kc_apl_inh.setZero();
 
                 // use the *vector* per-compartment inhibition (previous step)
-                for (int comp = 0; comp < num_comp; ++comp) {
+                for (int comp=0; comp<num_comp; ++comp) {
                     const double apl_comp_prev = inh_prev_per_comp[comp];
 
                     for (int claw : claws_by_compartment[(size_t)comp]) {
@@ -1586,7 +1589,6 @@ void sim_KC_layer(
                     }
                 }
 
-                // (4) KC membrane + spikes
                 dKCdt = (-Vm.col(t-1) + pn_drive - kc_apl_inh).array()
                         - float(!p.kc.ignore_ffapl) * ffapl_t(t-1);
                 Vm.col(t) = Vm.col(t-1) + dKCdt * (p.time.dt / p.kc.taum);
@@ -1612,7 +1614,7 @@ void sim_KC_layer(
                 spikes.col(t) = over_thr.select(1.0, spikes.col(t));
                 Vm.col(t)     = over_thr.select(0.0, Vm.col(t));
 
-                // Next step
+                // TODO what is this doing?
                 std::swap(Is_prev_per_comp,  Is_curr_per_comp);
                 std::swap(inh_prev_per_comp, inh_curr_per_comp);
                 Is_prev  = Is_curr;
@@ -1620,90 +1622,82 @@ void sim_KC_layer(
             }
         } else {
             Column dKCdt;
-            double total_claw_drive = 0.0;
-            double total_pn_drive = 0.0;
-            double total_kc_apl_inh = 0.0;
             for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
                 // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
-                Eigen::VectorXd kc_activity = (nves.col(t-1).array() * spikes.col(t-1).array()).matrix();
+                Eigen::VectorXd kc_activity = (
+                    nves.col(t-1).array() * spikes.col(t-1).array()
+                ).matrix();
 
                 // Sum the weighted activity of all KCs to get a single APL input value.
                 // This resolves the dimension mismatch.
                 double kc_apl_drive = 0.0;
-                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
+                for (Eigen::Index claw=0; claw<n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
-                    kc_apl_drive += rv.kc.wKCAPL(claw, 0) * kc_activity[kc];
+                    // TODO TODO TODO do we want to require the KCs to spike tho? if
+                    // not, how to get math to work out somewhat similar to before, when
+                    // this was fully dependent on KCs spiking (tuning may mostly take
+                    // care of that?)
+                    // TODO TODO TODO add flag to control whether this depends on
+                    // spiking or not (should directly depend on claw activities if not)
+                    kc_apl_drive += rv.kc.wKCAPL(claw) * kc_activity[kc];
                 }
 
                 double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
-
                 double dinhdt = -inh(t-1) + Is(t-1);
-                // claw-level drive: one entrty per claw
-                // rv.kc.wPNKC: a matrix of size (nClaws x nGlos)
-                // pn_t.col(t): a vector of size (nGloms) givine the PN activity at time step t.
-                // TODO TODO TODO if this is correct, maybe i don't need claw_sims
-                // after all? just use pn sims and wPNKC to recompute in python?
-                // delete all claw_sims stuff?
-                // (at least for versions where there is per-compartment coupling, will
-                // then still need claw sims then)
-                //
-                // if there are per-claw APL weights with meaningful variation in #
-                // synapses per claw w/in a given KC, could also differ across claws
-                // there, but could still compute in python since we should also have
-                // the per-claw wPNKC there (no feedback), right? or does fact that APL
-                // weights are scaled mean we still need to run the model (maybe just to
-                // get the scale factor?)
-                //
-                // multiplication: standard matrix-vector, a length-nClaws VectorXd
-                // size = nClaws
+
+                // rv.kc.wPNKC: a matrix of size (nClaws x nGloms)
+                // pn_t.col(t): a vector of size (nGloms) giving the PN activity at time
+                // step t.
                 Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);
 
-                // collapse to true KC-level drive
-                // initialize KC-level accumulator
-                // pn_drive is a placeholder for the summed drive each KC will recieve
-                // p.kc.N is the number of KCs
+                Eigen::VectorXd claw_drive_with_inh = (
+                    // all of these have 1 col and #-claws rows (e.g. 9472),
+                    // as does claw_sims.col(t)
+                    claw_drive - rv.kc.wAPLKC * inh(t-1)
+                );
+
+                // TODO TODO TODO also set claw_sims in `apl_coup_const != -1` case
+                // above (+ change math in same manner changed below), and also use
+                // allow_net_inh_per_claw (alongside slight change to calculation, to
+                // operate within each claw first) in that case
+                //
+                // TODO rename to something w/ units? what are proper units (and do they
+                // make sense as-is? does it really matter?)?
+                claw_sims.col(t) = claw_drive_with_inh;
+
+                if (!p.kc.allow_net_inh_per_claw) {
+                    // there typically will be claws that would get sent negative b/c of
+                    // inhibition, so we do need to clip if we want to avoid single
+                    // claws contribution inhibition exceeding their excitation
+                    auto const claw_drives_lt0 = claw_sims.col(t).array() < 0;
+                    // replace per-claw drives to min of 0
+                    claw_sims.col(t) = claw_drives_lt0.select(0.0, claw_sims.col(t));
+                    check(claw_sims.col(t).minCoeff() >= 0);
+                }
 
                 Eigen::VectorXd pn_drive = Eigen::VectorXd::Zero(p.kc.N);
-                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
-                    unsigned kc = rv.kc.claw_to_kc[claw]; // already 0..N-1
-                    pn_drive[kc] += claw_drive[claw];
-                }
-
-                // --- FIX: Map the APL inhibition from claw level to KC level ---
-                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N);
-                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
+                for (Eigen::Index claw=0; claw<n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
-                    // TODO TODO maybe this shouldn't be allowed to bring
-                    // claw_drive[claw] below 0 (apply inh per claw, then sum, rather
-                    // than summing each separate?)? (may only matter in combination
-                    // with either a per-claw [prob what we want] or per-KC threshold,
-                    // which we should prob add if we don't have yet)
-                    //
-                    // The APL inhibition is weighted by the APL->KC weight
-                    // and applied to the corresponding KC.
-                    kc_apl_inh[kc] += rv.kc.wAPLKC(claw, 0) * inh(t - 1);
+                    pn_drive[kc] += claw_sims(claw, t);
                 }
-
-                total_claw_drive += claw_drive.mean();
-                total_pn_drive += pn_drive.mean();
-                total_kc_apl_inh += kc_apl_inh.mean();
-                // --- Now use the correctly sized KC-level inhibition ---
-                dKCdt =
-                    (-Vm.col(t-1)
-                    + pn_drive
-                    - kc_apl_inh).array() // Now this term has the correct size
-                    - use_ffapl * ffapl_t(t-1);
+                dKCdt = (-Vm.col(t-1) + pn_drive).array() - use_ffapl * ffapl_t(t-1);
 
                 Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
                 inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
                 Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
 
                 nves.col(t) = nves.col(t-1);
-                nves.col(t) += p.time.dt*((1.0-nves.col(t-1).array()).matrix()/p.kc.tau_r) - (p.kc.ves_p*spikes.col(t-1).array()*nves.col(t-1).array()).matrix();
+                nves.col(t) += (p.time.dt *
+                    ((1.0 - nves.col(t-1).array()).matrix() / p.kc.tau_r) -
+                    (p.kc.ves_p*spikes.col(t-1).array() *
+                     nves.col(t-1).array()).matrix()
+                );
 
                 auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-                spikes.col(t) = thr_comp.select(1.0, spikes.col(t)); // either go to 1 or _stay_ at 0.
-                Vm.col(t) = thr_comp.select(0.0, Vm.col(t)); // very abrupt repolarization!
+                // either go to 1 or _stay_ at 0.
+                spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+                // very abrupt repolarization!
+                Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
             }
         }
     } else {
@@ -1761,6 +1755,7 @@ void sim_KC_layer(
     // preset_*=true, i.e. use_connectome_APL_weights=True in python fit_mb_model]?
     // (is there something else that changed across the two calls in fit_sparseness?)
     // TODO delete
+    /*
     rv.log(cat(
         "rv.kc.wAPLKC.isZero(): ", rv.kc.wAPLKC.isZero(),
         " (rv.kc.wAPLKC.array() == 0).all(): ", (rv.kc.wAPLKC.array() == 0.0).all(),
@@ -1771,6 +1766,7 @@ void sim_KC_layer(
         "\nIs.isZero(): ", Is.isZero(),
         " (Is.array() == 0.0).all(): ", (Is.array() == 0.0).all()
     ));
+    */
     //
 }
 
@@ -1826,14 +1822,21 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     // these should be defined in Eigen/src/Core/util/Macros.h
     // https://stackoverflow.com/questions/21497064
     // TODO factor into fn also printing OpenMP version into?
-    rv.log(cat("EIGEN_WORLD_VERSION: ", EIGEN_WORLD_VERSION));
-    rv.log(cat("EIGEN_MAJOR_VERSION: ", EIGEN_MAJOR_VERSION));
-    rv.log(cat("EIGEN_MINOR_VERSION: ", EIGEN_MINOR_VERSION));
+    // WORLD=3 MAJOR=3 MINOR=7 (world == major?)
+    /*
+    rv.log(cat(
+        "EIGEN_WORLD_VERSION: ", EIGEN_WORLD_VERSION,
+        " EIGEN_MAJOR_VERSION: ", EIGEN_MAJOR_VERSION,
+        " EIGEN_MINOR_VERSION: ", EIGEN_MINOR_VERSION
+    ));
+    */
     //
     if (regen) {
         // TODO use this in other places i'm currently defining # claws some other way?
         // TODO move this def outside of the `if (regen) { ... }` conditional?
         rv.kc.nclaws_total = rv.kc.claw_to_kc.size();
+        // TODO accurate? delete
+        rv.log(cat("rv.kc.nclaws_total: ", rv.kc.nclaws_total));
 
         rv.log("generating new KC replicate");
         build_wPNKC(p, rv);
@@ -1850,7 +1853,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         // (may want to move / duplicate all checks at start of fit_sparesness to end of
         // that fn tho, only if there's a change they could be resized somewhere in
         // fit_sparesness)
-        if (p.kc.wPNKC_one_row_per_claw){
+        if (p.kc.wPNKC_one_row_per_claw) {
             check(rv.kc.wAPLKC.rows() == int(rv.kc.claw_compartments.size()));
         } else {
             check(rv.kc.wAPLKC.rows() == int(p.kc.N));
@@ -1878,7 +1881,6 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         Matrix inh_here;
         if (!p.kc.save_inh_sims) {
             inh_here = Matrix(1, p.time.steps_all());
-
         }
 
         Matrix Is_here;
@@ -1890,7 +1892,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         if (!p.kc.save_claw_sims) {
             // TODO TODO get # claws (matter? will it always be successfully resized
             // later?)
-            claw_here = Matrix(p.kc.N, p.time.steps_all());
+            claw_here = Matrix(rv.kc.nclaws_total, p.time.steps_all());
         }
 
         Matrix respcol;

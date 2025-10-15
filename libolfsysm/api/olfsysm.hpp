@@ -274,6 +274,7 @@ struct ModelParams {
 
         std::vector<long long> kc_ids;
         bool wPNKC_one_row_per_claw;
+        bool allow_net_inh_per_claw;
     } kc;
 
     /* Feedforward APL params. */
@@ -331,6 +332,7 @@ struct RunVars {
     /* ORN-related variables. */
     struct ORN {
         /* Simulation results. */
+        // TODO what is unit for this? [delta?] firing rate? can it go negative?
         std::vector<Matrix> sims;
 
         /* Initialize matrices with the correct sizes and quantities. */
@@ -354,6 +356,7 @@ struct RunVars {
 
     /* PN-related variables. */
     struct PN {
+        // TODO what is unit for this? [delta?] firing rate? can it go negative?
         std::vector<Matrix> sims;
 
         std::vector<int> Btn_to_pn;
@@ -510,7 +513,7 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_currents);
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);

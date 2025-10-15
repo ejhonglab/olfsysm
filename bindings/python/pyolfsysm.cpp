@@ -125,10 +125,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("save_inh_sims", &ModelParams::KC::save_inh_sims)
         .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims)
         .def_readwrite("save_claw_sims", &ModelParams::KC::save_claw_sims)
-        // expose the new kc_ids vector
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
-        // expose the flag that controls one-row-per-claw behavior
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw)
+        .def_readwrite("allow_net_inh_per_claw", &ModelParams::KC::allow_net_inh_per_claw)
         .def_readwrite("comp_num", &ModelParams::KC::comp_num)
         .def_readwrite("apl_coup_const", &ModelParams::KC::apl_coup_const)
         ;
@@ -163,7 +162,8 @@ PYBIND11_MODULE(olfsysm, m) {
     py::class_<RunVars::LN::InhB>(m, "RVLNInhB")
         .def_readwrite("sims", &RunVars::LN::InhB::sims);
 
-    // TODO why pn_sims and not sims here? any reason? change for consistency?
+    // TODO why pn_sims and not sims here? any reason? change for consistency w/ orn
+    // handling?
     py::class_<RunVars::PN>(m, "RVPN")
         .def_readwrite("pn_to_Btns", &RunVars::PN::pn_to_Btns)
         .def_readwrite("Btn_to_pn", &RunVars::PN::Btn_to_pn)
