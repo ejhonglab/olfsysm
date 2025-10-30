@@ -139,11 +139,15 @@ struct ModelParams {
             double sd;
         } noise;
 
+        double apl_taum;
+        double tau_apl2pn;
+
         /* bouton related*/
-        int Btn_num_per_glom;
+        int Btn_num_per_glom; 
+        bool pn_apl_tune;
         bool preset_Btn;
-        bool preset_wAPLBtn;
-        bool preset_wBtnAPL;
+        bool preset_wAPLPN;
+        bool preset_wPNAPL;
 
     } pn;
 
@@ -189,6 +193,12 @@ struct ModelParams {
         bool preset_wAPLKC;
         /* Set to true if using a pre-loaded KC->APL weight vector. */
         bool preset_wKCAPL;
+
+        /* in the case that we use preset_wAPLKC, whether we 0 the weights for threshold
+        determination*/
+        bool zero_wAPLKC;
+
+        bool pn_claw_to_APL;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
@@ -252,6 +262,7 @@ struct ModelParams {
 
         /* Time constants. */
         double taum;
+        double apl_Cm;
         double apl_taum;
         double tau_apl2kc;
 
@@ -270,11 +281,9 @@ struct ModelParams {
         bool save_nves_sims;
         bool save_inh_sims;
         bool save_Is_sims;
-        bool save_claw_sims;
 
         std::vector<long long> kc_ids;
         bool wPNKC_one_row_per_claw;
-        bool allow_net_inh_per_claw;
     } kc;
 
     /* Feedforward APL params. */
@@ -332,7 +341,6 @@ struct RunVars {
     /* ORN-related variables. */
     struct ORN {
         /* Simulation results. */
-        // TODO what is unit for this? [delta?] firing rate? can it go negative?
         std::vector<Matrix> sims;
 
         /* Initialize matrices with the correct sizes and quantities. */
@@ -356,7 +364,12 @@ struct RunVars {
 
     /* PN-related variables. */
     struct PN {
-        // TODO what is unit for this? [delta?] firing rate? can it go negative?
+        /* APL to bouton weights*/
+        Column wAPLPN; 
+
+        /* bouton to APL weights*/
+        Row wPNAPL;
+
         std::vector<Matrix> sims;
 
         std::vector<int> Btn_to_pn;
@@ -384,6 +397,8 @@ struct RunVars {
         Matrix wPNKC;
         Column wAPLKC;
         Row    wKCAPL;
+
+
 
         /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
          * scalars are tuned rather than wAPLKC/wKCAPL themselves.
@@ -428,9 +443,6 @@ struct RunVars {
         /* Timeseries of KC->APL synapse current for each odor. */
         std::vector<Row> Is_sims;
 
-        /* Claw currents (# claws x timesteps) for each odor. */
-        std::vector<Matrix> claw_sims;
-
         /* The number of iterations done during APL tuning. */
         unsigned tuning_iters;
 
@@ -454,15 +466,9 @@ struct RunVars {
         /* Bouton related stuff*/
         /* ngloms x nboutons*/
         Matrix wPNB;
-
+        
         /* nboutons x nclaws*/ // wBKC x wPNB = wPNKC
-        Matrix wBKC;
-
-        /* APL to bouton weights*/
-        Column wAPLBtn;
-
-        /* bouton to APL weights*/
-        Row wBtnAPL;
+        Matrix wBKC; 
 
     } kc;
 
@@ -499,7 +505,7 @@ void sim_LN_layer(
 
 /* Model PN response to one odor. */
 void sim_PN_layer(
-        ModelParams const& p, RunVars const& rv,
+        ModelParams const& p, RunVars& rv,
         Matrix const& orn_t, Row const& inhA, Row const& inhB,
         Matrix& pn_t);
 
@@ -513,7 +519,7 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims);
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
