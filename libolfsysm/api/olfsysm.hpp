@@ -281,9 +281,11 @@ struct ModelParams {
         bool save_nves_sims;
         bool save_inh_sims;
         bool save_Is_sims;
+        bool save_claw_sims;
 
         std::vector<long long> kc_ids;
         bool wPNKC_one_row_per_claw;
+        bool allow_net_inh_per_claw;
     } kc;
 
     /* Feedforward APL params. */
@@ -443,6 +445,8 @@ struct RunVars {
         /* Timeseries of KC->APL synapse current for each odor. */
         std::vector<Row> Is_sims;
 
+        std::vector<Matrix> claw_sims;
+
         /* The number of iterations done during APL tuning. */
         unsigned tuning_iters;
 
@@ -519,7 +523,7 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is);
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
