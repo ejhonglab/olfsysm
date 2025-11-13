@@ -1,0 +1,8 @@
+- see how similar outputs are if i just use c70b0e7f instead (extend
+  al_analysis/model_test.py?)
+  (vs commit just prior, or commits after which reverted it)
+  perceptible? presumably not meaningfully different?
+
+  - restore the features added in c70b0e7f, such that they can be selectively
+    re-enabled?
+

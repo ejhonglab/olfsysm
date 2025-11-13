@@ -143,7 +143,7 @@ struct ModelParams {
         double tau_apl2pn;
 
         /* bouton related*/
-        int Btn_num_per_glom; 
+        int Btn_num_per_glom;
         bool pn_apl_tune;
         bool preset_Btn;
         bool preset_wAPLPN;
@@ -367,7 +367,7 @@ struct RunVars {
     /* PN-related variables. */
     struct PN {
         /* APL to bouton weights*/
-        Column wAPLPN; 
+        Column wAPLPN;
 
         /* bouton to APL weights*/
         Row wPNAPL;
@@ -470,9 +470,9 @@ struct RunVars {
         /* Bouton related stuff*/
         /* ngloms x nboutons*/
         Matrix wPNB;
-        
+
         /* nboutons x nclaws*/ // wBKC x wPNB = wPNKC
-        Matrix wBKC; 
+        Matrix wBKC;
 
     } kc;
 

@@ -70,7 +70,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("Btn_num_per_glom", &ModelParams::PN::Btn_num_per_glom)
         .def_readwrite("pn_apl_tune", &ModelParams::PN::pn_apl_tune)
         .def_readwrite("preset_Btn", &ModelParams::PN::preset_Btn)
-        .def_readwrite("preset_wAPLPN", &ModelParams::PN::preset_wAPLPN) 
+        .def_readwrite("preset_wAPLPN", &ModelParams::PN::preset_wAPLPN)
         .def_readwrite("preset_wPNAPL", &ModelParams::PN::preset_wPNAPL);
 
     py::class_<ModelParams::PN::Noise>(m, "MPPNNoise")
@@ -173,8 +173,8 @@ PYBIND11_MODULE(olfsysm, m) {
     py::class_<RunVars::PN>(m, "RVPN")
         .def_readwrite("pn_to_Btns", &RunVars::PN::pn_to_Btns)
         .def_readwrite("Btn_to_pn", &RunVars::PN::Btn_to_pn)
-        .def_readwrite("wAPLPN", &RunVars::PN::wAPLPN) 
-        .def_readwrite("wPNAPL", &RunVars::PN::wPNAPL) 
+        .def_readwrite("wAPLPN", &RunVars::PN::wAPLPN)
+        .def_readwrite("wPNAPL", &RunVars::PN::wPNAPL)
         .def_readwrite("pn_sims", &RunVars::PN::sims);
 
     py::class_<RunVars::FFAPL>(m, "RVFFAPL")

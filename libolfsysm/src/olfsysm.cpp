@@ -136,8 +136,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     /* bouton related model param initialization*/
     p.pn.Btn_num_per_glom = 10;
     p.pn.pn_apl_tune     = false;
-    p.pn.preset_Btn      = false;       
-    p.pn.preset_wAPLPN   = false; 
+    p.pn.preset_Btn      = false;
+    p.pn.preset_wAPLPN   = false;
     p.pn.preset_wPNAPL   = false;
 
     p.kc.N                     = 2000;
@@ -149,8 +149,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.tune_apl_weights      = true;
     p.kc.preset_wAPLKC         = false;
     p.kc.preset_wKCAPL         = false;
-    p.kc.zero_wAPLKC           = false; 
-    p.kc.pn_claw_to_APL        = false; 
+    p.kc.zero_wAPLKC           = false;
+    p.kc.pn_claw_to_APL        = false;
     p.kc.ignore_ffapl          = false;
     p.kc.fixed_thr             = 0;
     p.kc.add_fixed_thr_to_spont= false;
@@ -169,7 +169,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     // TODO doc how each of these are diff (w/ units if i can). not currently mentioned
     // in .hpp file
     p.kc.taum                  = 0.01;
-    p.kc.apl_Cm                = 0.1; 
+    p.kc.apl_Cm                = 0.1;
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
 
@@ -377,7 +377,7 @@ RunVars::KC::KC(ModelParams const& p) :
             Matrix(p.kc.N, p.time.steps_all())),
 
     tuning_iters(0)
-    // I guess this should be the defalt case? 
+    // I guess this should be the defalt case?
 {
     if (p.kc.wPNKC_one_row_per_claw) {
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
@@ -744,13 +744,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
 
-    // fix? I don't need to re-size this right? it should be sized up correctly already? 
-    // only in the situation when there's no preset_wAPLKC? 
+    // fix? I don't need to re-size this right? it should be sized up correctly already?
+    // only in the situation when there's no preset_wAPLKC?
     Column temp_wAPLKC;
     Row temp_wKCAPL;
     //unsigned num_claws = rv.kc.claw_to_kc.size();
     if(!p.kc.preset_wAPLKC){
-        if(!p.kc.wPNKC_one_row_per_claw){   
+        if(!p.kc.wPNKC_one_row_per_claw){
             rv.log(cat("rv.kc.wAPLKC.rows():", rv.kc.wAPLKC.rows()));
             rv.log(cat("rv.kc.wKCAPL.cols():", rv.kc.wKCAPL.cols()));
         }else {
@@ -758,8 +758,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log(cat("rv.kc.wKCAPL.cols():", rv.kc.wKCAPL.cols()));
         }
     } else {
-        temp_wAPLKC = rv.kc.wAPLKC; 
-        temp_wKCAPL = rv.kc.wKCAPL; 
+        temp_wAPLKC = rv.kc.wAPLKC;
+        temp_wKCAPL = rv.kc.wKCAPL;
         rv.log("p.kc.preset_wAPLKC is true");
     }
     int wAPLKC_nan_count = 0;
@@ -827,10 +827,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // (and put inside this conditional to avoid overwriting values set in python, via
     // pybind11)
     if (p.kc.tune_apl_weights) {
-        // We prob want to set zero for either cases so that the threshold can be set properly 
+        // We prob want to set zero for either cases so that the threshold can be set properly
         if (!p.kc.preset_wAPLKC){
             rv.kc.wAPLKC.setZero();
-        } 
+        }
         if (!p.kc.preset_wKCAPL) {
             if (p.kc.wPNKC_one_row_per_claw) {
                 // TODO refactor to share w/ other code doing similar
@@ -977,7 +977,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 check(rv.kc.wAPLKC.isZero());
                 check(rv.kc.wKCAPL.isZero());
                  //rv.log("wAPLKC and wKCAPL zeroed");
-            }  
+            }
 
             // TODO maybe i still want to sim_KC_layer in use_vector_thr case
             // (just not use it to pick a thr)?
@@ -1080,13 +1080,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             // factors to same as wAPLKC/wKCAPL being set below)?
             /* Starting values for to-be-tuned APL<->KC weights. */
 
-            // Reset the variable wAPLKC 
+            // Reset the variable wAPLKC
             if (p.kc.preset_wAPLKC && p.kc.zero_wAPLKC){
                 rv.kc.wAPLKC = temp_wAPLKC;
                 rv.kc.wKCAPL = temp_wKCAPL;
                 rv.log(cat("after thres initialization wAPLKC: ", rv.kc.wAPLKC.mean()));
             }
-            
+
 
             if (!p.kc.preset_wAPLKC) {
                 if (p.kc.wPNKC_one_row_per_claw) {
@@ -1386,7 +1386,7 @@ void sim_PN_layer(
     pn_t.setZero();
     // Baseline spontaneous activity, scaled for inhibition
     Column spont = p.orn.data.spont * p.pn.inhsc / (p.orn.data.spont.sum() + p.pn.inhadd);
-    
+
     // Time-series vectors for PN<->APL interaction
     Matrix inh = Matrix::Zero(1, p.time.steps_all());
     Matrix Is = Matrix::Zero(1, p.time.steps_all());
@@ -1403,7 +1403,7 @@ void sim_PN_layer(
 
     Column spont_btn;       // Spontaneous activity per bouton
     Column orn_delta_btn;   // ORN delta activity per bouton
-    Column dPNdt; 
+    Column dPNdt;
 
     if (p.pn.preset_Btn) {
         // total bouton count
@@ -1446,7 +1446,7 @@ void sim_PN_layer(
 
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         // --- 4a. Select correct inputs (bouton or glomerulus) ---
-        
+
         const Column* spont_ref; // Pointer to use either spont or spont_btn
         Column orn_delta;        // Will hold either per-glom or per-bouton delta
 
@@ -1469,20 +1469,20 @@ void sim_PN_layer(
             spont_ref = &spont;
             orn_delta = orn_delta_glom;
         }
-        
+
         // PN activity above baseline (rectified)
         Column pn_act = (pn_t.col(t - 1) - *spont_ref).cwiseMax(0.0);
-        // 
-        
+        //
+
         // Drive from PNs to the inhibitory APL neuron
         double pn_apl_drive = (rv.pn.wPNAPL * pn_act).value();
-        
+
         // Update inhibition dynamics
         double dIsdt = -Is(t - 1) + pn_apl_drive;
         double dinhdt = -inh(t - 1) + Is(t - 1);
         Is(t) = Is(t - 1) + dIsdt * p.time.dt / p.pn.apl_taum;
         inh(t) = inh(t - 1) + dinhdt * p.time.dt / p.pn.tau_apl2pn;
-        
+
         // Calculate change in PN firing rate (dPN/dt)
         const double inh_scalar = inh(t - 1);
         //Column dPNdt;
@@ -1490,11 +1490,11 @@ void sim_PN_layer(
         if (p.pn.pn_apl_tune) {
             dPNdt = -pn_t.col(t - 1) + *spont_ref + rv.pn.wAPLPN * inh_scalar;
         } else {
-            dPNdt = -pn_t.col(t - 1) + *spont_ref; // APL effect removed 
-        }        
+            dPNdt = -pn_t.col(t - 1) + *spont_ref; // APL effect removed
+        }
         dPNdt += 200.0 * ((orn_delta.array() + p.pn.offset) * p.pn.tanhsc / 200.0 * inh_PN)
                            .matrix().unaryExpr<double(*)(double)>(&tanh);
-        
+
         inh_PN = p.pn.inhsc / (p.pn.inhadd + 0.25 * inhA(t) + 0.75 * inhB(t));
         pn_t.col(t) = pn_t.col(t - 1) + dPNdt * p.time.dt / p.pn.taum;
         pn_t.col(t) = (pn_t.col(t).array() < 0.0).select(0.0, pn_t.col(t));
@@ -1575,7 +1575,7 @@ void sim_KC_layer(
             // --- State Variables ---
             Eigen::VectorXd Is_prev_per_comp   = Eigen::VectorXd::Zero(num_comp);
             Eigen::VectorXd Is_curr_per_comp   = Is_prev_per_comp;
-            
+
             // APL has its own membrane potential, which replaces 'inh' for feedback
             Eigen::VectorXd Vm_apl_prev_per_comp = Eigen::VectorXd::Zero(num_comp);
             Eigen::VectorXd Vm_apl_curr_per_comp = Vm_apl_prev_per_comp;
@@ -1638,7 +1638,7 @@ void sim_KC_layer(
                 }
                 // (2) APL Internal Dynamics (REVISED)
                 // (2a) The synaptic current 'Is' is updated as before.
-                Eigen::VectorXd dIs_comp_dt = -Is_prev_per_comp + comp_drive; 
+                Eigen::VectorXd dIs_comp_dt = -Is_prev_per_comp + comp_drive;
 
                 // (2b) Calculate APL voltage change using the simplified capacitive model.
                 Eigen::VectorXd dVm_apl_dt = Eigen::VectorXd::Zero(num_comp);
@@ -1654,7 +1654,7 @@ void sim_KC_layer(
                     const int R = (c + 1) % num_comp;
                     const double I_coupling = g_voltage_coup * (Vm_apl_prev_per_comp[L] + Vm_apl_prev_per_comp[R]
                                                             - 2.0 * Vm_apl_prev_per_comp[c]);
-                    
+
                     // Sum the currents
                     const double I_total = I_syn + I_coupling;
 
@@ -1699,7 +1699,7 @@ void sim_KC_layer(
                 Is_curr_per_comp   = Is_prev_per_comp   + (p.time.dt / p.kc.tau_apl2kc) * dIs_comp_dt;
                 inh_curr_per_comp  = inh_prev_per_comp  + (p.time.dt / p.kc.apl_taum)   * dInh_comp_dt;
                 Vm_apl_curr_per_comp = Vm_apl_prev_per_comp + p.time.dt * dVm_apl_dt;
-                
+
                 Is_curr  = Is_prev  + (p.time.dt / p.kc.tau_apl2kc) * dIsdt;
                 inh_curr = inh_prev + (p.time.dt / p.kc.apl_taum)   * dinhdt;
 
@@ -1726,13 +1726,9 @@ void sim_KC_layer(
             }
         } else {
             Column dKCdt;
-            double total_kc_apl_drive = 0.0; 
-            double total_claw_apl_drive = 0.0; 
-            // double total_claw_drive = 0.0;
-            // double total_pn_drive = 0.0;
-            // double total_kc_apl_inh = 0.0;
-            //const Eigen::Index n_claws = rv.kc.claw_to_kc.size();
-            for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) { 
+            double total_kc_apl_drive = 0.0;
+            double total_claw_apl_drive = 0.0;
+            for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
                 // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
                 Eigen::VectorXd kc_activity = (
                     nves.col(t-1).array() * spikes.col(t-1).array()
@@ -1787,7 +1783,7 @@ void sim_KC_layer(
                 total_kc_apl_drive += kc_apl_drive * 1e4;
                 total_claw_apl_drive += claw_apl_drive;
 
-                double dIsdt; 
+                double dIsdt;
                 if(!p.kc.pn_claw_to_APL){
                     dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
                 } else {
@@ -1802,32 +1798,16 @@ void sim_KC_layer(
                     pn_drive[kc] += claw_sims(claw, t);
                 }
 
-                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N); // size = nKCs  
-                for (Eigen::Index claw = 0; claw < n_claws; ++claw) {
+                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N);
+                for (Eigen::Index claw = 0; claw<n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
                     // The APL inhibition is weighted by the APL->KC weight
                     // and applied to the corresponding KC.
                     kc_apl_inh[kc] += rv.kc.wAPLKC(claw, 0) * inh(t - 1);
                 }
 
-                // dKCdt =
-                //     (-Vm.col(t-1)
-                //     + pn_drive
-                //     - kc_apl_inh).array() // Now this term has the correct size
-                //     - use_ffapl * ffapl_t(t-1);
-     
                 dKCdt = (-Vm.col(t-1) + pn_drive).array() - use_ffapl * ffapl_t(t-1);
 
-                // total_claw_drive += claw_drive.mean();
-                // total_pn_drive += pn_drive.mean();
-                // total_kc_apl_inh += kc_apl_inh.mean();
-                // --- Now use the correctly sized KC-level inhibition ---
-                // dKCdt =
-                //     (-Vm.col(t-1)
-                //     + pn_drive
-                //     - kc_apl_inh).array() // Now this term has the correct size
-                //     - use_ffapl * ffapl_t(t-1);
-     
                 Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
                 inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
                 Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
@@ -1845,9 +1825,6 @@ void sim_KC_layer(
                 // very abrupt repolarization!
                 Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
             }
-            // rv.log(cat("mean claw_apl_drive ", total_claw_apl_drive / p.time.steps_all()));
-            // rv.log(cat("mean kc_apl_drive ", total_kc_apl_drive / p.time.steps_all()));
-            // rv.log(cat("mean kc_apl_inh ", total_kc_apl_inh/ p.time.steps_all()));
         }
     } else {
         Column dKCdt;
