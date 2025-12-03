@@ -150,6 +150,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.preset_wAPLKC         = false;
     p.kc.preset_wKCAPL         = false;
     p.kc.zero_wAPLKC           = false;
+    // TODO rename to indicate this is controlling whether spiking is required to drive
+    // APL (and where APL input comes from)
     p.kc.pn_claw_to_APL        = false;
     p.kc.ignore_ffapl          = false;
     p.kc.fixed_thr             = 0;
@@ -749,8 +751,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     Column temp_wAPLKC;
     Row temp_wKCAPL;
     //unsigned num_claws = rv.kc.claw_to_kc.size();
-    if(!p.kc.preset_wAPLKC){
-        if(!p.kc.wPNKC_one_row_per_claw){
+    if (!p.kc.preset_wAPLKC) {
+        if (!p.kc.wPNKC_one_row_per_claw) {
             rv.log(cat("rv.kc.wAPLKC.rows():", rv.kc.wAPLKC.rows()));
             rv.log(cat("rv.kc.wKCAPL.cols():", rv.kc.wKCAPL.cols()));
         }else {
@@ -828,7 +830,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // pybind11)
     if (p.kc.tune_apl_weights) {
         // We prob want to set zero for either cases so that the threshold can be set properly
-        if (!p.kc.preset_wAPLKC){
+        if (!p.kc.preset_wAPLKC) {
             rv.kc.wAPLKC.setZero();
         }
         if (!p.kc.preset_wKCAPL) {
@@ -913,7 +915,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
      * Initially set to the below value because, given default model
      * parameters, it causes tuning to complete in just one iteration. */
     double sp = 0.0789;
-    if(p.kc.wPNKC_one_row_per_claw && p.kc.zero_wAPLKC){
+    if (p.kc.wPNKC_one_row_per_claw && p.kc.zero_wAPLKC) {
+        // TODO TODO why this if statement just to set to the same value? mistake
+        // (did he need it some other value in this case?)? delete?
         sp = 0.0789;
     }
 
@@ -973,10 +977,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                            thrtype, ")"));
                 rv.log(cat("wAPLKC right before thres: ", rv.kc.wAPLKC.mean()));
             }
-            if(p.kc.zero_wAPLKC){
+            if (p.kc.zero_wAPLKC) {
                 check(rv.kc.wAPLKC.isZero());
                 check(rv.kc.wKCAPL.isZero());
-                 //rv.log("wAPLKC and wKCAPL zeroed");
             }
 
             // TODO maybe i still want to sim_KC_layer in use_vector_thr case
@@ -1081,7 +1084,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Starting values for to-be-tuned APL<->KC weights. */
 
             // Reset the variable wAPLKC
-            if (p.kc.preset_wAPLKC && p.kc.zero_wAPLKC){
+            if (p.kc.preset_wAPLKC && p.kc.zero_wAPLKC) {
                 rv.kc.wAPLKC = temp_wAPLKC;
                 rv.kc.wKCAPL = temp_wKCAPL;
                 rv.log(cat("after thres initialization wAPLKC: ", rv.kc.wAPLKC.mean()));
@@ -1391,15 +1394,10 @@ void sim_PN_layer(
     Matrix inh = Matrix::Zero(1, p.time.steps_all());
     Matrix Is = Matrix::Zero(1, p.time.steps_all());
 
-    //const int num_pns = p.pn.preset_Btn ? rv.pn.Btn_to_pn.size() : ng;
-
     if (!p.pn.preset_wAPLPN || !p.pn.preset_wPNAPL) {
         rv.pn.wAPLPN.setZero();
         rv.pn.wPNAPL.setZero();
     }
-    // Ensure dimensions match if they are preset
-    assert(rv.pn.wAPLPN.rows() == num_pns);
-    assert(rv.pn.wPNAPL.cols() == num_pns);
 
     Column spont_btn;       // Spontaneous activity per bouton
     Column orn_delta_btn;   // ORN delta activity per bouton
@@ -1450,7 +1448,7 @@ void sim_PN_layer(
         const Column* spont_ref; // Pointer to use either spont or spont_btn
         Column orn_delta;        // Will hold either per-glom or per-bouton delta
 
-        Column orn_delta_glom = orn_t.col(t - 1) - p.orn.data.spont; // ng x 1
+        Column orn_delta_glom = orn_t.col(t-1) - p.orn.data.spont; // ng x 1
 
         if (p.pn.preset_Btn) {
             spont_ref = &spont_btn;
@@ -1470,36 +1468,43 @@ void sim_PN_layer(
             orn_delta = orn_delta_glom;
         }
 
-        // PN activity above baseline (rectified)
-        Column pn_act = (pn_t.col(t - 1) - *spont_ref).cwiseMax(0.0);
-        //
-
-        // Drive from PNs to the inhibitory APL neuron
-        double pn_apl_drive = (rv.pn.wPNAPL * pn_act).value();
-
-        // Update inhibition dynamics
-        double dIsdt = -Is(t - 1) + pn_apl_drive;
-        double dinhdt = -inh(t - 1) + Is(t - 1);
-        Is(t) = Is(t - 1) + dIsdt * p.time.dt / p.pn.apl_taum;
-        inh(t) = inh(t - 1) + dinhdt * p.time.dt / p.pn.tau_apl2pn;
-
-        // Calculate change in PN firing rate (dPN/dt)
-        const double inh_scalar = inh(t - 1);
-        //Column dPNdt;
-
+        // TODO is pn_apl_tune best name for this?
+        // TODO TODO ever make sense to have this controlled separately from
+        // pn_claw_to_APL=true? use that flag (after renaming?) to control this as well?
         if (p.pn.pn_apl_tune) {
-            dPNdt = -pn_t.col(t - 1) + *spont_ref + rv.pn.wAPLPN * inh_scalar;
+            // PN activity above baseline (rectified)
+            // TODO use cwiseMax(0.0) in place of select calls that are used elsewhere
+            // for same purpose?
+            Column pn_act = (pn_t.col(t-1) - *spont_ref).cwiseMax(0.0);
+
+            // Drive from PNs to the inhibitory APL neuron
+            double pn_apl_drive = (rv.pn.wPNAPL * pn_act).value();
+
+            // TODO TODO does this part make sense here? at least refactor to share w/
+            // APL activity code in sim_KC_layer?
+
+            // Update inhibition dynamics
+            double dIsdt = -Is(t-1) + pn_apl_drive;
+            double dinhdt = -inh(t-1) + Is(t-1);
+            Is(t) = Is(t-1) + dIsdt * p.time.dt / p.pn.apl_taum;
+            inh(t) = inh(t-1) + dinhdt * p.time.dt / p.pn.tau_apl2pn;
+
+            const double inh_scalar = inh(t-1);
+
+            dPNdt = -pn_t.col(t-1) + *spont_ref + rv.pn.wAPLPN * inh_scalar;
         } else {
-            dPNdt = -pn_t.col(t - 1) + *spont_ref; // APL effect removed
+            dPNdt = -pn_t.col(t-1) + *spont_ref; // APL effect removed
         }
+        // TODO what is unaryExpr... for?
         dPNdt += 200.0 * ((orn_delta.array() + p.pn.offset) * p.pn.tanhsc / 200.0 * inh_PN)
                            .matrix().unaryExpr<double(*)(double)>(&tanh);
 
         inh_PN = p.pn.inhsc / (p.pn.inhadd + 0.25 * inhA(t) + 0.75 * inhB(t));
-        pn_t.col(t) = pn_t.col(t - 1) + dPNdt * p.time.dt / p.pn.taum;
+        pn_t.col(t) = pn_t.col(t-1) + dPNdt * p.time.dt / p.pn.taum;
         pn_t.col(t) = (pn_t.col(t).array() < 0.0).select(0.0, pn_t.col(t));
     }
 }
+
 void sim_FFAPL_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t,
@@ -1616,7 +1621,7 @@ void sim_KC_layer(
 
                 comp_drive.setZero();
 
-                if(!p.kc.pn_claw_to_APL){
+                if (!p.kc.pn_claw_to_APL) {
                     for (int comp = 0; comp < num_comp; ++comp) {
                         double s = 0.0;
                         for (int claw : claws_by_compartment[(size_t)comp]) {
@@ -1726,8 +1731,6 @@ void sim_KC_layer(
             }
         } else {
             Column dKCdt;
-            double total_kc_apl_drive = 0.0;
-            double total_claw_apl_drive = 0.0;
             for (unsigned t = p.time.start_step()+1; t < p.time.steps_all(); t++) {
                 // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
                 Eigen::VectorXd kc_activity = (
@@ -1736,9 +1739,7 @@ void sim_KC_layer(
 
                 // Sum the weighted activity of all KCs to get a single APL input value.
                 // This resolves the dimension mismatch.
-                Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);       // size = nClaws
-                double claw_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_drive);
-                claw_apl_drive = claw_apl_drive * 0.2;
+                Eigen::VectorXd claw_drive = rv.kc.wPNKC * pn_t.col(t);
 
                 double kc_apl_drive = 0.0;
                 for (Eigen::Index claw=0; claw<n_claws; ++claw) {
@@ -1761,7 +1762,7 @@ void sim_KC_layer(
                     claw_drive - rv.kc.wAPLKC * inh(t-1)
                 );
 
-                // TODO TODO TODO also set claw_sims in `apl_coup_const != -1` case
+                // TODO TODO also set claw_sims in `apl_coup_const != -1` case
                 // above (+ change math in same manner changed below), and also use
                 // allow_net_inh_per_claw (alongside slight change to calculation, to
                 // operate within each claw first) in that case
@@ -1780,13 +1781,26 @@ void sim_KC_layer(
                     check(claw_sims.col(t).minCoeff() >= 0);
                 }
 
-                total_kc_apl_drive += kc_apl_drive * 1e4;
-                total_claw_apl_drive += claw_apl_drive;
+                // TODO why col(0)? remove if not needed (replace w/ `check` on shape?)
+                double claw_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
+
+                // TODO delete (after verifying it passes -> removing .col(0) above)
+                // TODO TODO modify so we assert RHS has only one element, and then get
+                // that element and check equal to LHS. currently not compiling b/c RHS
+                // could be non-scalar eigen type (and may indeed have >1 element...)
+                //check(claw_apl_drive == rv.kc.wKCAPL.dot(claw_sims.col(t)));
+
+                // TODO TODO what is this 0.2 doing here? add as a parameter?
+                // TODO TODO TODO this change behavior of my
+                // allow_net_inh_per_claw=False path? add test that would catch it!
+                claw_apl_drive = claw_apl_drive * 0.2;
 
                 double dIsdt;
-                if(!p.kc.pn_claw_to_APL){
+                if (!p.kc.pn_claw_to_APL) {
                     dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
                 } else {
+                    // TODO TODO need to also add this branch for apl_coup_const !=
+                    // -1 case above? tianpei ever implement for that case?
                     dIsdt = -Is(t-1) + claw_apl_drive;
                 }
 
@@ -1796,14 +1810,6 @@ void sim_KC_layer(
                 for (Eigen::Index claw=0; claw<n_claws; ++claw) {
                     unsigned kc = rv.kc.claw_to_kc[claw];
                     pn_drive[kc] += claw_sims(claw, t);
-                }
-
-                Eigen::VectorXd kc_apl_inh = Eigen::VectorXd::Zero(p.kc.N);
-                for (Eigen::Index claw = 0; claw<n_claws; ++claw) {
-                    unsigned kc = rv.kc.claw_to_kc[claw];
-                    // The APL inhibition is weighted by the APL->KC weight
-                    // and applied to the corresponding KC.
-                    kc_apl_inh[kc] += rv.kc.wAPLKC(claw, 0) * inh(t - 1);
                 }
 
                 dKCdt = (-Vm.col(t-1) + pn_drive).array() - use_ffapl * ffapl_t(t-1);
@@ -1872,8 +1878,6 @@ void sim_KC_layer(
             // very abrupt repolarization!
             Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
         }
-        // rv.log(cat("kc_apl_drive mean: ", kc_apl_drive_ts.mean()));
-        // rv.log(cat("After sim_KC_layer: ", "wAPLKC mean: ", rv.kc.wAPLKC.mean(), ", ", "Vm mean: ", Vm.mean(), ", ", "Spikes mean: ", spikes.mean()));
     }
     // TODO TODO assert nves is all 1, if ves_p == 0 (which it should be)?
 
