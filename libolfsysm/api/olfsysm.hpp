@@ -198,6 +198,15 @@ struct ModelParams {
         determination*/
         bool zero_wAPLKC;
 
+        /* If false, APL activity will depend on KC spiking, and then a KC spiking will
+         * cause all of its claws to provide input to the APL (just multiplied by
+         * wKCAPL).
+         *
+         * If true, APL activity will NOT depend on KC spiking, and APL will get input
+         * (which can be subthreshold) directly from each claw (though any APL
+         * inhibition [-> rectification] to each claw will be applied first).
+         *
+         * Only relevant if wPNKC_one_row_per_claw=true. */
         bool pn_claw_to_APL;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
@@ -207,6 +216,19 @@ struct ModelParams {
         /* Optionally set a fixed KC firing threshold, instead of using the
          * normally generated thresholds. */
         double fixed_thr;
+
+        /* If this is -1 fixed_thr (+ related) are for per-KC spike thresholds, but if
+         * this is positive, then that all threshold parameters define per-claw
+         * thresholds instead, and this many claws will need to exceed threshold to
+         * cause their KC to spike. Only relevant if wPNKC_one_row_per_claw=true.
+         * Not yet implemented for `apl_coup_const != -1` case.
+         *
+         * NOTE: automated threshold picking not currently implemented when this is >0.
+         * Had manually hardcoded particular threshold until response rate was within
+         * tolerance, when testing this code so far.
+         * */
+        int n_claws_active_to_spike;
+
         // TODO doc this
         bool add_fixed_thr_to_spont;
         bool use_fixed_thr;
@@ -421,7 +443,8 @@ struct RunVars {
         /* Spontaneous input each KC receives. Threshold typically added to this. */
         Column spont_in;
 
-        /* Firing thresholds. */
+        /* Firing thresholds. Of length # KCs, unless `n_claws_active_to_spike > 0`, in
+         * which case it will be length # claws. */
         Column thr;
 
         /* Binary (KC, odor) response information. */
@@ -442,9 +465,17 @@ struct RunVars {
         /* Timeseries of APL potential for each odor. */
         std::vector<Row> inh_sims;
 
+        // TODO clarify in doc that it is always just a single number (sum? mean?)
+        // across all KCs (it is, right?)
         /* Timeseries of KC->APL synapse current for each odor. */
         std::vector<Row> Is_sims;
 
+        /* Contribution each claw makes to its KC's membrane potential.
+         *
+         * Each KC's Vm is defined by simply adding these across all its claws, so could
+         * interpret these as in units of volts.
+         *
+         * Only relevant if wPNKC_one_row_per_claw=true. */
         std::vector<Matrix> claw_sims;
 
         /* The number of iterations done during APL tuning. */
@@ -454,26 +485,25 @@ struct RunVars {
         KC(ModelParams const&);
 
         /*Vector of the KC associated with each claw*/
+        // TODO TODO doc better
+        // TODO change type to Matrix (/ Column/Row, whichever appropriate. matter?)?
         Eigen::VectorXi claw_to_kc;
 
         /*map of claws to their kc*/
+        // TODO TODO doc better
         std::vector<std::vector<int>> kc_to_claws;
 
         /*Vector of the compartment associated with each claw*/
+        // TODO doc better
+        // TODO change type to Matrix (/ Column/Row, whichever appropriate. matter?)?
         Eigen::VectorXi claw_compartments;
 
         /*map of claws to their compartment */
+        // TODO doc better
         std::vector<std::vector<int>> compartment_to_claws;
 
-        int nclaws_total;
-
-        /* Bouton related stuff*/
-        /* ngloms x nboutons*/
-        Matrix wPNB;
-
-        /* nboutons x nclaws*/ // wBKC x wPNB = wPNKC
-        Matrix wBKC;
-
+        // TODO doc better (+ use this more consistently)
+        unsigned nclaws_total;
     } kc;
 
     /* Logger for this run. */

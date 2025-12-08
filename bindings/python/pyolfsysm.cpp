@@ -106,6 +106,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("pn_claw_to_APL", &ModelParams::KC::pn_claw_to_APL)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
+        .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)
         .def_readwrite("add_fixed_thr_to_spont", &ModelParams::KC::add_fixed_thr_to_spont)
         .def_readwrite("use_fixed_thr", &ModelParams::KC::use_fixed_thr)
         .def_readwrite("use_vector_thr", &ModelParams::KC::use_vector_thr)
