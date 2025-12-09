@@ -2094,16 +2094,22 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     }
 
     if (regen) {
-        // TODO use this in other places i'm currently defining # claws some other way?
-        // TODO move this def outside of the `if (regen) { ... }` conditional?
-        rv.kc.nclaws_total = rv.kc.claw_to_kc.size();
-        // TODO accurate? delete
-        rv.log(cat("rv.kc.nclaws_total: ", rv.kc.nclaws_total));
+        if (p.kc.wPNKC_one_row_per_claw) {
+            // TODO use this in other places i'm currently defining # claws some other
+            // way?
+            // TODO move this def outside of the `if (regen) { ... }` conditional?
+            rv.kc.nclaws_total = rv.kc.claw_to_kc.size();
+            // TODO accurate? delete
+            rv.log(cat("rv.kc.nclaws_total: ", rv.kc.nclaws_total));
 
-        // would almost certainly be a mistake. unlikely to ever want to test
-        // 1-claw-per-KC (or some other case where some KCs have no claws, and total
-        // sums up to same as # of KCs)
-        check(rv.kc.nclaws_total > p.kc.N);
+            // would almost certainly be a mistake. unlikely to ever want to test
+            // 1-claw-per-KC (or some other case where some KCs have no claws, and total
+            // sums up to same as # of KCs)
+            check(rv.kc.nclaws_total > p.kc.N);
+        } else {
+            // TODO move this to default (-> delete this else)?
+            rv.kc.nclaws_total = 0;
+        }
 
         rv.log("generating new KC replicate");
         build_wPNKC(p, rv);
