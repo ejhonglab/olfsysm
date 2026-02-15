@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 import os
+from pathlib import Path
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import sys
-import os
 import setuptools
 
 __version__ = '0.0.1'
@@ -33,10 +33,12 @@ class get_pybind_include(object):
 # (how? possible?) maybe build system is set up wrong somehow? seemed even some code
 # changes required deleting prior build artifacts, and that shouldn't be the case,
 # right?
+# TODO TODO try to have this set something in the code, so we can log how the code was
+# compiled
 #
-# NOTE: seems I need to `rm -rf build/ tmp/ *.so`, prior to `pip install` command (from
-# olfsysm root. same place I'm running `pip install` from) like tianpei had, to get this
-# change to be reflected in build outputs.
+# NOTE: seems (not always) I need to `rm -rf build/ tmp/ *.so`, prior to `pip install`
+# command (from olfsysm root. same place I'm running `pip install` from) like tianpei
+# had, to get this change to be reflected in build outputs.
 #
 # install via `FORCE_SINGLE_THREAD=1 pip install -v .` to disable multithreading
 # (to help with debugging)
@@ -51,11 +53,38 @@ else:
     extra_compile_args = ['-fpic']
     extra_link_args = []
 
+
+# TODO how to only add this if we have it available?
+use_cnpy = False
+cnpy_lib_dir = '/usr/local/lib'
+cnpy_shared_lib_file = Path(cnpy_lib_dir) / 'libcnpy.so'
+if cnpy_shared_lib_file.exists():
+    use_cnpy = True
+
+# TODO can i (easily?) integrate the cmake + make (+ make install? needed?) steps of
+# it's compilation, as long as we have the submodule?
+if use_cnpy:
+    # `sudo make install` (in cnpy build dir, after other steps in README) installs
+    # libcnpy.so (and .a) in /usr/local/lib
+    #
+    # "-Ldir adds directory to list to be searched for -l" (but still needed args
+    # mentioned below)
+    #
+    # needed the `-Wl,-rpath=...` component added (on top of most args recommended by
+    # cnpy README), recommended from: https://stackoverflow.com/questions/72052512
+    # until then `ldd <venv>/lib/python<x>.<y>/site-packages/olfsysm.cpython*.so` had
+    # "libcnpy.so => not found" in output, and I'd get ImportError complaining about
+    # missing *.so file on import of olfsysm.
+    extra_link_args.extend([f'-Wl,-rpath={cnpy_lib_dir}', f'-L{cnpy_lib_dir}', '-lcnpy',
+        '-lz'
+    ])
+
+
 ext_modules = [
     Extension(
         'olfsysm',
         ['libolfsysm/src/olfsysm.cpp', 'bindings/python/pyolfsysm.cpp'],
-        include_dirs = [
+        include_dirs=[
             'libolfsysm/api',
             'libolfsysm/include',
             get_pybind_include(),
@@ -102,6 +131,8 @@ class BuildExt(build_ext):
         if ct == 'unix':
             opts.append('-DVERSION_INFO="%s"' % self.distribution.get_version())
 
+            # TODO cnpy README wants: --std=c++11 (presumably, -std=c++11 here?) in
+            # args. backward compatible?)
             opts.append('-std=c++17')
             if has_flag(self.compiler, '-fvisibility=hidden'):
                 opts.append('-fvisibility=hidden')

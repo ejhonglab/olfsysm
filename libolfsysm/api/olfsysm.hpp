@@ -34,6 +34,8 @@ public:
 /* Use to show intent. */
 using Matrix = Eigen::MatrixXd;
 using Row    = Matrix;
+// TODO change to vectors? why both matrices? i assume neither is enforced to actually
+// have shape 1 in right place anywhere? how could i enforce that?
 using Column = Matrix;
 using Vector = Matrix;
 
@@ -142,13 +144,22 @@ struct ModelParams {
         double apl_taum;
         double tau_apl2pn;
 
-        /* bouton related*/
-        int Btn_num_per_glom;
+        /* bouton related below */
+
+        /* The total # of boutons. Should be >0 for preset_Btn=true, and should
+         * otherwise be 0. */
+        // TODO rename, either this or nclaws_total (that even used?), to be consistent?
+        unsigned n_total_boutons;
+
+        // TODO doc
+        // TODO is this one in the right place? move above btn section? delete?
         bool pn_apl_tune;
+
+        // TODO TODO TODO add parameter to control strength of APL<>PN stuff relative to
+        // strength of KC<>APL stuff
         bool preset_Btn;
         bool preset_wAPLPN;
         bool preset_wPNAPL;
-
     } pn;
 
     /* KC params. */
@@ -267,7 +278,8 @@ struct ModelParams {
         /* Changes the scaling of the ~1/(n^2) tuning step-size curve. */
         double sp_lr_coeff;
 
-        double sp_lr_coeff_cl;
+        // See comment in .cpp file.
+        bool hardcode_initial_sp;
 
         /* The maximum number of tuning iterations that should be done before
          * aborting. Must be >=1. */
@@ -305,7 +317,12 @@ struct ModelParams {
         bool save_Is_sims;
         bool save_claw_sims;
 
+        // TODO delete kc_ids, and replace w/ setting N appropriately (or new N-like var
+        // just for total_n_claws)
+        // (only ever used for .size(), and doesn't even have IDs set in same form as in
+        // other KC<>CLAW ID maps)
         std::vector<long long> kc_ids;
+
         bool wPNKC_one_row_per_claw;
         bool allow_net_inh_per_claw;
     } kc;
@@ -316,13 +333,19 @@ struct ModelParams {
         double taum;
 
         /* PN->APL synaptic strength. */
+        // TODO (delete. FFAPL stuff is all in a step prior to KC simulation. probably
+        // don't want that, and would rather have PN<>APL interactions integrated as
+        // part of same step as KC<>APL simulations) if going to start by trying to
+        // adapt FFAPL for use w/ new connectome wPNAPL weights, change this to vector?
+        // prob won't be able to use FFAPL to do all of what i want, since it was only
+        // ever simulated in a separate step before run_KC_sims, it seems
         double w;
 
         /* The input into the APL is calculated as
          *   w * (summed output of PNs) * (coef)
          * where coef is some function of the firing rate distribution of PNs:
          * - "gini"
-         * - "lts" (lifetime sparseness) */
+         * - "lts" (lifetime sparseness) (<- current default) */
         std::string coef;
 
         /* Whether to set the spontaneous FFAPL output to zero. */
@@ -338,6 +361,7 @@ struct ModelParams {
             /* Coefficient on G. */
             double a;
 
+            // TODO is there a G variable actually defined somewhere? what is G?
             /* How to compute G. Options:
              * - "=": use PN firing rates directly
              * - "-spont": subtract spontaneous PN firing rates first
@@ -396,9 +420,19 @@ struct RunVars {
 
         std::vector<Matrix> sims;
 
-        std::vector<int> Btn_to_pn;
+        std::vector<Matrix> bouton_sims;
 
-        std::vector<std::vector<int>> pn_to_Btns;
+        // TODO TODO so do i not need a pn_ids (/ bouton_ids), like the kc_ids he uses
+        // for that other case?
+        // TODO convert type of either this (or claw_to_kc, which is currently
+        // Eigen::VectorXi), to be consistent
+        // TODO TODO check what happens if we try to set w/ signed values from python.
+        // ideally would want setting w/ signed values to fail in python (tho python
+        // should be validating all these anyway) (previously all these were
+        // vector<int>, but want unsigned)
+        std::vector<unsigned> Btn_to_pn;
+
+        std::vector<std::vector<unsigned>> pn_to_Btns;
         /* Initialize matrices with the correct sizes and quantities. */
         PN(ModelParams const&);
     } pn;
@@ -422,8 +456,6 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
-
-
         /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
          * scalars are tuned rather than wAPLKC/wKCAPL themselves.
          *
@@ -436,12 +468,15 @@ struct RunVars {
         double wAPLKC_scale;
         double wKCAPL_scale;
 
-        /* Peak membrane potentials achieved on the training set before
-         * applying firing thresholds. */
-        Matrix pks;
+        Column wAPLKC_unscaled;
+        Row wKCAPL_unscaled;
 
         /* Spontaneous input each KC receives. Threshold typically added to this. */
         Column spont_in;
+
+        /* Peak membrane potentials achieved on the training set before
+         * applying firing thresholds. */
+        Matrix pks;
 
         /* Firing thresholds. Of length # KCs, unless `n_claws_active_to_spike > 0`, in
          * which case it will be length # claws. */
@@ -487,11 +522,15 @@ struct RunVars {
         /*Vector of the KC associated with each claw*/
         // TODO TODO doc better
         // TODO change type to Matrix (/ Column/Row, whichever appropriate. matter?)?
+        // TODO TODO make consistent type w/ same things for PN<>BOUTON
+        // and is both this and kc_to_claws used? delete any unused
+        // TODO also specify unsigned type? some other code currently assumes that, i
+        // assume w/o issue?
         Eigen::VectorXi claw_to_kc;
 
         /*map of claws to their kc*/
         // TODO TODO doc better
-        std::vector<std::vector<int>> kc_to_claws;
+        std::vector<std::vector<unsigned>> kc_to_claws;
 
         /*Vector of the compartment associated with each claw*/
         // TODO doc better
@@ -500,7 +539,7 @@ struct RunVars {
 
         /*map of claws to their compartment */
         // TODO doc better
-        std::vector<std::vector<int>> compartment_to_claws;
+        std::vector<std::vector<unsigned>> compartment_to_claws;
 
         // TODO doc better (+ use this more consistently)
         unsigned nclaws_total;
@@ -553,7 +592,8 @@ void sim_FFAPL_layer(
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims);
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims,
+        Matrix& bouton_sims);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);

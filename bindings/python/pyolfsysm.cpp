@@ -67,7 +67,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("noise", &ModelParams::PN::noise)
         .def_readwrite("apl_taum", &ModelParams::PN::apl_taum)
         .def_readwrite("tau_apl2pn", &ModelParams::PN::tau_apl2pn)
-        .def_readwrite("Btn_num_per_glom", &ModelParams::PN::Btn_num_per_glom)
+        .def_readwrite("n_total_boutons", &ModelParams::PN::n_total_boutons)
         .def_readwrite("pn_apl_tune", &ModelParams::PN::pn_apl_tune)
         .def_readwrite("preset_Btn", &ModelParams::PN::preset_Btn)
         .def_readwrite("preset_wAPLPN", &ModelParams::PN::preset_wAPLPN)
@@ -116,7 +116,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("sp_factor_pre_APL", &ModelParams::KC::sp_factor_pre_APL)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
-        .def_readwrite("sp_lr_coeff_cl", &ModelParams::KC::sp_lr_coeff_cl)
+        .def_readwrite("hardcode_initial_sp", &ModelParams::KC::hardcode_initial_sp)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)
         .def_readwrite("apltune_subsample", &ModelParams::KC::apltune_subsample)
@@ -126,6 +126,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc)
         .def_readwrite("tau_r", &ModelParams::KC::tau_r)
         .def_readwrite("ves_p", &ModelParams::KC::ves_p)
+        // TODO add one for save_bouton_sims?
         .def_readwrite("save_vm_sims", &ModelParams::KC::save_vm_sims)
         .def_readwrite("save_spike_recordings", &ModelParams::KC::save_spike_recordings)
         .def_readwrite("save_nves_sims", &ModelParams::KC::save_nves_sims)
@@ -176,7 +177,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("Btn_to_pn", &RunVars::PN::Btn_to_pn)
         .def_readwrite("wAPLPN", &RunVars::PN::wAPLPN)
         .def_readwrite("wPNAPL", &RunVars::PN::wPNAPL)
-        .def_readwrite("pn_sims", &RunVars::PN::sims);
+        .def_readwrite("pn_sims", &RunVars::PN::sims)
+        .def_readwrite("bouton_sims", &RunVars::PN::bouton_sims);
 
     py::class_<RunVars::FFAPL>(m, "RVFFAPL")
         .def_readwrite("vm_sims", &RunVars::FFAPL::vm_sims)

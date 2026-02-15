@@ -1,0 +1,3 @@
+[submodule "libolfsysm/include/cnpy"]
+	path = libolfsysm/include/cnpy
+	url = https://github.com/rogersce/cnpy

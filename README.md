@@ -64,3 +64,25 @@ osm.run_KC_sims(mp, rv, True)
 
 kc_resp = rv.kc.responses
 ```
+
+
+
+### Support for writing directly to numpy `.npy` files (optional)
+
+1. Make sure the `cnpy` submodule (under the `libolfsysm/include` directory) is present.
+   If you still have not cloned `olfsysm`, or are setting it up from scratch, you can:
+   ```
+   git clone --recurse-submodules https://github.com/ejhonglab/olfsysm
+   ```
+   If you have already cloned `olfsysm`, you can try:
+   ```
+   git submodule update --init --recursive
+   ```
+
+2. Follow `cnpy` [README instructions](https://github.com/rogersce/cnpy) to compile and
+   install that library. You will need `sudo make install` for the `make install`
+   command.
+
+3. Rebuild `olfsysm` (e.g. `pip install -v .`, from root directory, to install Python
+   bindings).
+
