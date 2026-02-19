@@ -1,4 +1,4 @@
-  #ifndef OLFSYSM_H_
+#ifndef OLFSYSM_H_
 #define OLFSYSM_H_
 
 #include <vector>
@@ -13,6 +13,9 @@ class Logger {
 private:
     mutable std::ofstream fout;   // must be mutable for writing in const context
     mutable std::mutex mtx;       // must be mutable to allow locking in const context
+    // TODO need this mutable? assume not. should just be set at top.
+    // redirect call also just called at top and it uses mutex though... idk
+    bool _tee;
 public:
     Logger();
     /* Throw an error. */
@@ -26,6 +29,9 @@ public:
 
     /* Begin appending output to the given file. */
     void redirect(std::string const& path);
+
+    /* Also write to stdout, in addition to file from previous redirect call. */
+    void tee();
 
     /* Shut off output. */
     void disable();
@@ -141,25 +147,30 @@ struct ModelParams {
             double sd;
         } noise;
 
-        double apl_taum;
-        double tau_apl2pn;
 
         /* bouton related below */
 
-        /* The total # of boutons. Should be >0 for preset_Btn=true, and should
+        /* The total # of boutons. Should be >0 (and > #-glomeruli, but < #-claws) if
+         * using PN<>APL weights (which should be of length #-boutons), and should
          * otherwise be 0. */
         // TODO rename, either this or nclaws_total (that even used?), to be consistent?
         unsigned n_total_boutons;
 
-        // TODO doc
-        // TODO is this one in the right place? move above btn section? delete?
-        bool pn_apl_tune;
-
         // TODO TODO TODO add parameter to control strength of APL<>PN stuff relative to
-        // strength of KC<>APL stuff
-        bool preset_Btn;
+        // strength of KC<>APL stuff (or just handle via scale factor between these
+        // weights in python? at least make sure python tries a sweep that includes
+        // varying PN>APL separately from APL>PN?)
         bool preset_wAPLPN;
         bool preset_wPNAPL;
+
+        // TODO delete? (currently unused, but may want to try disabling PN<>APL stuff
+        // in tuning?)
+        //bool pn_apl_tune;
+
+        // TODO delete (/use)
+        //double apl_taum;
+        //double tau_apl2pn;
+        //
     } pn;
 
     /* KC params. */
@@ -204,10 +215,6 @@ struct ModelParams {
         bool preset_wAPLKC;
         /* Set to true if using a pre-loaded KC->APL weight vector. */
         bool preset_wKCAPL;
-
-        /* in the case that we use preset_wAPLKC, whether we 0 the weights for threshold
-        determination*/
-        bool zero_wAPLKC;
 
         /* If false, APL activity will depend on KC spiking, and then a KC spiking will
          * cause all of its claws to provide input to the APL (just multiplied by
@@ -418,6 +425,12 @@ struct RunVars {
         /* bouton to APL weights*/
         Row wPNAPL;
 
+        double wAPLPN_scale;
+        double wPNAPL_scale;
+
+        Column wAPLPN_unscaled;
+        Row wPNAPL_unscaled;
+
         std::vector<Matrix> sims;
 
         std::vector<Matrix> bouton_sims;
@@ -543,6 +556,19 @@ struct RunVars {
 
         // TODO doc better (+ use this more consistently)
         unsigned nclaws_total;
+
+        // TODO delete?
+        // for debugging weight scaling
+        // TODO TODO also add one for claw>apl (no spiking required)? or just use kc
+        // ones for that too? (latter, probably)
+        std::vector<Eigen::VectorXd> odor_stats;
+        // TODO delete. couldn't get to work (read only compile error when trying to set
+        // based on index in sim_KC_layer, adding odor_index param [passing loop vars to
+        // each call])
+        //std::vector<double> max_kc_apl_drive;
+        //std::vector<double> avg_kc_apl_drive;
+        //std::vector<double> max_bouton_apl_drive;
+        //std::vector<double> avg_bouton_apl_drive;
     } kc;
 
     /* Logger for this run. */
@@ -593,7 +619,11 @@ void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
         Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims,
-        Matrix& bouton_sims);
+        // TODO TODO replace odor_index w/ passing in reference to a vector to put all
+        // odor stats into? (seems we can't set std::vector elements by index b/c read
+        // only compile error. not sure 100% why...)
+        //Matrix& bouton_sims, unsigned odor_index);
+        Matrix& bouton_sims, Eigen::VectorXd& odor_stats);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);

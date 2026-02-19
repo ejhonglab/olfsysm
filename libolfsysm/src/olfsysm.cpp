@@ -17,6 +17,12 @@
 #include <cmath>
 #include <stdexcept>
 
+// TODO delete
+// for seq (slicing for debug prints)
+// (nvm, would need to update Eigen for that...
+// https://stackoverflow.com/questions/57083605 not sure what to do for now)
+//#include "Eigen/Core"
+
 /* So code can be compiled single threaded, to support debugging.
  * Only other OMP references should be in the preprocessor directives, which I think can
  * just be ignored (though that will generate compilation warning, which is good).
@@ -26,6 +32,9 @@
 #else
    #define omp_get_thread_num() 0
 #endif
+
+// TODO delete
+//#include "teebuf.h"
 
 /* Include cnpy.h only if we we have that .h file available (and referenced properly in
  * compilation). Optional library added as a git submodule, for writing dynamics
@@ -44,6 +53,11 @@ void Logger::operator()(std::string const& msg) const {
     std::lock_guard<std::mutex> lock(mtx);
     if (!fout) return;
     fout << msg << std::endl;
+    if (_tee) {
+        // TODO is std::cout "mutable" like fout is in header? need one reference to it
+        // in class?
+        std::cout << msg << std::endl;
+    }
 }
 void Logger::operator()() const {
     this->operator()("");
@@ -53,8 +67,22 @@ void Logger::redirect(std::string const& path) {
     fout.close();
     fout.open(path, std::ofstream::out | std::ofstream::app);
 }
+void Logger::tee() {
+    std::lock_guard<std::mutex> lock(mtx);
+    if (!fout) return;
+
+    _tee = true;
+
+    // TODO delete all this (+ teebuf.h). don't need something this complicated.
+    // TODO need to define a teebuf member for Logger in header?
+    // see include/teebuf.h
+    //teebuf tb(fout.rdbuf(), std::cout.rdbuf());
+    //fout.rdbuf(&tb);
+}
 void Logger::disable() {
     std::lock_guard<std::mutex> lock(mtx);
+    // TODO also need to handle any teed stuff in here (or doesn't matter b/c would just
+    // be stdout anyway?)
     fout.close();
 }
 
@@ -124,6 +152,9 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.time.dt         = 0.5e-3;
 
     p.orn.taum             = 0.01;
+    // TODO why is this only used in LN layer?
+    // TODO TODO replace w/ actual size of orn_deltas on one dim (esp now that i'm using
+    // connectome weights typically)? (should just be 51 vs 54?)
     p.orn.n_physical_gloms = 51;
 
     p.ln.taum   = 0.01;
@@ -140,19 +171,23 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.inhadd     = 31.4088;
     p.pn.noise.mean = 0.0;
     p.pn.noise.sd   = 0.0;
-    p.pn.apl_taum   = 0.05;
-    p.pn.tau_apl2pn = 0.01;
 
     // If this remains 0, will default to get_ngloms below.
     p.pn.n_total_boutons = 0;
 
     /* bouton related model param initialization*/
-    // TODO delete this one? or repurpose in correct spot?
-    p.pn.pn_apl_tune     = false;
-    //
-    p.pn.preset_Btn      = false;
     p.pn.preset_wAPLPN   = false;
     p.pn.preset_wPNAPL   = false;
+
+    // TODO delete this one? or repurpose in correct spot?
+    // (could still choose whether PN<>APL interactions are enabled during APL tuning?)
+    //p.pn.pn_apl_tune     = false;
+    //
+
+    // TODO delete these two, or use (just one?) + rename
+    //p.pn.apl_taum   = 0.05;
+    //p.pn.tau_apl2pn = 0.01;
+    //
 
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
@@ -163,13 +198,6 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.tune_apl_weights      = true;
     p.kc.preset_wAPLKC         = false;
     p.kc.preset_wKCAPL         = false;
-
-    // TODO just always unconditionally do this? (it's just temporary, for first phase
-    // of fit_sparseness, where thresholds are picked with what should be silent APL [or
-    // at least where APL not influencing KC activity]) (won't prevent needing to set
-    // threshold high for threshold-picking phase of fit_sparseness though, since that
-    // is to prevent spiking from resetting KCs, not just to prevent APL activity)
-    p.kc.zero_wAPLKC           = false;
 
     // TODO rename to indicate this is controlling whether spiking is required to drive
     // APL (and where APL input comes from)
@@ -213,6 +241,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.apl_coup_const        = -1;
     p.kc.comp_num              = 0;
 
+    // TODO what's tau_r? for vesicle release?
     p.kc.tau_r                 = 1.0;
     // olfsysm.hpp says that setting this to 0 should disable synaptic depression
     // (tau_r above is another parameter for synaptic depression)
@@ -234,7 +263,11 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.ffapl.gini.source  = "(-s)/s";
     p.ffapl.lts.m        = 1.5;
 
+    // TODO delete? replace w/ scalar #-KCs (or #-claws, actually?) set in python?
+    // already have N / #-claws for that?
     p.kc.kc_ids.clear();
+
+    // TODO rename to remove wPNKC_ prefix?
     p.kc.wPNKC_one_row_per_claw = false;
     p.kc.allow_net_inh_per_claw = false;
 
@@ -448,8 +481,10 @@ RunVars::LN::LN(ModelParams const& p) :
     inhB{std::vector<Vector>(get_nodors(p), Row(1, p.time.steps_all()))} {
 }
 RunVars::PN::PN(ModelParams const& p) :
-    wAPLPN( p.pn.n_total_boutons ? p.pn.n_total_boutons : get_ngloms(p), 1 ),
-    wPNAPL( 1, p.pn.n_total_boutons ? p.pn.n_total_boutons : get_ngloms(p) ),
+    wAPLPN( p.pn.n_total_boutons ? p.pn.preset_wAPLPN : get_ngloms(p), 1 ),
+    wPNAPL( 1, p.pn.n_total_boutons ? p.pn.preset_wPNAPL : get_ngloms(p) ),
+    wAPLPN_scale(1.0),
+    wPNAPL_scale(1.0),
     sims(get_nodors(p), Matrix(get_ngloms(p), p.time.steps_all())),
     bouton_sims(get_nodors(p), Matrix(p.pn.n_total_boutons ? p.pn.n_total_boutons : 0,
         p.time.steps_all())) {
@@ -471,11 +506,23 @@ RunVars::KC::KC(ModelParams const& p) :
         get_ngloms(p)
     ),
 
+    // TODO are these always initialized correctly in case fit_sparseness is not called?
+    // or is it always called at least once? add C++ check to ensure that, if currently
+    // relying on my python code always doing that?
+    //
     // TODO try to use something other than p.kc.kc_ids.size()?
     // kc_ids.size() should be total # of claws
     wAPLKC(p.kc.wPNKC_one_row_per_claw ? int(p.kc.kc_ids.size()) : int(p.kc.N), 1),
     wKCAPL(1, p.kc.wPNKC_one_row_per_claw ? int(p.kc.kc_ids.size()) : int(p.kc.N)),
 
+    // TODO TODO TODO on top of these, also allow alternative way to specify ratio
+    // between these, rather than hardcoding them individually (and allow it to operate
+    // at tuning then) (-> use for sensitivity analysis that doesn't need to check
+    // sparsity in a separate step)
+    // TODO TODO TODO and same for wPNAPL and wAPLPL. maybe one for wAPLKC vs wAPLPN?
+    // just need 3 total?
+    // TODO TODO TODO single scale factor (default 1) for each weight vector, for
+    // simplicity, rather than specifying ratios?
     wAPLKC_scale(1.0),
     wKCAPL_scale(1.0),
 
@@ -525,8 +572,21 @@ RunVars::KC::KC(ModelParams const& p) :
             Matrix(p.kc.N, p.time.steps_all())),
 
     // TODO need? seems initialized in fit_sparsesness anyway.
-    tuning_iters(0)
+    tuning_iters(0),
 
+    odor_stats(get_nodors(p), Eigen::VectorXd(4))
+    // TODO delete
+    // TODO init w/ NaN or something easier to distinguish from real output instead? -1?
+    // TODO TODO any way around:
+    // libolfsysm/src/olfsysm.cpp:2999:40: error: assignment of read-only location
+    // ‘rv.RunVars::kc.RunVars::KC::max_kc_apl_drive.std::vector<double>::operator[](((std::vector<double>::size_type)odor_index))’
+    // ?
+    // is it just b/c using multithreading? (prob not?)
+    // or b/c way i'm initializing here? (well, commenting these lines doesn't fix)
+    //max_kc_apl_drive(get_nodors(p), 0.0),
+    //avg_kc_apl_drive(get_nodors(p), 0.0),
+    //max_bouton_apl_drive(get_nodors(p), 0.0),
+    //avg_bouton_apl_drive(get_nodors(p), 0.0)
 {
     if (p.kc.wPNKC_one_row_per_claw) {
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
@@ -641,29 +701,77 @@ Eigen::VectorXd sum_across_claws_within_each_kc(ModelParams const& p, RunVars co
 // have compiler already recognize this [apparently there are options for row/col vec
 // Matrices, so not just restricted to VectorXd]. would simplify things like computing
 // dot products, or other fns expecting vector-like inputs)
-
-// TODO also include checking of wPNKC (-> rename)? or another fn that does both?
+// TODO rename, since now also checking wPNKC?
 void check_APL_weights(ModelParams const& p, RunVars& rv) {
+    // TODO delete
+    //rv.log(cat("p.kc.N: ", p.kc.N));
+    //rv.log(cat("p.kc.kc_ids.size(): ", p.kc.kc_ids.size()));
+    //rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
+    //rv.log(cat("rv.kc.wAPLKC.rows(): ", rv.kc.wAPLKC.rows()));
+    //rv.log(cat("rv.kc.wKCAPL.cols(): ", rv.kc.wKCAPL.cols()));
+    //rv.log(cat("rv.kc.wKCAPL.rows(): ", rv.kc.wKCAPL.rows()));
+    //
     check(rv.kc.wAPLKC.cols() == 1);
     check(rv.kc.wKCAPL.rows() == 1);
 
     if (!p.kc.wPNKC_one_row_per_claw) {
+        check(p.kc.N > 1);
         check(rv.kc.wAPLKC.rows() == p.kc.N);
         check(rv.kc.wKCAPL.cols() == p.kc.N);
+        // TODO check this is correct
+        check(rv.kc.wPNKC.rows() == p.kc.N);
     } else {
         // TODO use something else for num_claws? refactor to consistently use the same
         // thing everywhere?
         unsigned num_claws = rv.kc.claw_to_kc.size();
+        check(num_claws > 1);
         check(rv.kc.wAPLKC.rows() == num_claws);
         check(rv.kc.wKCAPL.cols() == num_claws);
+        // TODO check this is correct
+        check(rv.kc.wPNKC.rows() == num_claws);
     }
+    check(!rv.kc.wPNKC.hasNaN());
+    check(all_nonneg(rv.kc.wPNKC));
+
+    // TODO also check weights aren't initially fully 0 anywhere?
 
     // TODO also check no +/- inf values? some builtin check for that, like np.isfinite?
+    // TODO also check no values too large/small (partially, at least, to try to catch
+    // initialization errors)?
     check(!rv.kc.wAPLKC.hasNaN());
     check(all_nonneg(rv.kc.wAPLKC));
 
     check(!rv.kc.wKCAPL.hasNaN());
     check(all_nonneg(rv.kc.wKCAPL));
+
+    if (p.pn.n_total_boutons > 0) {
+        check(p.pn.n_total_boutons > 1);
+
+        if (p.pn.preset_wAPLPN) {
+            check(rv.pn.wAPLPN.cols() == 1);
+            check(rv.pn.wAPLPN.rows() == p.pn.n_total_boutons);
+
+            check(!rv.pn.wAPLPN.hasNaN());
+            check(all_nonneg(rv.pn.wAPLPN));
+        }
+        if (p.pn.preset_wPNAPL) {
+            check(rv.pn.wPNAPL.rows() == 1);
+            check(rv.pn.wPNAPL.cols() == p.pn.n_total_boutons);
+
+            check(!rv.pn.wPNAPL.hasNaN());
+            check(all_nonneg(rv.pn.wPNAPL));
+        }
+        // otherwise, initialized to a shape w/o #-boutons, in current code at least,
+        // and don't think that can change in rest of C++ code
+        check(p.kc.preset_wPNKC);
+
+        check(rv.kc.wPNKC.cols() == p.pn.n_total_boutons);
+        // TODO also assert ordering of #-glomeruli < #-boutons < #-claws? or have
+        // elsewhere?
+    } else {
+        check(!p.pn.preset_wAPLPN);
+        check(!p.pn.preset_wPNAPL);
+    }
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -902,19 +1010,8 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
         p.time.start_step()
         + unsigned((p.time.stim.start-p.time.start)/(p.time.dt));
     int row_dim;
-    // TODO TODO delete. it should always be # gloms, right? do i need separate code to
-    // sample bouton spont now?
-    /*
-    if (p.pn.n_total_boutons) {
-        // TODO TODO fix. need to use pn<>bouton ID maps?
-        // (this used to be `get_ngloms(p) * p.pn.Btn_num_per_glom`, and should have
-        // worked then (for test_btn_expansion)... (but that was just b/c pn_sims was a
-        // diff shape then, i believe. # boutons, not # gloms)
-        row_dim = p.pn.n_total_boutons;
-    } else {
-        row_dim = get_ngloms(p);
-    }
-    */
+    // TODO also assert pn_spont (below, before expanding to # boutons) intially has
+    // this as one of the dimension sizes?
     row_dim = get_ngloms(p);
 
     // TODO delete eventually?
@@ -928,17 +1025,6 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
         if (i == 0) {
             continue;
         }
-        // TODO delete
-        /*
-        rv.log(cat("p.pn.n_total_boutons:", p.pn.n_total_boutons));
-        rv.log(cat("row_dim:", row_dim));
-        rv.log(cat("rv.pn.sims[i].rows():", rv.pn.sims[i].rows()));
-        rv.log(cat("rv.pn.sims[i].cols():", rv.pn.sims[i].cols()));
-        */
-        //
-        // TODO why is this failing in test_btn_separate (first case) now?
-        // do need the .array() to use the (a == b).all() equality testing
-        // (b/c pn.sims still only had 54 rows, despite row_dim=162 (=# boutons))
         check((rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array() ==
                rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array()
               ).all() );
@@ -951,6 +1037,8 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
     pn_spont = rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean();
 
     if (p.pn.n_total_boutons > 0) {
+        // TODO assert min/max unchanged after (mainly to check for uninitialized
+        // stuff / similar bugsd in duplicate_vals... move check in to there?)?
         // TODO also make this a Matrix of shape (n, 1), for consistency? (currently
         // will be a vector)
         pn_spont = duplicate_vals_for_each_subunit_id(pn_spont, rv.pn.Btn_to_pn);
@@ -967,22 +1055,15 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
 Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, unsigned t, Matrix& bouton_sims) {
 
-    // TODO TODO TODO do i actually need the baseline subtracting tianpei
-    // was doing in order for the math to work out? do that then? if so,
-    // refactor pn spont handling, so i can just copy that here?
-    //
-    // TODO TODO what happens if we initialize to one size, and then set with rvalue
+    // TODO what happens if we initialize to one size, and then set with rvalue
     // that is another size? (or e.g. a matrix) err hopefully? or need to add
     // checks that size is as expected, even if predefining size?
     // NOTE: was previously only declared w/ this size explicitly in compartment code,
     // but i'm assuming it should work w/ other branches
+    //
+    // TODO rename from claw_drive? at least pn_drive is sorta generic?
     Eigen::VectorXd claw_drive(rv.kc.wPNKC.rows());
-    if (p.pn.n_total_boutons) {
-        // TODO is bouton_sims always defined here? what about if not preset_Btn (e.g.
-        // for Btn_separate=True dict(use_connectome_APL=True) / dict() cases)? (should
-        // be handled correctly already? don't think i ever test anything other than
-        // n_total_boutons to init it...)
-        //
+    if (p.pn.n_total_boutons > 0) {
         // TODO TODO still condense this down to one expression (across all time),
         // assuming no PN<>APL interactions?
         // TODO also support bouton_sims in wPNKC_one_row_per_claw=false
@@ -1000,55 +1081,56 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
                 //
                 // TODO log shapes and indices here, at least on first
                 // iteration, to check?
-                //
-                // TODO will i need to go odor by odor or no? (assuming not?
-                // why does fit_sparseness end up needing that? just so it
-                // can fit on only a subset of odors, if requested?)
-                // TODO this assignment copies by default, right? need
-                // .array() or anything?
-                // TODO what is correct syntax for slicing each side here?
-                // what are shapes of inputs?
-                // ...am i going to (between this and `t`), slice RHS down
-                // to a scalar?? want to do in some way that is not just
-                // operating on scalars (prob don't care...)
-                //
-                // TODO TODO TODO need to divide by # boutons? only work (or
-                // only equiv to non-separate-bouton code? care?) if doing
-                // the baseline (pn spont) subtracting tianpei was doing?
-                bouton_sims(btn_idx, t) = pn_t(i, t) / n_glom_boutons;
+                bouton_sims(btn_idx, t) = pn_t(i, t);
             }
         }
         // TODO what happens if RHS (of assignment) is ever not same shape as claw_drive
         // is defined w/ above? test?
         claw_drive = rv.kc.wPNKC * bouton_sims.col(t);
+    } else {
+        // TODO what happens if RHS (of assignment) is ever not same shape as claw_drive
+        // is defined w/ above? test?
+        claw_drive = rv.kc.wPNKC * pn_t.col(t);
+    }
 
-        // TODO TODO does `t` index actually start at 0 though (no)?
-        // (start_step is 3000, at least for run_KC_sims?) matter (prob
-        // not?)?
-        //
+    // TODO TODO does `t` index actually start at 0 though (no)?
+    // (start_step is 3000, at least for run_KC_sims?) matter (prob
+    // not?)?
+    //
+    // TODO delete
+    /*
+    // TODO TODO why `omp_get_thread_num() == 0` part of check seem to not be working?
+    // (getting print ~8 times i think?)
+    if (t == p.time.start_step() + 1 && omp_get_thread_num() == 0) {
+        // (for a previous n_total_boutons > 0 case)
+        // t: 3001
+        // p.time.start_step(): 3000
+        // wPNKC.rows(): 11043
+        // wPNKC.cols(): 162
+        // bouton_sims.rows(): 162
+        // bouton_sims.cols(): 5500
+        // bouton_sims.col(t).size(): 162
+        // bouton_sims.col(t).rows(): 162
+        // bouton_sims.col(t).cols(): 1
+        // claw_drive.rows(): 11043
+        // claw_drive.cols(): 1
+
+        rv.log("");
+        rv.log(cat("t: ", t ));
+        rv.log(cat("thread: ", omp_get_thread_num() ));
+        rv.log(cat("p.time.start_step(): ", p.time.start_step() ));
+        rv.log(cat("pn_t.rows(): ", pn_t.rows() ));
+        rv.log(cat("pn_t.cols(): ", pn_t.cols() ));
+        rv.log(cat("pn_t.minCoeff(): ", pn_t.minCoeff()));
+        rv.log(cat("pn_t.maxCoeff(): ", pn_t.maxCoeff()));
+        rv.log(cat("wPNKC.rows(): ", rv.kc.wPNKC.rows() ));
+        rv.log(cat("wPNKC.cols(): ", rv.kc.wPNKC.cols() ));
+
         // TODO delete
-        /*
-        if (t == p.time.start_step() + 1) {
-            // t: 3001
-            // p.time.start_step(): 3000
-            // wPNKC.rows(): 11043
-            // wPNKC.cols(): 162
-            // bouton_sims.rows(): 162
-            // bouton_sims.cols(): 5500
-            // bouton_sims.col(t).size(): 162
-            // bouton_sims.col(t).rows(): 162
-            // bouton_sims.col(t).cols(): 1
-            // claw_drive.rows(): 11043
-            // claw_drive.cols(): 1
-
-            rv.log(cat("t: ", t ));
-            rv.log(cat("p.time.start_step(): ", p.time.start_step() ));
-            rv.log(cat("wPNKC.rows(): ", rv.kc.wPNKC.rows() ));
-            rv.log(cat("wPNKC.cols(): ", rv.kc.wPNKC.cols() ));
+        if (p.pn.n_total_boutons > 0) {
             rv.log(cat("bouton_sims.rows(): ", bouton_sims.rows() ));
             rv.log(cat("bouton_sims.cols(): ", bouton_sims.cols() ));
 
-            // TODO delete
             rv.log(cat("bouton_sims.col(t).size(): ",
                         bouton_sims.col(t).size()
             ));
@@ -1058,21 +1140,20 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             rv.log(cat("bouton_sims.col(t).cols(): ",
                         bouton_sims.col(t).cols()
             ));
-            //
-
-            // TODO compare to claw_drive shape in branch below? should be
-            // same, right?
-            rv.log(cat("claw_drive.rows(): ", claw_drive.rows() ));
-            rv.log(cat("claw_drive.cols(): ", claw_drive.cols() ));
         }
-        */
         //
 
-    } else {
-        // TODO what happens if RHS (of assignment) is ever not same shape as claw_drive
-        // is defined w/ above? test?
-        claw_drive = rv.kc.wPNKC * pn_t.col(t);
+        // TODO compare claw_drive shape across if/eles branches above? should be same,
+        // right?
+        rv.log(cat("claw_drive.rows(): ", claw_drive.rows() ));
+        rv.log(cat("claw_drive.cols(): ", claw_drive.cols() ));
+        rv.log(cat("claw_drive.minCoeff(): ", claw_drive.minCoeff()));
+        rv.log(cat("claw_drive.maxCoeff(): ", claw_drive.maxCoeff()));
+
+        rv.log("");
     }
+    */
+    //
 
     return claw_drive;
 }
@@ -1168,7 +1249,7 @@ void sparsity_nonconvergence_failure(ModelParams const&p, RunVars const& rv) {
     check(rv.kc.tuning_iters <= p.kc.max_iters);
 }
 
-void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
+void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     bool wAPLKC_scale_is_positive = false;
     double lr;
     double delta;
@@ -1179,8 +1260,18 @@ void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
     // code below will currently fail if count of either changes (don't want to
     // add 0s). no current implementation of backtracking or any other way to
     // rectify the situation without failing.
+    // TODO delete (/ replace w/ lte0)
     int n_wAPLKC_eq0_initial = (rv.kc.wAPLKC.array() == 0.0).count();
     int n_wKCAPL_eq0_initial = (rv.kc.wKCAPL.array() == 0.0).count();
+
+    int n_wAPLPN_eq0_initial;
+    if (p.pn.preset_wAPLPN) {
+        n_wAPLPN_eq0_initial = (rv.pn.wAPLPN.array() == 0.0).count();
+    }
+    int n_wPNAPL_eq0_initial;
+    if (p.pn.preset_wPNAPL) {
+        n_wPNAPL_eq0_initial = (rv.pn.wPNAPL.array() == 0.0).count();
+    }
 
     // TODO will i still need this loop, assuming sp is not hardcoded above?
     // check!
@@ -1196,10 +1287,9 @@ void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
         delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
         rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
 
-        // TODO or should these be defined before the do-while loop? don't think so?
-        // to rollback, if needed
+        // TODO TODO need .array() if not preset? can i always do it?
         Column prev_wAPLKC = rv.kc.wAPLKC;
-        Row prev_wKCAPL    = rv.kc.wKCAPL;
+        //Row prev_wKCAPL    = rv.kc.wKCAPL;
         double prev_wAPLKC_scale = 0;
         if (p.kc.preset_wAPLKC) {
             prev_wAPLKC_scale = rv.kc.wAPLKC_scale;
@@ -1207,10 +1297,12 @@ void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
             // this `else` def only used for logging. don't need for wKCAPL.
             prev_wAPLKC_scale = rv.kc.wAPLKC.mean();
         }
-        double prev_wKCAPL_scale = 0;
-        if (p.kc.preset_wKCAPL) {
-            prev_wKCAPL_scale = rv.kc.wKCAPL_scale;
-        }
+        // TODO delete, unless i also actually update wKCAPL in this loop (currently
+        // doing below)
+        //double prev_wKCAPL_scale = 0;
+        //if (p.kc.preset_wKCAPL) {
+        //    prev_wKCAPL_scale = rv.kc.wKCAPL_scale;
+        //}
         //
 
         if (!p.kc.preset_wAPLKC) {
@@ -1254,47 +1346,81 @@ void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
             }
             rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
         }
+        // TODO TODO TODO experiment w/ disabling PN<>APL weights after tuning (to see
+        // how sparsity changes?) (from python, probably)
 
-        // TODO TODO also log either mean or scalar wAPLKC (to get a sense of delta
-        // relative to absolute there)
-        // TODO TODO why do deltas not seem to be the differnce between wAPLKC_scale on
-        // successive iterations? am i doing something stupid? or just misinterpreting
-        // something?
-        rv.log(cat("i=", rv.kc.tuning_iters, " sp=", sp, " target=", p.kc.sp_target,
-            " rel_sp_diff=", rel_sp_diff, " acc=", p.kc.sp_acc,
-            " wAPLKC_scale=", prev_wAPLKC_scale, " delta(wAPLKC)=", delta, " lr=", lr
-        ));
+        // TODO delete if i also delete the per-thread (/odor) prints in sim_KC_layer
+        rv.log();
+        //
+
+        // TODO TODO TODO warn (or do something to prevent) delta from being too large
+        // of a percentage of the value? that seems to be main reason we have to redo
+        // the scales (or tweak the learning rates), b/c of the oscillations and long
+        // time to get back to right range after almost setting a param to 0
+        // TODO store biggest percentage of value we subtracted? store how many times we
+        // had to back off?
+        // TODO store whether we ever overshot? how many times?
 
         if (!wAPLKC_scale_is_positive) {
             rv.kc.tuning_iters++;
-            // TODO TODO figure out why calculation above isn't/wasn't updating w/
-            // increase in tuning_iters (should change lr, right?)
             if (rv.kc.tuning_iters > p.kc.max_iters) {
                 // will exit with err
                 sparsity_nonconvergence_failure(p, rv);
             }
+            // TODO TODO just immediately start at what we need? or change calc to
+            // not have the issue where it can give a delta that would bring wAPLKC
+            // [/whatever] below 0?
             rv.log(cat("incrementing tuning_iters=", rv.kc.tuning_iters,
                 " to get lower step size (to keep all scaled wAPLKC values "
                 "positive)"
             ));
+            // TODO TODO TODO test this doesn't cause shape issues in non-preset cases
+            // (seemed that similar expr was causing shape of (0, 0) in some other
+            // cases, when trying to restore unscaled after setZero?)
+            // TODO delete
+            //rv.log("before rollback:");
+            //rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
+            //rv.log(cat("rv.kc.wAPLKC.rows(): ", rv.kc.wAPLKC.rows()));
+            //
             // rollback to previous values before picking new (smaller) step size
             rv.kc.wAPLKC = prev_wAPLKC;
+            // TODO delete
+            //rv.log("after rollback:");
+            //rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
+            //rv.log(cat("rv.kc.wAPLKC.rows(): ", rv.kc.wAPLKC.rows()));
+            //
             if (p.kc.preset_wAPLKC) {
                 rv.kc.wAPLKC_scale = prev_wAPLKC_scale;
             }
-            rv.kc.wKCAPL = prev_wKCAPL;
-            if (p.kc.preset_wKCAPL) {
-                rv.kc.wKCAPL_scale = prev_wKCAPL_scale;
-            }
+            // TODO delete, unless i also actually update wKCAPL in this loop (currently
+            // doing below)
+            //rv.kc.wKCAPL = prev_wKCAPL;
+            //if (p.kc.preset_wKCAPL) {
+            //    rv.kc.wKCAPL_scale = prev_wKCAPL_scale;
+            //}
+        } else {
+            // TODO still log at least some of this unconditionally? go back to having
+            // it all unconditional?
+            rv.log(cat("i=", rv.kc.tuning_iters, " sp=", sp, " target=", p.kc.sp_target,
+                " rel_sp_diff=", rel_sp_diff, " acc=", p.kc.sp_acc,
+                " wAPLKC_scale=", prev_wAPLKC_scale, " delta(wAPLKC)=", delta, " lr=", lr
+            ));
         }
+
+        // TODO TODO TODO warn / err if sparsity doesn't change across two iterations?
+        // (at least now, that is seemingly indicating a code error on my part)
     } while (!wAPLKC_scale_is_positive);
 
     // NOTE: assuming that is wAPLKC scale is positive, we won't have
     // similar issues w/ wKCAPL scale below. may not be true?
 
-    // TODO TODO TODO integrate something like below into loop above (not just checking
-    // whether scale is positive, but also checking whether we introduced any 0 values
-    // after subtracting delta?) (and also rolling back steps in these circumstances)
+    // TODO TODO integrate all below into loop above? (not just checking whether
+    // scale is positive, but also checking whether we introduced any 0 values after
+    // subtracting delta?) (and also rolling back steps in these circumstances)
+
+    // TODO TODO possible to just define these all from wAPLKC_scale after
+    // tuning? would be simpler than dividing step size on each iteration...
+    // (and would be easier to say it's really just one parameter...)
     if (!p.kc.preset_wKCAPL) {
         if (p.kc.wPNKC_one_row_per_claw) {
             // TODO refactor
@@ -1308,23 +1434,68 @@ void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
         } else {
             rv.kc.wKCAPL.array() += delta / double(p.kc.N);
         }
-        rv.log(cat("rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
     } else {
+        // TODO make sure denominator is # claws when it needs to be? matter?
+        // (and check that doesn't break any existing tests. e.g. test_spatial_wPNKC?)
+        // maybe revert to always # KCs (never # claws)? (probably need to, yea)
+        // TODO TODO was it just that the initial value was set based on kc.N instead of
+        // # claws?
         rv.kc.wKCAPL_scale += delta / double(p.kc.N);
-
-        // TODO delete?
-        rv.log(cat("rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
-
+        // TODO delete
+        // TODO seems this was causing fixed_inh tests to fail actually? verify which
+        // calculation specifically was awry? (just this one?) (even when initial value
+        // was divided by # claws instead)
+        //if (!p.kc.wPNKC_one_row_per_claw) {
+        //    rv.kc.wKCAPL_scale += delta / double(p.kc.N);
+        //} else {
+        //    // TODO this consistent w/ tianpei's path above? (thought so, but test
+        //    // seemed to be failing as a result...)  matter?
+        //    rv.kc.wKCAPL_scale += delta / double(p.kc.kc_ids.size());
+        //}
+        rv.log(cat(
+            "wAPLKC_scale: ", rv.kc.wAPLKC_scale,
+            " wKCAPL_scale: ", rv.kc.wKCAPL_scale
+        ));
         check(rv.kc.wKCAPL_scale > 0.0);
         rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
     }
+
+    if (p.pn.preset_wAPLPN) {
+        // TODO TODO actually support this being different from wAPLKC_scale (at
+        // least if hardcoded to be so?)
+        // still just updating w/ same delta as rv.kc.wAPLKC_scale, and should still
+        // be starting at same initial value
+        rv.pn.wAPLPN_scale += delta;
+        //
+        rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
+        rv.log(cat("wAPLPN_scale: ", rv.pn.wAPLPN_scale));
+    }
+    if (p.pn.preset_wPNAPL) {
+        // TODO want to divide by # boutons here? i assume so?
+        rv.pn.wPNAPL_scale += delta / double(p.pn.n_total_boutons);
+        rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
+        rv.log(cat("wPNAPL_scale: ", rv.pn.wPNAPL_scale));
+    }
+
+    // TODO delete (/put behind debug flag?) (combine w/ above?)
+    double wAPLKC_mean = rv.kc.wAPLKC.mean();
+    double wKCAPL_mean = rv.kc.wKCAPL.mean();
+    // TODO if keeping, try to combine w/  previous .log call above?
+    rv.log(cat("wAPLKC_mean: ", wAPLKC_mean, " wKCAPL_mean: ", wKCAPL_mean));
+    if (p.pn.preset_wAPLPN) {
+        double wAPLPN_mean = rv.pn.wAPLPN.mean();
+        rv.log(cat("wAPLPN_mean: ", wAPLPN_mean));
+    }
+    if (p.pn.preset_wPNAPL) {
+        double wPNAPL_mean = rv.pn.wPNAPL.mean();
+        rv.log(cat("wPNAPL_mean: ", wPNAPL_mean));
+    }
+    //
 
     // probably want to abort (so we can change tuning params and re-run)
     // rather than clip values (which would break overall shape of vector(s)
     // from connectome). or otherwise take steps to avoid this state (would
     // probably be better if we didn't have to abort).
-    // TODO TODO come up with strategy to backoff delta if we add any 0
-    // values in w[APLKC|KCAPL] or get w[APLKC|KCAPL]_scale <= 0
     // TODO in meantime, give people a message to choose different step size
     // params (that can be seen before assertion causes failure. [also?]
     // print directly to stderr? assert failure already do that with enough
@@ -1335,49 +1506,45 @@ void scale_APLKC_weights(ModelParams const& p, RunVars& rv, double sp) {
     /* If we learn too fast in the negative direction we could end
      * up with negative weights. */
     if (delta < 0.0) {
-        if (!p.kc.preset_wAPLKC) {
-            int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
-            check(n_wAPLKC_lt0 == 0);
+        // TODO TODO (delete comment if no issues now that i removed below from
+        // conditionals checking preset_w[APLKC|KCAPL]=false) don't i want to do this in
+        // all cases? or even particularly in the preset_* = true case (which was
+        // previously excluded here?)
+        // TODO delete? (to the extent that i managed to move this into loop above)
+        int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
+        check(n_wAPLKC_lt0 == 0);
 
-            int n_wAPLKC_eq0 = (rv.kc.wAPLKC.array() == 0.0).count();
-            check(n_wAPLKC_eq0_initial == n_wAPLKC_eq0);
+        int n_wAPLKC_eq0 = (rv.kc.wAPLKC.array() == 0.0).count();
+        check(n_wAPLKC_eq0_initial == n_wAPLKC_eq0);
 
-            // TODO delete? should currently always do nothing, given
-            // assertions above.
-            rv.kc.wAPLKC = (rv.kc.wAPLKC.array() < 0.0).select(
-                    0.0, rv.kc.wAPLKC);
+        // TODO delete? should currently always do nothing, given
+        // assertions above.
+        //rv.kc.wAPLKC = (rv.kc.wAPLKC.array() < 0.0).select(
+        //        0.0, rv.kc.wAPLKC);
+        //
+
+        int n_wKCAPL_lt0 = (rv.kc.wKCAPL.array() < 0.0).count();
+        check(n_wKCAPL_lt0 == 0);
+
+        int n_wKCAPL_eq0 = (rv.kc.wKCAPL.array() == 0.0).count();
+        check(n_wKCAPL_eq0_initial == n_wKCAPL_eq0);
+
+        // TODO delete? should currently always do nothing, given
+        // assertions above.
+        //rv.kc.wKCAPL = (rv.kc.wKCAPL.array() < 0.0).select(
+        //        0.0, rv.kc.wKCAPL);
+
+        // TODO refactor
+        if (p.pn.preset_wAPLPN) {
+            int n_wAPLPN_lte0 = (rv.pn.wAPLPN.array() <= 0.0).count();
+            check(n_wAPLPN_lte0 == n_wAPLPN_eq0_initial);
         }
-
-        if (!p.kc.preset_wKCAPL) {
-            int n_wKCAPL_lt0 = (rv.kc.wKCAPL.array() < 0.0).count();
-            check(n_wKCAPL_lt0 == 0);
-
-            int n_wKCAPL_eq0 = (rv.kc.wKCAPL.array() == 0.0).count();
-            check(n_wKCAPL_eq0_initial == n_wKCAPL_eq0);
-
-            // TODO delete? should currently always do nothing, given
-            // assertions above.
-            rv.kc.wKCAPL = (rv.kc.wKCAPL.array() < 0.0).select(
-                    0.0, rv.kc.wKCAPL);
+        if (p.pn.preset_wPNAPL) {
+            int n_wPNAPL_lte0 = (rv.pn.wPNAPL.array() <= 0.0).count();
+            check(n_wPNAPL_lte0 == n_wPNAPL_eq0_initial);
         }
     }
 
-    // TODO delete (or do similar print for all cases, not just
-    // preset_wAPLKC=true)
-    //
-    // for debugging + trying to support scaling of arbitrary positive
-    // vector wAPLKC/wKCAPL inputs
-    if (p.kc.preset_wAPLKC) {
-        double wAPLKC_mean = rv.kc.wAPLKC.mean();
-        // TODO if keeping, try to combine w/  previous .log call above?
-        rv.log(cat("wAPLKC_mean: ", wAPLKC_mean));
-    }
-    if (p.kc.preset_wKCAPL) {
-        double wKCAPL_mean = rv.kc.wKCAPL.mean();
-        // TODO if keeping, try to combine w/  previous .log call above?
-        rv.log(cat("wKCAPL_mean: ", wKCAPL_mean));
-    }
-    //
 }
 
 void fit_sparseness(ModelParams const& p, RunVars& rv) {
@@ -1387,16 +1554,44 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     if (!tlist.size()) {
         for (unsigned i = 0; i < get_nodors(p); i++) tlist.push_back(i);
     }
+    // TODO delete
+    rv.log(cat("p.pn.preset_wAPLPN: ", p.pn.preset_wAPLPN));
+    rv.log(cat("p.pn.preset_wPNAPL: ", p.pn.preset_wPNAPL));
+    //
 
-    Column temp_wAPLKC;
-    Row temp_wKCAPL;
-    // TODO only define these if `zero_wAPLKC=true`? only used then, right?
-    // TODO also get initial values for other cases, to also support zero_wAPLKC there?
-    // (and then eventually should be able to default to it, with no change in behavior,
-    // but not high priority)
+    // TODO TODO only setZero and do initial sim_KC_layer calls if thr not set
+    // (add another flag if i can't easily test if thr is set?)
+
     if (p.kc.preset_wAPLKC) {
-        temp_wAPLKC = rv.kc.wAPLKC;
-        temp_wKCAPL = rv.kc.wKCAPL;
+        rv.kc.wAPLKC_unscaled = rv.kc.wAPLKC;
+        rv.log(cat("INITIAL rv.kc.wAPLKC.mean(): ", rv.kc.wAPLKC.mean()));
+        // TODO delete. should be replaced w/ below
+        //rv.log(cat("INITIAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
+        // should be a deep copy
+    }
+    if (p.kc.preset_wKCAPL) {
+        rv.kc.wKCAPL_unscaled = rv.kc.wKCAPL;
+        rv.log(cat("INITIAL rv.kc.wKCAPL.mean(): ", rv.kc.wKCAPL.mean()));
+        // TODO delete. should be replaced w/ below
+        //rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+    }
+
+    // TODO move kc<>apl *_unscaled handling up here too (before any 0ing)
+    if (p.pn.preset_wAPLPN) {
+        rv.log(cat("INITIAL rv.pn.wAPLPN.mean(): ", rv.pn.wAPLPN.mean()));
+        // should be a deep copy
+        rv.pn.wAPLPN_unscaled = rv.pn.wAPLPN;
+    }
+    if (p.pn.preset_wPNAPL) {
+        // TODO do before setting 0...
+        rv.log(cat("INITIAL rv.pn.wPNAPL.mean(): ", rv.pn.wPNAPL.mean()));
+        rv.pn.wPNAPL_unscaled = rv.pn.wPNAPL;
+    }
+
+    // TODO (delete) what was causing negative wAPLKC weights here in wd20 case?
+    // (not sure i can repro anymore)
+    if (!p.kc.tune_apl_weights) {
+        check_APL_weights(p, rv);
     }
 
     /* Calculate spontaneous input to KCs. */
@@ -1409,41 +1604,19 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     check(pn_spont.rows() > 1);
     check(!pn_spont.hasNaN());
 
+    // TODO delete? already doing somewhere? (should just need after user input wPNKC,
+    // if anywhere?)
+    check(!rv.kc.wPNKC.hasNaN());
+
     // TODO why was this multiplication not throwing some error? (when wPNKC had #
     // boutons for cols, and pn_spont was a vector (col/row?) of length # gloms
     // (gave output that was a vector of length # KCs still, i believe? just not all
     // initialized correctly?)
     Column spont_in_ini = rv.kc.wPNKC * pn_spont;
-    // TODO delete
-    rv.log("");
-    rv.log("at spont_in_ini def:");
-    rv.log(cat("rv.kc.wPNKC.rows(): ", rv.kc.wPNKC.rows()));
-    rv.log(cat("rv.kc.wPNKC.cols(): ", rv.kc.wPNKC.cols()));
-    rv.log(cat("rv.kc.wPNKC.hasNaN(): ", rv.kc.wPNKC.hasNaN()));
-    rv.log(cat("rv.kc.wPNKC.array().isNaN().count(): ",
-                rv.kc.wPNKC.array().isNaN().count()
-    ));
-    rv.log(cat("rv.kc.wPNKC.minCoeff(): ", rv.kc.wPNKC.minCoeff()));
-    rv.log(cat("rv.kc.wPNKC.maxCoeff(): ", rv.kc.wPNKC.maxCoeff()));
-    rv.log("");
-    rv.log(cat("pn_spont.rows(): ", pn_spont.rows()));
-    rv.log(cat("pn_spont.cols(): ", pn_spont.cols()));
-    rv.log(cat("pn_spont.hasNaN(): ", pn_spont.hasNaN()));
-    rv.log(cat("pn_spont.array().isNaN().count(): ",
-                pn_spont.array().isNaN().count()
-    ));
-    rv.log(cat("pn_spont.minCoeff(): ", pn_spont.minCoeff()));
-    rv.log(cat("pn_spont.maxCoeff(): ", pn_spont.maxCoeff()));
-    rv.log("");
-    rv.log(cat("spont_in_ini.rows(): ", spont_in_ini.rows()));
-    rv.log(cat("spont_in_ini.cols(): ", spont_in_ini.cols()));
-    rv.log(cat("spont_in_ini.hasNaN(): ", spont_in_ini.hasNaN()));
-    rv.log(cat("spont_in_ini.array().isNaN().count(): ",
-                spont_in_ini.array().isNaN().count()
-    ));
-    rv.log(cat("spont_in_ini.minCoeff(): ", spont_in_ini.minCoeff()));
-    rv.log(cat("spont_in_ini.maxCoeff(): ", spont_in_ini.maxCoeff()));
-    //
+
+    // TODO delete after debugging?
+    check(!spont_in_ini.hasNaN());
+
     Column spont_in;
     // if `n_claws_active_to_spike > 0`, spont_in should be of length equal to # claws
     // (as spont_in_ini should be here)
@@ -1471,73 +1644,54 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // TODO factor into generic column checking (/ change of types)?
         check(spont_in.cols() == 1);
     }
-    // TODO delete
-    rv.log("");
-    rv.log("at spont_in def:");
-    rv.log(cat("spont_in.hasNaN(): ", spont_in.hasNaN()));
-    rv.log(cat("spont_in.array().isNaN().count(): ",
-                spont_in.array().isNaN().count()
-    ));
-    rv.log(cat("spont_in.minCoeff(): ", spont_in.minCoeff()));
-    rv.log(cat("spont_in.maxCoeff(): ", spont_in.maxCoeff()));
-    //
     rv.kc.spont_in = spont_in;
 
-    if (p.kc.preset_wAPLKC) {
-        rv.log(cat("INITIAL rv.kc.wAPLKC.mean(): ", rv.kc.wAPLKC.mean()));
-        rv.log(cat("INITIAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
-        // should be a deep copy
-        rv.kc.wAPLKC_unscaled = rv.kc.wAPLKC;
-    }
-    if (p.kc.preset_wKCAPL) {
-        rv.log(cat("INITIAL rv.kc.wKCAPL.mean(): ", rv.kc.wKCAPL.mean()));
-        rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
-        rv.kc.wKCAPL_unscaled = rv.kc.wKCAPL;
-    }
+    // TODO delete after debugging?
+    check(!spont_in.hasNaN());
 
-    // TODO are preset_wAPLKC and wPNKC_one_row_per_claw mutually exclusive?
+    // TODO are preset_wAPLKC and wPNKC_one_row_per_claw mutually exclusive? (no, wPNKC*
+    // should always be set true, whether tianpei/prat, and preset_wAPLKC=true should
+    // always be true for my main model uses w/ prat outputs now)
+    //
+    // (delete?)
     // adapt wPNKC_one_row_per_claw code to initialize w[APLKC|KC] similar
     // to how preset_w[APLKC|KCAPL]=true code does, and then use scale
     // *_scale params at output?
 
-    /* Set starting values for the things we'll tune. */
-    // TODO matter? seems to be overwritten below in this case anyway...
-    // (and put inside this conditional to avoid overwriting values set in python, via
-    // pybind11)
-    if (p.kc.tune_apl_weights) {
-        // We prob want to set zero for either cases so that the threshold can be set properly
-        if (!p.kc.preset_wAPLKC) {
-            rv.kc.wAPLKC.setZero();
-        }
-        if (!p.kc.preset_wKCAPL) {
-            if (p.kc.wPNKC_one_row_per_claw) {
-                // TODO TODO refactor to share w/ other code doing similar
-                double preset_wKCAPL_base = 1.0/float(p.kc.N);
-                for (unsigned i_c=0; i_c<rv.kc.claw_to_kc.size(); ++i_c) {
-                    unsigned kc = rv.kc.claw_to_kc[i_c];
-                    // # claws for this KC
-                    const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
-                    // TODO what is right part of this line doing?
-                    const double val = preset_wKCAPL_base / static_cast<double>(cnt ? cnt : 1);
-                    // TODO change indexing to remove the 0?
-                    rv.kc.wKCAPL(0, i_c) = val;
-                }
-            } else {
-                rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
-            }
-        }
-
-        // TODO just always unconditionally do this?
-        if (p.kc.zero_wAPLKC) {
-            rv.kc.wAPLKC.setZero();
-            rv.kc.wKCAPL.setZero();
-        }
-    }
-
-    check_APL_weights(p, rv);
-
     if (!p.kc.use_vector_thr) {
         if (!p.kc.use_fixed_thr) {
+            /* Set starting values for the things we'll tune. */
+            // TODO delete
+            // TODO TODO this initial value was always overwritten, right?
+            //if (!p.kc.preset_wKCAPL) {
+            //    if (p.kc.wPNKC_one_row_per_claw) {
+            //        // TODO TODO refactor to share w/ other code doing similar
+            //        double preset_wKCAPL_base = 1.0/float(p.kc.N);
+            //        for (unsigned i_c=0; i_c<rv.kc.claw_to_kc.size(); ++i_c) {
+            //            unsigned kc = rv.kc.claw_to_kc[i_c];
+            //            // # claws for this KC
+            //            const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
+            //            // TODO what is right part of this line doing?
+            //            const double val = preset_wKCAPL_base / static_cast<double>(cnt ? cnt : 1);
+            //            // TODO change indexing to remove the 0?
+            //            rv.kc.wKCAPL(0, i_c) = val;
+            //        }
+            //    } else {
+            //        rv.kc.wKCAPL.setConstant(1.0/float(p.kc.N));
+            //    }
+            //}
+            // TODO test i'm able to restore these properly in non-preset cases too
+            rv.kc.wAPLKC.setZero();
+            rv.kc.wKCAPL.setZero();
+            // TODO TODO TODO maybe i actually don't want PN<>APL ones 0 for threshold
+            // selection? default whole purpose?
+            if (p.pn.preset_wAPLPN) {
+                rv.pn.wAPLPN.setZero();
+            }
+            if (p.pn.preset_wPNAPL) {
+                rv.pn.wPNAPL.setZero();
+            }
+
             rv.log("setting threshold higher than should ever be "
                 "reached, to disable KC spiking for threshold-setting phase"
             );
@@ -1573,7 +1727,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log("adding threshold to 2 * spontaneous PN input");
 
             // TODO delete
-            rv.log(cat("(before adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
+            //rv.log(cat("(before adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
 
             // do i need .array() here? yes, need LHS .array() to avoid err, at least w/
             // RHS as it is here
@@ -1582,7 +1736,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.thr.array() += spont_in.array()*2.0;
 
             // TODO delete
-            rv.log(cat("(after adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
+            //rv.log(cat("(after adding spont) rv.kc.thr.mean(): ", rv.kc.thr.mean()));
         }
     }
 
@@ -1675,7 +1829,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // TODO TODO is this actually correct? do i not care to also index into
         // rv.kc.claw_sims vector<Matrix>, as code below does for rv.pn.sims/similar?
         // matter here, so long as we get it right for run_KC_sims?
-        // TODO TODO TODO at least check it doesnt matter?
+        // TODO TODO at least check it doesnt matter?
         Matrix claw_sims(rv.kc.nclaws_total, p.time.steps_all());
 
         Matrix bouton_sims(p.pn.n_total_boutons, p.time.steps_all());
@@ -1691,9 +1845,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.log(cat("choosing thresholds from spontaneous input (thrtype=",
                            thrtype, ")"));
             }
-            if (p.kc.zero_wAPLKC) {
-                check(rv.kc.wAPLKC.isZero());
-                check(rv.kc.wKCAPL.isZero());
+            check(rv.kc.wAPLKC.isZero());
+            check(rv.kc.wKCAPL.isZero());
+            if (p.pn.preset_wAPLPN) {
+                check(rv.pn.wAPLPN.isZero());
+            }
+            if (p.pn.preset_wPNAPL) {
+                check(rv.pn.wPNAPL.isZero());
             }
 
             // TODO maybe i still want to sim_KC_layer in use_vector_thr case
@@ -1702,9 +1860,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Measure voltages achieved by the KCs, and choose a threshold
              * based on that. */
 #pragma omp for
-            for (unsigned i = 0; i < tlist.size(); i++) {
+            for (unsigned i=0; i<tlist.size(); i++) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                    Vm, spikes, nves, inh, Is, claw_sims, bouton_sims
+                    Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
+                    rv.kc.odor_stats[tlist[i]]
                 );
                 // TODO TODO (probably at end of sim_KC_layer), check all quantities are
                 // fully initialized? maybe init w/ NaN or something (instead of 0,
@@ -1733,10 +1892,19 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                      choose_KC_thresh_uniform)
                     (p, KCpks, spont_in);
 
-                // TODO compute + log sparsity here? (from KCpks)
-                // TODO + save into new rv variable, for use in al_analysis?
-                // (even worth? i assume that w/ reasonable pre-conditions, we can
-                // always get pretty bang-on here?)
+                // TODO what to look at next if these match across
+                // Btn_separate=True/False cases? Vm? some other intermediate in KC
+                // activity calc? (nvm, this seems to be the [first, at least] diff)
+                // TODO delete
+                //rv.log("");
+                //rv.log("after choosing KC thresholds:");
+                //rv.log(cat("rv.kc.thr.rows(): ", rv.kc.thr.rows()));
+                //rv.log(cat("rv.kc.thr.cols(): ", rv.kc.thr.cols()));
+                //rv.log(cat("rv.kc.thr.minCoeff(): ", rv.kc.thr.minCoeff()));
+                //rv.log(cat("rv.kc.thr.maxCoeff(): ", rv.kc.thr.maxCoeff()));
+                //rv.log(cat("rv.kc.thr.col(0).head(10): ", rv.kc.thr.col(0).head(10)));
+                //rv.log("");
+                //
             }
         }
 
@@ -1746,39 +1914,30 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // w/ fixed wAPLKC/wKCAPL is failing, b/c crazy high values on output
         // wAPLKC/etc)
 #pragma omp single
+        // TODO combine this block into below (two adjacent #pragma single blocks...)?
         {
-            if (p.kc.preset_wAPLKC) {
-                if (p.kc.tune_apl_weights) {
-                    // is it gauranteed that subsequent code will not be run by other
-                    // threads, until after this single block completes (don't want
-                    // other threads using uninitialized data)? or how to guarantee?
-                    // yes, other threads wait unless a nowait clause is added:
-                    // https://www.openmp.org/spec-html/5.0/openmpsu38.html
-                    //
-                    // TODO should i not also be zeroing and then resetting wKCAPL here
-                    // too? why did matt not do that above (make sense that APL will
-                    // have no influence w/ even this 0, but inh/Is still 0 above [when
-                    // i'm not expecting, when wKCAPL is non-zero])
-                    rv.kc.wAPLKC = rv.kc.wAPLKC_unscaled;
-                } else {
-                    // TODO delete
+            if (!p.kc.tune_apl_weights) {
+                // TODO TODO still need to restore from a setZero on any other code
+                // paths? (for wAPLKC/wKCAPL more likely)
+                if (p.kc.preset_wAPLKC) {
                     rv.log(cat("FIXED rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
-
                     rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
                 }
-            }
-            if (!p.kc.tune_apl_weights && p.kc.preset_wKCAPL) {
-                // TODO delete
-                rv.log(cat("FIXED rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
-
-                rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
+                if (p.kc.preset_wKCAPL) {
+                    rv.log(cat("FIXED rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+                    rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
+                }
+                if (p.pn.preset_wAPLPN) {
+                    rv.log(cat("FIXED rv.pn.wAPLPN_scale: ", rv.pn.wAPLPN_scale));
+                    rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
+                }
+                if (p.pn.preset_wPNAPL) {
+                    rv.log(cat("FIXED rv.pn.wPNAPL_scale: ", rv.pn.wPNAPL_scale));
+                    rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
+                }
             }
         }
 
-        // TODO if `!tune_apl_weights` just return here, so i can de-ident code below?
-        // or does some or it need to run? (we are still inside a parallel block tho.
-        // would have to at least synchronize or something, no? or could we break up
-        // large current parallel block w/ two smaller ones, one above and one below?)
         /* Enter this region only if APL use is enabled; if disabled, just exit
          * (at this point APL->KC weights are set to 0). */
         if (p.kc.tune_apl_weights) {
@@ -1802,55 +1961,84 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             // factors to same as wAPLKC/wKCAPL being set below)?
             /* Starting values for to-be-tuned APL<->KC weights. */
 
-            // TODO (after also defiing temp_* vars above in !preset_wAPLKC case) also
-            // support resetting those cases here
-            if (p.kc.preset_wAPLKC && p.kc.zero_wAPLKC) {
-                rv.kc.wAPLKC = temp_wAPLKC;
-                rv.kc.wKCAPL = temp_wKCAPL;
-                rv.log(cat("after thresh initialization wAPLKC: ", rv.kc.wAPLKC.mean()));
+            // TODO TODO TODO fix
+            // would set shape of wAPLKC to (0, 0) in preset_*=false case, currently
+            if (p.kc.preset_wAPLKC) {
+                rv.kc.wAPLKC = rv.kc.wAPLKC_unscaled;
+            }
+            if (p.kc.preset_wKCAPL) {
+                rv.kc.wKCAPL = rv.kc.wKCAPL_unscaled;
+            }
+            if (p.pn.preset_wAPLPN) {
+                rv.pn.wAPLPN = rv.pn.wAPLPN_unscaled;
+            }
+            if (p.pn.preset_wPNAPL) {
+                rv.pn.wPNAPL = rv.pn.wPNAPL_unscaled;
             }
 
+            double initial_wAPLKC_scale = 2.0 * ceil(-log(p.kc.sp_target));
+            rv.log(cat("INITIAL wAPLKC scale: ", initial_wAPLKC_scale));
             if (!p.kc.preset_wAPLKC) {
                 if (p.kc.wPNKC_one_row_per_claw) {
+                    // TODO even want this? should only be for old code, since my
+                    // current wPNKC_one_row_per_claw=true paths should have
+                    // preset_wAPLKC=true
                     // TODO refactor to share w/ duplicated code?
-                    const double base = 2.0 * ceil(-log(p.kc.sp_target));
                     for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
                         unsigned kc = rv.kc.claw_to_kc[claw];
                         const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
-                        const double val = base / static_cast<double>(cnt ? cnt : 1);
+                        const double val = initial_wAPLKC_scale / static_cast<double>(cnt ? cnt : 1);
                         rv.kc.wAPLKC(claw, 0) = val;
                     }
                 } else {
-                    rv.kc.wAPLKC.setConstant(2*ceil(-log(p.kc.sp_target)));
+                    rv.kc.wAPLKC.setConstant(initial_wAPLKC_scale);
                 }
-                rv.log(cat("setConst initial rv.kc.wAPLKC sum: ", rv.kc.wAPLKC.sum()));
-                rv.log(cat("setConst initial rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
             } else {
-                rv.kc.wAPLKC_scale = 2*ceil(-log(p.kc.sp_target));
-                // TODO delete
-                rv.log(cat("INITIAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
-
+                rv.kc.wAPLKC_scale = initial_wAPLKC_scale;
                 rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
             }
+            double initial_wKCAPL_scale = initial_wAPLKC_scale / double(p.kc.N);
+            // TODO delete
+            // try # claws here instead of # KCs? (when appropriate)? even w/ this
+            // initial value the delta that divides by #-claws still seems to fail
+            // fixed_inh_params tests
+            //double initial_wKCAPL_scale;
+            //if (!p.kc.wPNKC_one_row_per_claw) {
+            //    initial_wKCAPL_scale = initial_wAPLKC_scale / double(p.kc.N);
+            //} else {
+            //    initial_wKCAPL_scale = initial_wAPLKC_scale / double(p.kc.kc_ids.size());
+            //}
+            rv.log(cat("INITIAL wKCAPL scale: ", initial_wKCAPL_scale));
             if (!p.kc.preset_wKCAPL) {
                 if (p.kc.wPNKC_one_row_per_claw) {
-                    const double base = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
                     for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
                         unsigned kc = rv.kc.claw_to_kc[claw];
                         // TODO refactor
-                        const std::size_t cnt = rv.kc.kc_to_claws[kc].size(); // claws of this KC
-                        const double val = base / static_cast<double>(cnt ? cnt : 1);
-                        rv.kc.wKCAPL(0, claw) = val;  // row vector
+                        const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
+                        const double val = initial_wKCAPL_scale / static_cast<double>(cnt ? cnt : 1);
+                        rv.kc.wKCAPL(0, claw) = val;
                     }
                 } else {
-                    rv.kc.wKCAPL.setConstant(2*ceil(-log(p.kc.sp_target)) / double(p.kc.N));
+                    rv.kc.wKCAPL.setConstant(initial_wKCAPL_scale);
                 }
-                rv.log(cat("setConst initial rv.kc.wKCAPL sum: ", rv.kc.wKCAPL.sum()));
-                rv.log(cat("setConst initial rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
             } else {
-                rv.kc.wKCAPL_scale = 2*ceil(-log(p.kc.sp_target)) / double(p.kc.N);
-                rv.log(cat("INITIAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
+                rv.kc.wKCAPL_scale = initial_wKCAPL_scale;
                 rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
+            }
+
+            if (p.pn.preset_wAPLPN) {
+                // TODO TODO TODO something else to init this?
+                rv.pn.wAPLPN_scale = initial_wAPLKC_scale;
+                //
+                rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
+                rv.log(cat("INITIAL rv.pn.wAPLPN_scale: ", rv.pn.wAPLPN_scale));
+            }
+
+            if (p.pn.preset_wPNAPL) {
+                // TODO this divisor work here?
+                rv.pn.wPNAPL_scale = initial_wAPLKC_scale / double(p.pn.n_total_boutons);
+                rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
+                rv.log(cat("INITIAL rv.pn.wPNAPL_scale: ", rv.pn.wPNAPL_scale));
             }
 
             // TODO keep this check? only do this one, and remove earlier check?
@@ -1864,188 +2052,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
 #pragma omp single
             {
-                /*
-                // TODO actually need this in loop below? shouldn't...
-                if (! p.kc.hardcode_initial_sp) {
-                    // TODO TODO TODO instead, define initial sp from rv.kc.pks
-                    //
-                    // rv.kc.pks.rows(): 1828
-                    // rv.kc.pks.cols(): 17
-                    // rv.kc.thr.rows(): 1828
-                    // rv.kc.thr.cols(): 1
-                    rv.log("");
-                    rv.log("when trying to recalc sp:");
-                    // TODO TODO TODO why do both of these have NaN? are they all NaN?
-                    rv.log(cat("rv.kc.pks.rows(): ", rv.kc.pks.rows()));
-                    rv.log(cat("rv.kc.pks.cols(): ", rv.kc.pks.cols()));
-                    rv.log(cat("rv.kc.pks.hasNaN(): ", rv.kc.pks.hasNaN()));
-                    rv.log(cat("rv.kc.pks.array().isNaN().count(): ",
-                                rv.kc.pks.array().isNaN().count()
-                    ));
-                    rv.log(cat("rv.kc.pks.minCoeff(): ", rv.kc.pks.minCoeff()));
-                    rv.log(cat("rv.kc.pks.maxCoeff(): ", rv.kc.pks.maxCoeff()));
-                    rv.log("");
-                    rv.log(cat("rv.kc.thr.rows(): ", rv.kc.thr.rows()));
-                    rv.log(cat("rv.kc.thr.cols(): ", rv.kc.thr.cols()));
-                    rv.log(cat("rv.kc.thr.hasNaN(): ", rv.kc.thr.hasNaN()));
-                    rv.log(cat("rv.kc.thr.array().isNaN().count(): ",
-                                rv.kc.thr.array().isNaN().count()
-                    ));
-                    rv.log(cat("rv.kc.thr.minCoeff(): ", rv.kc.thr.minCoeff()));
-                    rv.log(cat("rv.kc.thr.maxCoeff(): ", rv.kc.thr.maxCoeff()));
-                    rv.log("");
-                    // TODO this work? omit .array() or only do in second step?
-                    // didn't work
-                    //auto const to_thr = rv.kc.pks.array() + 2*spont_in;
-                    //
-                    // compiles, but output (over_thr) is 1828x1 (not x17 i want)
-                    //auto const to_thr = rv.kc.pks + 2*spont_in;
-                    // TODO cast to something other than bool, to get sum/mean to work
-                    // w/o compilation warnings? or can i compute sparsity in some way
-                    // that won't trigger those warnings? any other way to count # of
-                    // true values?
-                    // TODO cast to unsigned instead? or that make .mean() harder?
-                    // .sum() still work there?
-                    // TODO get version using to_thr (w/ spont_in added) to
-                    // work. currently getting 1828x1 output. want 1828x17 output
-                    // like i had before.
-                    //
-                    // worked, but might need to offset one or the other by spont_in
-                    // (one way or another, couldn't get sparsity calculation to seem to
-                    // work. not sure if that's just b/c offset or something more
-                    // fundamental)
-                    //auto const over_thr = (rv.kc.pks.array() > rv.kc.thr.array()).cast<double>();
-                    //auto const offset_thr = rv.kc.thr;
-                    //auto const over_thr = (rv.kc.pks.array() > offset_thr.array()).cast<double>();
-                    //over_thr = (rv.kc.pks.array() > rv.kc.thr.array()).cast<double>();
-                    // TODO are these not both double? why getting mixed dtype
-                    // compilation error now? (when assigning into prespecified Matrix,
-                    // at least)
-                    //over_thr = rv.kc.pks.array() > rv.kc.thr.array();
-                    // auto const does actually remove a compilation error from above
-                    // (but now back to needing to cast output of this comparison, in
-                    // order to not have sum op warning)
-                    auto const over_thr = (rv.kc.pks.array() > rv.kc.thr.array()).cast<double>();
-                    //auto const over_thr = (rv.kc.pks.array() > rv.kc.thr.array()).cast<double>();
-                    // TODO delete
-                    // doesn't compile
-                    //over_thr = rv.kc.pks.array() > rv.kc.thr.array();
-                    //
-                    // doesn't compile
-                    //over_thr = (rv.kc.pks.rowwise() - rv.kc.thr);
-                    // why does this also not compile? (b/c thr was also a matrix, even
-                    // though it just has 1 column)
-                    //over_thr = (rv.kc.pks.colwise() - rv.kc.thr);
-                    //
-                    // produces something of shape (1828, 1) instead of (1828, 17)
-                    //over_thr = (rv.kc.pks - rv.kc.thr);
-                    // can direct inequality work w/ columnwise too? no.
-                    // > operator doesn't work w/ colwise()
-                    //over_thr = rv.kc.pks.colwise() > rv.kc.thr.col(0);
-                    check(rv.kc.thr.cols() == 1);
-                    // TODO adapt
-                    //auto const over_thr = Vm.col(t).array() > rv.kc.thr.array();
-                    //
-                    // TODO most idiomatic way to do this? or at least what works?
-                    //
-                    // this works, but would then need to threshold wrt 0 (or something
-                    // else?)
-                    // TODO delete eventually (if assertion that matches array() direct
-                    // matrix vs vector inequality output above passes in all tests)
-                    //thr_diff = (rv.kc.pks.colwise() - rv.kc.thr.col(0));
-                    // i thought this worked at one point, but now getting:
-                    // no match for operator> w/ Matrix and int (oh, the x.isApprox(y)
-                    // error below just shadowed this error)
-                    // (w/o the .array() on thr_diff. also doesn't work w/ array)
-                    //over_thr2 = thr_diff.array() > 0;
-                    // compilation error about mixing numeric types again
-                    //over_thr2 = thr_diff.array() > 0;
-                    // no such compilation error using auto const instead of assigning
-                    // into matrix...
-                    //thr_diff = (rv.kc.pks.colwise() - rv.kc.thr.col(0));
-                    //auto const over_thr2 = (thr_diff.array() > 0).cast<double>();
-
-                    // TODO do i actually need the .array() calls?
-                    //auto const offset_thr = rv.kc.thr.array() - 2*spont_in.array();
-                    auto const offset_thr = rv.kc.thr - 2*spont_in;
-                    //thr_diff = (rv.kc.pks.colwise() - offset_thr.col(0));
-                    //thr_diff = (rv.kc.pks.colwise() - offset_thr.matrix());
-                    // works (compiles), w/ offset_thr def above w/ the 2 array() calls
-                    //thr_diff = (rv.kc.pks.colwise() - offset_thr.matrix().col(0));
-                    check(offset_thr.cols() == 1);
-                    thr_diff = (rv.kc.pks.colwise() - offset_thr.col(0));
-                    auto const over_thr2 = (thr_diff.array() > 0).cast<double>();
-
-                    // https://stackoverflow.com/questions/44738315
-                    // couldn't get to work. trying to figure out scalar type of array,
-                    // to avoid compilation errors.
-                    //rv.log(cat("decltype(over_thr)::Scalar: ", decltype(over_thr)::Scalar));
-                    //rv.log(cat("decltype(over_thr2)::Scalar: ", decltype(over_thr2)::Scalar));
-
-                    //check(over_thr.isApprox(over_thr2));
-                    //
-
-                    // TODO don't need some offset ([2x?] spont_in?) do i?
-
-                    // TODO delete
-                    rv.log("");
-                    rv.log(cat("thr_diff.rows(): ", thr_diff.rows()));
-                    rv.log(cat("thr_diff.cols(): ", thr_diff.cols()));
-                    rv.log(cat("thr_diff.mean(): ", thr_diff.mean()));
-                    rv.log(cat("thr_diff.maxCoeff(): ", thr_diff.maxCoeff()));
-                    rv.log(cat("thr_diff.minCoeff(): ", thr_diff.minCoeff()));
-
-                    // TODO delete
-                    rv.log("");
-                    rv.log(cat("over_thr.rows(): ", over_thr.rows()));
-                    rv.log(cat("over_thr.cols(): ", over_thr.cols()));
-                    // TODO TODO is this causing a segfault (just w/ `auto const` or
-                    // also if size of matrix in def?)?
-                    // (seems any usage of over_thr might be?)
-                    //rv.log(cat("over_thr.colwise().sum(): ", over_thr.colwise().sum()));
-                    //rv.log(cat("over_thr.mean(): ", over_thr.mean()));
-                    //rv.log(cat("over_thr.maxCoeff(): ", over_thr.maxCoeff()));
-                    //rv.log(cat("over_thr.minCoeff(): ", over_thr.minCoeff()));
-                    rv.log("");
-                    rv.log(cat("over_thr2.rows(): ", over_thr2.rows()));
-                    rv.log(cat("over_thr2.cols(): ", over_thr2.cols()));
-                    rv.log(cat("over_thr2.colwise().sum(): ", over_thr2.colwise().sum()));
-                    rv.log(cat("over_thr2.mean(): ", over_thr2.mean()));
-                    rv.log(cat("over_thr2.maxCoeff(): ", over_thr2.maxCoeff()));
-                    rv.log(cat("over_thr2.minCoeff(): ", over_thr2.minCoeff()));
-                    //
-                    // TODO cast before mean to avoid warning about scalar sum op being
-                    // undefined on bool? or just sum and divide by .size(), to be more
-                    // explicit than casting to double? (sum also triggers the warning)
-                    //sp = over_thr.mean();
-                    sp = over_thr2.mean();
-                    // TODO delete
-                    rv.log("");
-                    rv.log(cat("sp: ", sp));
-                    //
-                    check(sp > 0);
-                    check(sp < 1);
-                    // TODO TODO assert sparsity is very close to initial target (or at
-                    // least above 0 and < 1?)?
-
-                    // TODO delete
-                    // TODO first assert spikes is not all 0 here (it will be,
-                    // unless i do another round of sim_KC_layer calls [/similar], after
-                    // setting threshold to chosen value above [down from initial
-                    // value chosen to prevent spiking])? is above
-                    // call set such that it is? can i fix it (disable APL some other
-                    // way?)
-                    //KCmean_st = spikes.rowwise().sum();
-                    //
-                    //KCmean_st = (KCmean_st.array() > 0.0).select(1.0, KCmean_st);
-                    //sp = KCmean_st.mean();
-                    // TODO assert this isn't 0 (is w/ current calculation from
-                    // KCmean_st!)
-                    //
-                    rv.log(cat("calculated initial sparsity (response rate): ", sp));
-                }
-                */
-
                 // always want this step to be at this point in the loop for the
                 // hardcode_initial_sp=true case, so we don't double up at the end of
                 // first pass.
@@ -2056,16 +2062,17 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // TODO TODO any issue w/ generally doing these after first set of
                     // sim_KC_layer calls that have APL enabled (how else will we know
                     // what direction we should go in?)
-                    scale_APLKC_weights(p, rv, sp);
+                    scale_APL_weights(p, rv, sp);
                     rv.kc.tuning_iters++;
                 }
             }
 
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
-            for (unsigned i = 0; i < tlist.size(); i+=p.kc.apltune_subsample) {
+            for (unsigned i=0; i<tlist.size(); i+=p.kc.apltune_subsample) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                    Vm, spikes, nves, inh, Is, claw_sims, bouton_sims
+                    Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
+                    rv.kc.odor_stats[tlist[i]]
                 );
                 // TODO assert this is not true here? was it only because scale
                 // factor was negative here? expect above, but not here, right?
@@ -2086,14 +2093,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
                 // TODO also log this relative diff, if actually any sign there is a
                 // computation mismatch between here and python (is there tho?)
-                // (already doing in scale_APLKC_weights?)
+                // (already doing in scale_APL_weights?)
                 sparsity_not_converged = (
                     abs(sp - p.kc.sp_target) > (p.kc.sp_acc * p.kc.sp_target)
                 );
                 under_max_iters = rv.kc.tuning_iters <= p.kc.max_iters;
 
                 // TODO re-organize loop to not go back to always only calling
-                // scale_APLKC_weights after first call? still think that might require
+                // scale_APL_weights after first call? still think that might require
                 // another set of sim_KC_layer calls though, to evaluate effect w/
                 // initial APL weights... probably not worth it
                 //
@@ -2104,7 +2111,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // this (apparently)? (assume i was testing in
                     // non-hardcode-initial-sparsity case? prob in one of
                     // test_btn_expansion connectome APL cases?)
-                    scale_APLKC_weights(p, rv, sp);
+                    scale_APL_weights(p, rv, sp);
                     rv.kc.tuning_iters++;
                 }
             }
@@ -2120,12 +2127,25 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.tuning_iters--;
         }
     }}
+    // TODO delete
+    rv.log("final:");
+    rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
+    rv.log(cat("rv.kc.wAPLKC.rows(): ", rv.kc.wAPLKC.rows()));
+    //
 
     // TODO delete?
     rv.log(cat("FINAL rv.kc.wAPLKC_scale: ", rv.kc.wAPLKC_scale));
     rv.log(cat("FINAL rv.kc.wKCAPL_scale: ", rv.kc.wKCAPL_scale));
     rv.log(cat("FINAL rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
     rv.log(cat("FINAL rv.kc.wKCAPL mean: ", rv.kc.wKCAPL.mean()));
+    if (p.pn.preset_wAPLPN) {
+        rv.log(cat("FINAL rv.pn.wAPLPN mean: ", rv.pn.wAPLPN.mean()));
+        rv.log(cat("FINAL rv.pn.wAPLPN_scale: ", rv.pn.wAPLPN_scale));
+    }
+    if (p.pn.preset_wPNAPL) {
+        rv.log(cat("FINAL rv.pn.wPNAPL mean: ", rv.pn.wPNAPL.mean()));
+        rv.log(cat("FINAL rv.pn.wPNAPL_scale: ", rv.pn.wPNAPL_scale));
+    }
 
     if (!under_max_iters) {
         // this is just a hack to ensure we also failure in call below, consistent w/
@@ -2170,13 +2190,15 @@ void sim_LN_layer(ModelParams const& p, Matrix const& orn_t, Row& inhA, Row& inh
     double inh_LN = 0.0;
 
     double dinhAdt, dinhBdt, dLNdt;
-    double scaling = double(get_ngloms(p))/double(p.orn.n_physical_gloms);
+    double scaling = double(get_ngloms(p)) / double(p.orn.n_physical_gloms);
     for (unsigned t = 1; t < p.time.steps_all(); t++) {
         dinhAdt = -inhA(t-1) + response(t-1);
         dinhBdt = -inhB(t-1) + response(t-1);
         dLNdt =
             -potential(t-1)
-            +pow(orn_t.col(t-1).mean()*scaling, 3.0)/scaling/2.0*inh_LN;
+            // TODO add parens or otherwise make evaluation order of all the divisions
+            // more clear (left-to-right i assume?)
+            +pow(orn_t.col(t-1).mean()*scaling, 3.0) / scaling / 2.0*inh_LN;
         inhA(t) = inhA(t-1) + dinhAdt*p.time.dt/p.ln.tauGA;
         inhB(t) = inhB(t-1) + dinhBdt*p.time.dt/p.ln.tauGB;
         inh_LN = p.ln.inhsc/(p.ln.inhadd+inhA(t));
@@ -2411,11 +2433,14 @@ void sim_FFAPL_layer(
     }
 }
 
+// TODO how to make last 3 params optional?
 void sim_KC_layer(
     ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, Vector const& ffapl_t,
     Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is,
-    Matrix& claw_sims, Matrix& bouton_sims) {
+    // TODO delete
+    //Matrix& claw_sims, Matrix& bouton_sims, unsigned odor_index) {
+    Matrix& claw_sims, Matrix& bouton_sims, Eigen::VectorXd& odor_stats) {
     /* Args:
      * - inh: APL potential timeseries
      * - Is: KC->APL synapse current (across all KCs) timeseries
@@ -2432,40 +2457,43 @@ void sim_KC_layer(
 
     // TODO just set this automatically (to wPNKC.cols()) if wPNKC.cols() >
     // get_ngloms(p)?
-    if (p.pn.n_total_boutons) {
-        // TODO TODO necessary? or size defined correctly above? try to remove?
-        //bouton_sims.resize(p.pn.n_total_boutons, p.time.steps_all());
-
-        // TODO or init by copying from pn_sims? how to expand by correct # of pns
-        // in each case? start using those ID maps here?
-        // TODO TODO or can we not really copy PN sims, apart from perhaps some
-        // current(?) (/last?) value? all bouton values in future will depend on
-        // activity of all other KCs/boutons, including feedback from APL, right?
+    if (p.pn.n_total_boutons > 0) {
         // TODO TODO TODO should some parameter exist for like a bouton time constant
         // (or moving average window?), something with which to balance effect of APL vs
-        // PN feedforward activity
+        // PN feedforward activity (will i actually want to try something other than
+        // existing time constants for KC<>APL interactions? need to track per-bouton
+        // dynamics then?)
         bouton_sims.setZero();
 
-        // TODO (delete) need to move this bit into the loop over time though i assume?
-        /*
-        // TODO (delete. should be fine) or do in run_KC_sims, where we initially loop
-        // over odors? (any other way to avoid duplicating some of that logic in here?)
-        // (claw_sims currently ignores that issue in two calls in fit_sparseness, and
-        // then also has claw_sims indexed by odor in run_KC_sims [where there is
-        // actually potential to save the sims])
-        for (unsigned i=0; i < rv.pn.sims.size(); i++) {
-            std::vector<unsigned> btn_indices = rv.pn.pn_to_Btns[i];
-            for (const unsigned& btn_idx : btn_indices) {
-                // TODO will i need to go odor by odor or no? (assuming not? why does
-                // fit_sparseness end up needing that? just so it can fit on only a
-                // subset of odors, if requested?)
-                // TODO this assignment copies by default, right? need .array() or
-                // anything?
-                bouton_sims[btn_idx] = pn_t[i];
-            }
-        }
-        */
+        // TODO or just don't use if not preset, and leave un-init'd here?
+        // TODO why was i getting error about const if doing this? do we never do
+        // something similar w/ APLKC weights? shouldn't we get similar error there?
+        //if (!p.pn.preset_wAPLPN) {
+        //    rv.pn.wAPLPN.setZero();
+        //}
+        //if (!p.pn.preset_wPNAPL) {
+        //    rv.pn.wPNAPL.setZero();
+        //}
+    } else {
+        check(!p.pn.preset_wAPLPN);
+        check(!p.pn.preset_wPNAPL);
     }
+
+    // TODO delete. for debugging
+    // TODO TODO also store time points these are at? (esp if e.g. averaging many spont
+    // inputs produces higher max than averaging peak PN inputs?)
+    double max_kc_apl_drive = 0;
+    double max_bouton_apl_drive = 0;
+    double total_kc_apl_drive = 0;
+    double total_bouton_apl_drive = 0;
+    //
+    unsigned stim_start = p.time.start_step() + unsigned(
+        (p.time.stim.start-p.time.start)/(p.time.dt)
+    );
+    unsigned stim_end = p.time.start_step() + unsigned(
+        (p.time.stim.end-p.time.start)/(p.time.dt)
+    );
+    //
 
     float use_ffapl = float(!p.kc.ignore_ffapl);
     if (p.kc.wPNKC_one_row_per_claw) {
@@ -2666,6 +2694,19 @@ void sim_KC_layer(
                     bouton_sims
                 );
 
+                // TODO TODO TODO how to calculate PN<>APL interactions?
+                // should there be a separate vector storing inhibition timecourses at
+                // each bouton, with each value ramping according to APL activity and
+                // weights at each timestep, and then all decaying exponentially maybe?
+                //
+                // should it all be lumped into bouton_sims, or is there reason to store
+                // a separate value?
+                //
+                //
+                // TODO TODO TODO can i essentially copy the APL>KC handling?
+                // TODO or maybe there's even something about that handling i'd also
+                // like to try changing now?
+
                 // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
                 Eigen::VectorXd kc_activity = (
                     nves.col(t-1).array() * spikes.col(t-1).array()
@@ -2675,7 +2716,27 @@ void sim_KC_layer(
                 // here, if p.kc.N >= n_claws (prob best to err, unless some flag set
                 // explicitly allowing?)
 
+                if (p.pn.preset_wAPLPN) {
+                    // TODO refactor to share w/ wAPLKC below?
+                    // TODO replace w/ -= syntax?
+                    bouton_sims.col(t) = bouton_sims.col(t) - rv.pn.wAPLPN * inh(t-1);
+                    bouton_sims.col(t) = bouton_sims.col(t);
+                    //
+                    // TODO refactor to share w/ wAPLKC below
+                    auto const bouton_sims_lt0 = bouton_sims.col(t).array() < 0;
+                    // replace per-bouton sims to min of 0
+                    bouton_sims.col(t) = bouton_sims_lt0.select(0.0,bouton_sims.col(t));
+                    // TODO make conditional (/delete)
+                    check(bouton_sims.col(t).minCoeff() >= 0);
+                    //
+                }
+
+                // TODO replace this separate vector w/ claw_sims.col(t)?
+                // (should be same, but maybe confirm w/ repro test? overkill...)
                 Eigen::VectorXd claw_drive_with_inh = (
+                    // TODO update comment wording. inh(t-1) is a scalar, no?
+                    // (still accurate that LHS and RHS of `-` are same shape...)
+                    //
                     // all of these have 1 col and #-claws rows (e.g. 9472),
                     // as does claw_sims.col(t)
                     claw_drive - rv.kc.wAPLKC * inh(t-1)
@@ -2697,58 +2758,106 @@ void sim_KC_layer(
                     check(claw_sims.col(t).minCoeff() >= 0);
                 }
 
-                // TODO move checks to top of loop (to only run once) (/ make
-                // conditional)
-                // TODO refactor (at least) this squeezing + dot code?
-                check(rv.kc.wKCAPL.rows() == 1);
-                // TODO this always true, or can it be a scalar essentially?
-                check(rv.kc.wKCAPL.cols() > 1);
-                double claw_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
-
-                // TODO delete (after verifying it passes -> removing .col(0) above)
-                // TODO modify so we assert RHS has only one element, and then get
-                // that element and check equal to LHS. currently not compiling b/c RHS
-                // could be non-scalar eigen type (and may indeed have >1 element...)
-                // ...
-                //   libolfsysm/src/olfsysm.cpp:1866:17:   required from here
-                //  libolfsysm/include/Eigen/src/Core/util/StaticAssert.h:140:29: error: static assertion failed: YOU_TRIED_CALLING_A_VECTOR_METHOD_ON_A_MATRIX
-                //check(claw_apl_drive == rv.kc.wKCAPL.dot(claw_sims.col(t)));
-                // still getting same error w/ these two lines
-                //double claw_apl_drive2 = rv.kc.wKCAPL.dot(claw_sims.col(t));
-                //check(claw_apl_drive == claw_apl_drive2);
-                //
-
-                // TODO TODO what is this 0.2 doing here? add as a parameter (/delete)?
-                // TODO TODO this change behavior of my
-                // allow_net_inh_per_claw=False path? add test that would catch it!
-                claw_apl_drive = claw_apl_drive * 0.2;
-
                 double dIsdt;
                 if (!p.kc.pn_claw_to_APL) {
                     //double kc_apl_drive = sum_across_claws_within_each_kc(p, rv,
                     //    rv.kc.wKCAPL * kc_activity[kc]
                     //);
-                    // TODO TODO probably have fn ouput vector of length # KCs, and then
-                    // sum that to get scalar (may not need template type after all?)
+                    // TODO TODO replace w/ duplicate_vals_for_each_subunit_id and
+                    // sum_across_claws_within_each_kc (need to support Eigen Vector in
+                    // duplicate_..., if doesn't already [can indexing be same as a
+                    // std::vector?]?)
                     double kc_apl_drive = 0.0;
                     for (unsigned claw=0; claw<n_claws; ++claw) {
                         unsigned kc = rv.kc.claw_to_kc[claw];
-                        // TODO TODO need to pass a fn to sum_across.. to make this
+                        // TODO need to pass a fn to sum_across.. to make this
                         // work, or can i precompute and pass something? how to expand
                         // kc_activity to # claws? separate fn for that?
                         kc_apl_drive += rv.kc.wKCAPL(claw) * kc_activity[kc];
                     }
+                    double bouton_apl_drive = 0.0;
+                    if (p.pn.preset_wPNAPL) {
+                        bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
+                    }
+                    // TODO delete. for debugging.
+                    if (t >= stim_start && t <= stim_end) {
+                        if (kc_apl_drive > max_kc_apl_drive) {
+                            max_kc_apl_drive = kc_apl_drive;
+                        }
+                        total_kc_apl_drive += kc_apl_drive;
+
+                        if (p.pn.preset_wPNAPL) {
+                            if (bouton_apl_drive > max_bouton_apl_drive) {
+                                max_bouton_apl_drive = bouton_apl_drive;
+                            }
+                            total_bouton_apl_drive += bouton_apl_drive;
+                        }
+                    }
+                    //
+
+                    // TODO TODO TODO how to scale this relative to above tho? use
+                    // same scale factor from loop below? may first need to at least
+                    // start by checking that produces similar tuning scale outputs to
+                    // scale factor here?
+                    // TODO TODO if i end up trying to hardcode these, also try
+                    // hardcoding during thr tuning step?
+                    if (p.pn.preset_wPNAPL) {
+                        // TODO rename kc_apl_drive, now that it's also dealing w/ PN
+                        // input (see below too)?
+                        kc_apl_drive += 0.2 * bouton_apl_drive;
+                    }
+
+                    // TODO delete
+                    //if (t == p.time.start_step() + 1 && omp_get_thread_num() == 0) {
+                    //    rv.log(cat("kc_apl_drive (+ boutons): ", kc_apl_drive));
+                    //}
+                    //
+
                     // APL activity depends on KC spiking
                     dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
                 } else {
+                    double claw_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
+                    // TODO delete
+                    //if (t == p.time.start_step() + 1 && omp_get_thread_num() == 0) {
+                    //    rv.log(cat("claw_apl_drive (claw only): ", claw_apl_drive));
+                    //}
+                    //
+                    if (p.pn.preset_wPNAPL) {
+                        // TODO rename claw_apl_drive, now that it's also dealing w/ PN
+                        // input (have only one apl_drive across this else and if
+                        // above?)
+                        claw_apl_drive += rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
+                        // TODO TODO also log this one into odor_stats, same as
+                        // kc_apl_drive (just rename both to apl_drive or kc_apl_drive?)
+                    }
+
+                    // TODO delete
+                    //if (t == p.time.start_step() + 1 && omp_get_thread_num() == 0) {
+                    //    rv.log(cat("claw_apl_drive (+ boutons): ", claw_apl_drive));
+                    //}
+                    //
+                    // TODO TODO what is this 0.2 doing here? add as a parameter
+                    // (/delete)?  (or at least move into dIsdt calculation below, to be
+                    // consistent w/ handling of other case? or need it for other uses
+                    // of claw_apl_drive?)
+                    // TODO (what is concern really? delete? isn't behavior already
+                    // diff, esp w/ tuning?) this change behavior of my
+                    // allow_net_inh_per_claw=False path? add test that would catch it!
+                    claw_apl_drive = claw_apl_drive * 0.2;
+
                     // APL activity does NOT depend on KC spiking. APL recieves direct
                     // inputs from the claws, including what might be subthreshold.
+                    //
+                    // TODO some reason we shouldn't just use the same 1e4 scale factor
+                    // in both cases, instead of just in condition above?
                     //
                     // TODO need to also add this branch for apl_coup_const !=
                     // -1 case above? tianpei ever implement for that case?
                     dIsdt = -Is(t-1) + claw_apl_drive;
                 }
 
+                // TODO also want to include a term for PN<>APL stuff here?
+                // (probably fine just in dIsdt above?)
                 double dinhdt = -inh(t-1) + Is(t-1);
 
                 // TODO factor into a fn to sum over claws? (something w/ generic types
@@ -2768,8 +2877,18 @@ void sim_KC_layer(
 
                 Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
                 inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
+                // TODO TODO rename tau_apl2kc (back to what matt had it originally? i
+                // something more meaningful?), now that it might also be shared for
+                // PN<>APL calculation? or do i want a separate tau there? prob not?
+                // would that probably effectively need a separate APL? (or separate
+                // quantity tracked per bouton instead of 1 scalar globally? that even
+                // make sense, or any reason for complexity [vs 1 APL scalar multiplied
+                // by weights]?
                 Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
 
+                // TODO only even calculate this if certain conditions met? it's not
+                // used typoically, right? (or at least, effectively? is that just b/c
+                // it's all 1s? and why is that)?
                 nves.col(t) = nves.col(t-1);
                 nves.col(t) += (p.time.dt *
                     ((1.0 - nves.col(t-1).array()).matrix() / p.kc.tau_r) -
@@ -2777,17 +2896,19 @@ void sim_KC_layer(
                      nves.col(t-1).array()).matrix()
                 );
 
+                // TODO <= 0 for consistency?
                 if (p.kc.n_claws_active_to_spike < 0) {
                     //auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-                    // TODO TODO fix: (same issue if Row instead of Column)
+                    // TODO fix: (same issue if Row instead of Column)
                     // libolfsysm/include/Eigen/src/Core/util/XprHelper.h:816:96: error:
                     // static assertion failed:
                     // YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY
                     //thr_comp = Vm.col(t).array() > rv.kc.thr.array();
 
-                    // TODO TODO TODO this solution also work in newer instance of
+                    // TODO this solution also work in newer instance of
                     // similar issue i'm having in fit_sparseness? or already tried this
-                    // code there?
+                    // code there? (have something working there, but would be good to
+                    // check it's consistent if it can be)
                     auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
                     // TODO de-dupe after fixing
                     // either go to 1 or _stay_ at 0.
@@ -2841,12 +2962,12 @@ void sim_KC_layer(
             Eigen::VectorXd kc_activity =
                 (nves.col(t-1).array() * spikes.col(t-1).array()).matrix();
 
+            // TODO doc if bouton_sims isn't used here
             Eigen::VectorXd kc_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t, bouton_sims);
 
-            // TODO move checks to top of loop (to only run once) (/ make conditional)
-            check(rv.kc.wKCAPL.rows() == 1);
-            // TODO this always true, or can it be a scalar essentially?
-            check(rv.kc.wKCAPL.cols() > 1);
+            // TODO delete. these checks should already be run in check_APL_weights
+            //check(rv.kc.wKCAPL.rows() == 1);
+            //check(rv.kc.wKCAPL.cols() > 1);
             const double kc_apl_drive = rv.kc.wKCAPL.col(0).dot(kc_activity);
             // TODO update all defs so wKCAPL is recognized as a vector at compile time?
             // currently this won't compile because of that.
@@ -2881,24 +3002,52 @@ void sim_KC_layer(
     }
     // TODO TODO assert nves is all 1, if ves_p == 0 (which it should be)?
 
-    // TODO TODO TODO even if it seems true that inh/Is are all 0 on the first calls,
-    // when picking threshold: *why* are they 0 there, when it doesnt seem like i was
-    // always properly setting wAPLKC/wKCAPL to 0 for those calls [in case where
-    // preset_*=true, i.e. use_connectome_APL_weights=True in python fit_mb_model]?
-    // (is there something else that changed across the two calls in fit_sparseness?)
+    // TODO delete
+    // TODO only print these on final call (after tuning)? need to add a flag to
+    // indicate tuning is done?
+    unsigned n_odor_timepoints = unsigned(
+        (p.time.stim.end-p.time.stim.start)/p.time.dt
+    );
+    // TODO any issue to divide by unsigned? should i use double instead?
+    double avg_kc_apl_drive = total_kc_apl_drive / n_odor_timepoints;
+    double avg_bouton_apl_drive = total_bouton_apl_drive / n_odor_timepoints;
     // TODO delete
     /*
     rv.log(cat(
-        "rv.kc.wAPLKC.isZero(): ", rv.kc.wAPLKC.isZero(),
-        " (rv.kc.wAPLKC.array() == 0).all(): ", (rv.kc.wAPLKC.array() == 0.0).all(),
-        "\nrv.kc.wKCAPL.isZero(): ", rv.kc.wKCAPL.isZero(),
-        " (rv.kc.wKCAPL.array() == 0).all(): ", (rv.kc.wKCAPL.array() == 0.0).all(),
-        "\ninh.isZero(): ", inh.isZero(),
-        " (inh.array() == 0.0).all(): ", (inh.array() == 0.0).all(),
-        "\nIs.isZero(): ", Is.isZero(),
-        " (Is.array() == 0.0).all(): ", (Is.array() == 0.0).all()
+        // TODO (delete?) thread num working here? (yes)
+        "t", omp_get_thread_num(),
+
+        // TODO delete
+        //"odor=", odor_index,
+
+        // TODO TODO TODO is is something other than the max i care about? integral?
+        // (compare w/ sum below)
+        // TODO TODO make these available in rv variables, for debugging tuning?
+        // (how to do w/ multitthreaded code tho??? since these currently get printed
+        // once per thread, but want one number)
+        " max_kc_apl_drive: ", max_kc_apl_drive,
+        " max_bouton_apl_drive: ", max_bouton_apl_drive,
+        // TODO divide by # timepoints in stim window, for average?
+        //" total_kc_apl_drive: ", total_kc_apl_drive,
+        //" total_bouton_apl_drive: ", total_bouton_apl_drive,
+        " avg_kc_apl_drive: ", avg_kc_apl_drive,
+        " avg_bouton_apl_drive: ", avg_bouton_apl_drive
     ));
     */
+
+    // TODO nicer init format? what are options?
+    odor_stats(0) = max_kc_apl_drive;
+    odor_stats(1) = avg_kc_apl_drive;
+    odor_stats(2) = max_bouton_apl_drive;
+    odor_stats(3) = avg_bouton_apl_drive;
+
+    // TODO delete
+    // TODO TODO work if if i pass in the array elements instead? seems may not compile
+    // as-is... (setting read only memory)
+    //rv.kc.max_kc_apl_drive[odor_index] = max_kc_apl_drive;
+    //rv.kc.avg_kc_apl_drive[odor_index] = avg_kc_apl_drive;
+    //rv.kc.max_bouton_apl_drive[odor_index] = max_bouton_apl_drive;
+    //rv.kc.avg_bouton_apl_drive[odor_index] = avg_bouton_apl_drive;
     //
 }
 
@@ -2969,11 +3118,25 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         rv.log("running single threaded only");
     #endif
 
+    // TODO use this in other places i'm currently defining # claws some other
+    // way?
+    // TODO move this def outside of the `if (regen) { ... }` conditional?
+    rv.kc.nclaws_total = rv.kc.claw_to_kc.size();
+
+    // TODO delete (+ replace all usage of one with the other. prob just delete
+    // rv.kc.nclaws_total)
+    check(rv.kc.nclaws_total == p.kc.kc_ids.size());
+    //
+
     // TODO delete
-    rv.log(cat("p.pn.n_total_boutons=", p.pn.n_total_boutons));
-    rv.log(cat("p.pn.preset_Btn=", p.pn.preset_Btn));
+    rv.log(cat("p.kc.preset_wAPLKC=", p.kc.preset_wAPLKC));
+    rv.log(cat("p.kc.wPNKC_one_row_per_claw=", p.kc.wPNKC_one_row_per_claw));
+    rv.log(cat("get_ngloms(p)=", get_ngloms(p)));
+    rv.log(cat("p.kc.N=", p.kc.N));
     rv.log(cat("rv.kc.wPNKC.rows()=", rv.kc.wPNKC.rows()));
     rv.log(cat("rv.kc.wPNKC.cols()=", rv.kc.wPNKC.cols()));
+    rv.log(cat("p.pn.n_total_boutons=", p.pn.n_total_boutons));
+    rv.log(cat("rv.kc.nclaws_total=", rv.kc.nclaws_total));
     rv.log("");
     //
 
@@ -3009,17 +3172,6 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     if (regen) {
         if (p.kc.wPNKC_one_row_per_claw) {
-            // TODO use this in other places i'm currently defining # claws some other
-            // way?
-            // TODO move this def outside of the `if (regen) { ... }` conditional?
-            rv.kc.nclaws_total = rv.kc.claw_to_kc.size();
-            // TODO accurate? delete
-            rv.log(cat("rv.kc.nclaws_total: ", rv.kc.nclaws_total));
-
-            // TODO delete (+ replace all usage of one with the other. prob just delete
-            // rv.kc.nclaws_total)
-            check(rv.kc.nclaws_total == p.kc.kc_ids.size());
-            //
 
             // would almost certainly be a mistake. unlikely to ever want to test
             // 1-claw-per-KC (or some other case where some KCs have no claws, and total
@@ -3119,7 +3271,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
             sim_KC_layer(
                 p, rv, rv.pn.sims[i], rv.ffapl.vm_sims[i], Vm_link, spikes_link,
-                nves_link, inh_link, Is_link, claw_link, bouton_link
+                nves_link, inh_link, Is_link, claw_link, bouton_link,
+                rv.kc.odor_stats[i]
             );
             respcol = spikes_link.rowwise().sum();
             respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);

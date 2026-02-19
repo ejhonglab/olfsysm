@@ -65,11 +65,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("inhsc", &ModelParams::PN::inhsc)
         .def_readwrite("inhadd", &ModelParams::PN::inhadd)
         .def_readwrite("noise", &ModelParams::PN::noise)
-        .def_readwrite("apl_taum", &ModelParams::PN::apl_taum)
-        .def_readwrite("tau_apl2pn", &ModelParams::PN::tau_apl2pn)
         .def_readwrite("n_total_boutons", &ModelParams::PN::n_total_boutons)
-        .def_readwrite("pn_apl_tune", &ModelParams::PN::pn_apl_tune)
-        .def_readwrite("preset_Btn", &ModelParams::PN::preset_Btn)
         .def_readwrite("preset_wAPLPN", &ModelParams::PN::preset_wAPLPN)
         .def_readwrite("preset_wPNAPL", &ModelParams::PN::preset_wPNAPL);
 
@@ -102,7 +98,6 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tune_apl_weights", &ModelParams::KC::tune_apl_weights)
         .def_readwrite("preset_wAPLKC", &ModelParams::KC::preset_wAPLKC)
         .def_readwrite("preset_wKCAPL", &ModelParams::KC::preset_wKCAPL)
-        .def_readwrite("zero_wAPLKC", &ModelParams::KC::zero_wAPLKC)
         .def_readwrite("pn_claw_to_APL", &ModelParams::KC::pn_claw_to_APL)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
@@ -157,7 +152,8 @@ PYBIND11_MODULE(olfsysm, m) {
     // TODO also expose 'disable'? cause problems w/ things writing to same file
     // sequentially if not?
     py::class_<Logger>(m, "RVLogger")
-        .def("redirect", py::overload_cast<const std::string &>(&Logger::redirect));
+        .def("redirect", py::overload_cast<const std::string &>(&Logger::redirect))
+        .def("tee", &Logger::tee);
 
     py::class_<RunVars::ORN>(m, "RVORN")
         .def_readwrite("sims", &RunVars::ORN::sims);
@@ -177,6 +173,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("Btn_to_pn", &RunVars::PN::Btn_to_pn)
         .def_readwrite("wAPLPN", &RunVars::PN::wAPLPN)
         .def_readwrite("wPNAPL", &RunVars::PN::wPNAPL)
+        .def_readwrite("wAPLPN_scale", &RunVars::PN::wAPLPN_scale)
+        .def_readwrite("wPNAPL_scale", &RunVars::PN::wPNAPL_scale)
         .def_readwrite("pn_sims", &RunVars::PN::sims)
         .def_readwrite("bouton_sims", &RunVars::PN::bouton_sims);
 
@@ -206,6 +204,14 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
         .def_readwrite("compartment_to_claws", &RunVars::KC::compartment_to_claws)
+        // TODO delete? for debugging
+        .def_readwrite("odor_stats", &RunVars::KC::odor_stats)
+        // TODO delete
+        //.def_readwrite("max_kc_apl_drive", &RunVars::KC::max_kc_apl_drive)
+        //.def_readwrite("avg_kc_apl_drive", &RunVars::KC::avg_kc_apl_drive)
+        //.def_readwrite("max_bouton_apl_drive", &RunVars::KC::max_bouton_apl_drive)
+        //.def_readwrite("avg_bouton_apl_drive", &RunVars::KC::avg_bouton_apl_drive)
+        //
         ;
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(
