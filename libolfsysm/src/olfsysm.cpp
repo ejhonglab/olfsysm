@@ -39,6 +39,8 @@
 /* Include cnpy.h only if we we have that .h file available (and referenced properly in
  * compilation). Optional library added as a git submodule, for writing dynamics
  * directly to .npy files for reading in Python. See README. */
+// TODO TODO set this in .hpp, so i can also conditionally use in binding code
+// (or replace my own define w/  using has_include everywhere)
 #if defined __has_include
 # if __has_include ("cnpy.h")
 #  define HAVE_CNPY
@@ -318,108 +320,6 @@ void remove_all_pretime(ModelParams const& p, RunVars& r);
 
 /* Get the list of odors that should be simulated (non-tuning). */
 std::vector<unsigned> get_simlist(ModelParams const& p);
-
-// TODO nicer solution to only conditionally providing this, besides the processor
-// defines to exclude this code?
-#ifdef HAVE_CNPY
-// TODO TODO try to adapt to something that takes a std::vector<Matrix> and writes as
-// one .npy file (or at least a fn to handle those, even if across multiple files. we
-// typically have a list of Matrices, one per odor) (or takes an Eigen tensor and does
-// the same, but we don't actually use those here)
-// TODO test this first?
-//
-// TODO use Matrix instead of Eigen::MatrixXd?
-//
-// adapting some solutions in https://github.com/rogersce/cnpy/issues/56
-namespace np {
-    using namespace Eigen;
-
-    // NOTE: using template like this seems to only work within a namespace like this
-    //template <typename Derived>
-    //void to_npy(const MatrixBase<Derived> &mat, std::string fname) {
-    // this didn't work. led to many errors about failed template argument
-    //void to_npy(const Matrix<Derived> &mat, std::string fname) {
-    // also didn't work.
-    //void to_npy(const MatrixXd<Derived> &mat, std::string fname) {
-    // also didn't work.
-    //void to_npy(const Eigen::Matrix &mat, std::string fname) {
-    void to_npy(const Eigen::MatrixXd &mat, std::string fname) {
-
-        // TODO need this code to handle non-Matrix stuff (everything besides `else`
-        // contents)? (well, currently works as commented)
-        /*
-        int rows = mat.rows();
-        int cols = mat.cols();
-        // Vector case
-        if (cols == 1) {
-            // copy to std::vector
-            std::vector<typename Derived::Scalar> data(rows);
-            for (int i = 0; i < rows; i++) {
-                data[i] = mat(i);
-            }
-            // save
-            cnpy::npy_save(fname, &data[0], {(size_t)rows}, "w");
-            return;
-        } else {
-
-            // TODO can i delete? work even w/ this?
-            Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic> tmat = mat.transpose();
-            // TODO TODO need to swap rows/cols for one or both of calls below?
-            Map<const Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic>> out(
-                tmat.data(), tmat.rows(), tmat.cols()
-                //mat.data(), mat.rows(), mat.cols()
-            );
-            // save to file
-            // TODO restore?
-            //cnpy::npy_save(fname, out.data(), {(size_t)mat.cols(), (size_t)mat.rows()},
-            // TODO need?
-            cnpy::npy_save(fname, out.data(), {(size_t)tmat.cols(), (size_t)tmat.rows()},
-                "w"
-            );
-
-        }
-        */
-
-        // NOTE: putting below inside the else statement (w/ same `if` code as from orig
-        // answer) did not fix below. did not try w/ transposing first yet...
-
-        // TODO can i delete? work even w/ this? (well, does compile. and does without)
-        //Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic> tmat = mat.transpose();
-
-        // TODO TODO need to swap rows/cols for one (or both?) of calls below?
-        // (assuming no transpose above. does that even help? one GH comment was saying
-        // it alone wouldn't deal w/ row vs col -major order)
-        // Need to reference Matrix as Eigen::Matrix, b/c of Matrix def in olfsysm.hpp.
-        // Assuming input is ColMajor order (which I believe is default for Eigen).
-        //Map<const Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic, RowMajor>> out(
-        // TODO is there something generic i can do other than Derived::Scalar? double
-        // always ok? some way i can leave that part blank?
-        Map<const Eigen::Matrix<double, Dynamic, Dynamic, RowMajor>> out(
-            //tmat.data(), tmat.rows(), tmat.cols()
-            // TODO TODO how to fix:
-            //   libolfsysm/src/olfsysm.cpp: In instantiation of ‘void np::to_npy(const
-            //   Eigen::MatrixBase<Derived>&, std::string) [with Derived =
-            //   Eigen::Matrix<double, -1, -1>; std::string =
-            //   std::__cxx11::basic_string<char>]’:
-            //  libolfsysm/src/olfsysm.cpp:2618:49:   required from here
-            //  libolfsysm/src/olfsysm.cpp:335:17: error: ‘const class
-            //  Eigen::MatrixBase<Eigen::Matrix<double, -1, -1> >’ has no member named
-            //  ‘data’ 335 |             mat.data(), mat.rows(), mat.cols()
-            mat.data(), mat.rows(), mat.cols()
-        );
-        // TODO TODO TODO are there other cnpy calls i can use, to write the size
-        // separately, then write the matrices one-by-one? i assume that's essentially
-        // the storage order for 3-tensors?
-        // TODO need?
-        //cnpy::npy_save(fname, out.data(), {(size_t)tmat.cols(), (size_t)tmat.rows()},
-        // TODO restore?
-        cnpy::npy_save(fname, out.data(), {(size_t)mat.rows(), (size_t)mat.cols()},
-            "w"
-        );
-
-    }
-}
-#endif
 
 /*******************************************************************************
 ********************************************************************************
@@ -3419,6 +3319,117 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
     }
 }
 
+std::vector<unsigned> get_simlist(ModelParams const& p) {
+    if (p.sim_only.empty()) {
+        std::vector<unsigned> ret(get_nodors(p));
+        std::iota(std::begin(ret), std::end(ret), 0);
+        return ret;
+    } else { // Corrected: Use curly braces { } for the else block
+        return p.sim_only;
+    }
+}
+
+// TODO nicer solution to only conditionally providing this, besides the processor
+// defines to exclude this code?
+#ifdef HAVE_CNPY
+// TODO TODO try to adapt to something that takes a std::vector<Matrix> and writes as
+// one .npy file (or at least a fn to handle those, even if across multiple files. we
+// typically have a list of Matrices, one per odor) (or takes an Eigen tensor and does
+// the same, but we don't actually use those here)
+// TODO test this first?
+//
+// TODO use Matrix instead of Eigen::MatrixXd?
+//
+// adapting some solutions in https://github.com/rogersce/cnpy/issues/56
+namespace np {
+    using namespace Eigen;
+
+    // NOTE: using template like this seems to only work within a namespace like this
+    //template <typename Derived>
+    //void to_npy(const MatrixBase<Derived> &mat, std::string fname) {
+    // this didn't work. led to many errors about failed template argument
+    //void to_npy(const Matrix<Derived> &mat, std::string fname) {
+    // also didn't work.
+    //void to_npy(const MatrixXd<Derived> &mat, std::string fname) {
+    // also didn't work.
+    //void to_npy(const Eigen::Matrix &mat, std::string fname) {
+    void to_npy(const Eigen::MatrixXd &mat, std::string fname) {
+
+        // TODO need this code to handle non-Matrix stuff (everything besides `else`
+        // contents)? (well, currently works as commented)
+        /*
+        int rows = mat.rows();
+        int cols = mat.cols();
+        // Vector case
+        if (cols == 1) {
+            // copy to std::vector
+            std::vector<typename Derived::Scalar> data(rows);
+            for (int i = 0; i < rows; i++) {
+                data[i] = mat(i);
+            }
+            // save
+            cnpy::npy_save(fname, &data[0], {(size_t)rows}, "w");
+            return;
+        } else {
+
+            // TODO can i delete? work even w/ this?
+            Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic> tmat = mat.transpose();
+            // TODO TODO need to swap rows/cols for one or both of calls below?
+            Map<const Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic>> out(
+                tmat.data(), tmat.rows(), tmat.cols()
+                //mat.data(), mat.rows(), mat.cols()
+            );
+            // save to file
+            // TODO restore?
+            //cnpy::npy_save(fname, out.data(), {(size_t)mat.cols(), (size_t)mat.rows()},
+            // TODO need?
+            cnpy::npy_save(fname, out.data(), {(size_t)tmat.cols(), (size_t)tmat.rows()},
+                "w"
+            );
+
+        }
+        */
+
+        // NOTE: putting below inside the else statement (w/ same `if` code as from orig
+        // answer) did not fix below. did not try w/ transposing first yet...
+
+        // TODO can i delete? work even w/ this? (well, does compile. and does without)
+        //Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic> tmat = mat.transpose();
+
+        // TODO TODO need to swap rows/cols for one (or both?) of calls below?
+        // (assuming no transpose above. does that even help? one GH comment was saying
+        // it alone wouldn't deal w/ row vs col -major order)
+        // Need to reference Matrix as Eigen::Matrix, b/c of Matrix def in olfsysm.hpp.
+        // Assuming input is ColMajor order (which I believe is default for Eigen).
+        //Map<const Eigen::Matrix<typename Derived::Scalar, Dynamic, Dynamic, RowMajor>> out(
+        // TODO is there something generic i can do other than Derived::Scalar? double
+        // always ok? some way i can leave that part blank?
+        Map<const Eigen::Matrix<double, Dynamic, Dynamic, RowMajor>> out(
+            //tmat.data(), tmat.rows(), tmat.cols()
+            // TODO TODO how to fix:
+            //   libolfsysm/src/olfsysm.cpp: In instantiation of ‘void np::to_npy(const
+            //   Eigen::MatrixBase<Derived>&, std::string) [with Derived =
+            //   Eigen::Matrix<double, -1, -1>; std::string =
+            //   std::__cxx11::basic_string<char>]’:
+            //  libolfsysm/src/olfsysm.cpp:2618:49:   required from here
+            //  libolfsysm/src/olfsysm.cpp:335:17: error: ‘const class
+            //  Eigen::MatrixBase<Eigen::Matrix<double, -1, -1> >’ has no member named
+            //  ‘data’ 335 |             mat.data(), mat.rows(), mat.cols()
+            mat.data(), mat.rows(), mat.cols()
+        );
+        // TODO TODO TODO are there other cnpy calls i can use, to write the size
+        // separately, then write the matrices one-by-one? i assume that's essentially
+        // the storage order for 3-tensors?
+        // TODO need?
+        //cnpy::npy_save(fname, out.data(), {(size_t)tmat.cols(), (size_t)tmat.rows()},
+        // TODO restore?
+        cnpy::npy_save(fname, out.data(), {(size_t)mat.rows(), (size_t)mat.cols()},
+            "w"
+        );
+
+    }
+}
+
 // TODO TODO implement (along w/ change to np::to_npy fn to support std::vector<Matrix>)
 // saving of all into one file per variable, rather than one file per variable per odor
 // TODO proper way to pass directory in C++? will assume for now directory already
@@ -3457,14 +3468,4 @@ void save_odor_dynamics(ModelParams const& p, RunVars& r, std::string path, unsi
         np::to_npy(r.kc.claw_sims[i], path + "/claw_sims");
     }
 }
-
-std::vector<unsigned> get_simlist(ModelParams const& p) {
-    if (p.sim_only.empty()) {
-        std::vector<unsigned> ret(get_nodors(p));
-        std::iota(std::begin(ret), std::end(ret), 0);
-        return ret;
-    } else { // Corrected: Use curly braces { } for the else block
-        return p.sim_only;
-    }
-}
-
+#endif
