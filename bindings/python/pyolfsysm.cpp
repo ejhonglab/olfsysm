@@ -261,6 +261,11 @@ PYBIND11_MODULE(olfsysm, m) {
         Connectivity regeneration can be turned off by passing regen=false.
     )pbdoc");
 
+    m.def("remove_all_pretime", &remove_all_pretime, R"pbdoc(
+        Frees up memory for all dynamics saved, by deleting all values between
+        time.pre_start and time.start (all before odor onset at time.stim.start).
+    )pbdoc");
+
 #ifdef VERSION_INFO
     m.attr("__version__") = VERSION_INFO;
 #else

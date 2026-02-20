@@ -640,4 +640,7 @@ void run_FFAPL_sims(ModelParams const& p, RunVars& rv);
  * Connectivity regeneration can be turned off by passing regen=false. */
 void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen=true);
 
+/* Frees memory for all dynamics from time.pre_start to time.start (deleting values) */
+void remove_all_pretime(ModelParams const& p, RunVars& r);
+
 #endif

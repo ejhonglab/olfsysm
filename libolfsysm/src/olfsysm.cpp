@@ -33,9 +33,6 @@
    #define omp_get_thread_num() 0
 #endif
 
-// TODO delete
-//#include "teebuf.h"
-
 /* Include cnpy.h only if we we have that .h file available (and referenced properly in
  * compilation). Optional library added as a git submodule, for writing dynamics
  * directly to .npy files for reading in Python. See README. */
@@ -73,19 +70,10 @@ void Logger::redirect(std::string const& path) {
 void Logger::tee() {
     std::lock_guard<std::mutex> lock(mtx);
     if (!fout) return;
-
     _tee = true;
-
-    // TODO delete all this (+ teebuf.h). don't need something this complicated.
-    // TODO need to define a teebuf member for Logger in header?
-    // see include/teebuf.h
-    //teebuf tb(fout.rdbuf(), std::cout.rdbuf());
-    //fout.rdbuf(&tb);
 }
 void Logger::disable() {
     std::lock_guard<std::mutex> lock(mtx);
-    // TODO also need to handle any teed stuff in here (or doesn't matter b/c would just
-    // be stdout anyway?)
     fout.close();
 }
 
@@ -3254,19 +3242,19 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
     if (p.kc.save_vm_sims) {
         check(r.kc.vm_sims.size() == n_odors);
     }
-    if (p.kc.save_spike_recordings == n_odors) {
+    if (p.kc.save_spike_recordings) {
         check(r.kc.spike_recordings.size() == n_odors);
     }
-    if (p.kc.save_nves_sims == n_odors) {
+    if (p.kc.save_nves_sims) {
         check(r.kc.nves_sims.size() == n_odors);
     }
-    if (p.kc.save_inh_sims == n_odors) {
+    if (p.kc.save_inh_sims) {
         check(r.kc.inh_sims.size() == n_odors);
     }
-    if (p.kc.save_Is_sims == n_odors) {
+    if (p.kc.save_Is_sims) {
         check(r.kc.Is_sims.size() == n_odors);
     }
-    if (p.kc.save_claw_sims == n_odors) {
+    if (p.kc.save_claw_sims) {
         check(r.kc.claw_sims.size() == n_odors);
     }
     //
