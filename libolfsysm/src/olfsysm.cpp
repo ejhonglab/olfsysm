@@ -41,6 +41,7 @@
  * directly to .npy files for reading in Python. See README. */
 #if defined __has_include
 # if __has_include ("cnpy.h")
+#  define HAVE_CNPY
 #  include "cnpy.h"
 # endif
 #endif
@@ -318,6 +319,9 @@ void remove_all_pretime(ModelParams const& p, RunVars& r);
 /* Get the list of odors that should be simulated (non-tuning). */
 std::vector<unsigned> get_simlist(ModelParams const& p);
 
+// TODO nicer solution to only conditionally providing this, besides the processor
+// defines to exclude this code?
+#ifdef HAVE_CNPY
 // TODO TODO try to adapt to something that takes a std::vector<Matrix> and writes as
 // one .npy file (or at least a fn to handle those, even if across multiple files. we
 // typically have a list of Matrices, one per odor) (or takes an Eigen tensor and does
@@ -415,6 +419,7 @@ namespace np {
 
     }
 }
+#endif
 
 /*******************************************************************************
 ********************************************************************************
@@ -1353,13 +1358,15 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         rv.log();
         //
 
-        // TODO TODO TODO warn (or do something to prevent) delta from being too large
+        // TODO TODO warn (or do something to prevent) delta from being too large
         // of a percentage of the value? that seems to be main reason we have to redo
         // the scales (or tweak the learning rates), b/c of the oscillations and long
         // time to get back to right range after almost setting a param to 0
         // TODO store biggest percentage of value we subtracted? store how many times we
         // had to back off?
         // TODO store whether we ever overshot? how many times?
+        // TODO TODO TODO at end, print learning rate that would be needed to hit scale
+        // in first step (by storing initial sparsity delta)?
 
         if (!wAPLKC_scale_is_positive) {
             rv.kc.tuning_iters++;
