@@ -53,6 +53,31 @@ else:
     extra_compile_args = ['-fpic']
     extra_link_args = []
 
+# TODO TODO how to actually debug this now? also need --no-clean on pip?
+# https://stackoverflow.com/questions/71125094
+# https://marketplace.visualstudio.com/items?itemName=benjamin-simmonds.pythoncpp-debug
+# TODO can i call python script w/ gdb? what about pytest?
+# TODO TODO maybe attach gdb to existing running process?
+#
+# TODO don't use 'DEBUG' (uppercase)? b/c of what it might itself do to compile args /
+# etc? or does it not affect them? (should be fine?)
+#
+# compile w/ debug support
+debug = bool(int(os.environ.get('DEBUG', False)))
+if debug:
+    # -g alone should not cause slowdown, but we probably also need the -O0/1 flags for
+    # valgrind, which do.
+    #
+    # -g for debug symbols (for gdb / valgrind). valgrind docs say at least -O1 and
+    # maybe -O0 (disabling optimizations) would probably be quite helpful in getting
+    # useful output. currently -O2 seems set otherwise, though not sure why.
+    # https://valgrind.org/docs/manual/quick-start.html
+    # TODO could also see how much less helpful -O1 debug valgrind/gdb output is (and
+    # maybe it'd be worth it b/c of less slowdown, so faster debug iteration?)
+    #
+    # this puts -O0 at end (w/ -O2 still existing earlier in args). last option is the
+    # effective one (probably for many flags, but explicitly in docs about -O flag)
+    extra_compile_args += ['-g', '-O0']
 
 # TODO how to only add this if we have it available?
 use_cnpy = False
@@ -164,8 +189,18 @@ setup(
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
 
+    # so that hc_data.csv, which is also referenced in MANIFEST.csv (in order for this
+    # to work), is installed too
+    # TODO TODO how to make sure we can actually reference hc_data.csv in C++ code?
+    # install to specific path by other args here?
+    include_package_data=True,
     # TODO try to get hc_data.csv installed
+    # TODO copy latest approach from drosolf (2026-02-20). still using setup.py +
+    # MANIFEST.in there (that was just manifest + include_package_data=True, which still
+    # seems to not be working here?)
     #
+    # TODO TODO retry this, just specifying LHS properly? happen enough w/ 2nd commented
+    # line, where LHS is 'olfsysm'?
     # installs under root of venv (which is both sys.prefix and sys.exec_prefix in my
     # testing), which i'm not thrilled about. that would also be /usr if for some reason
     # pip was run as root

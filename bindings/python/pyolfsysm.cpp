@@ -99,6 +99,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("preset_wAPLKC", &ModelParams::KC::preset_wAPLKC)
         .def_readwrite("preset_wKCAPL", &ModelParams::KC::preset_wKCAPL)
         .def_readwrite("pn_claw_to_APL", &ModelParams::KC::pn_claw_to_APL)
+        .def_readwrite("microglomeruli_apl_units", &ModelParams::KC::microglomeruli_apl_units)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)
@@ -141,30 +142,42 @@ PYBIND11_MODULE(olfsysm, m) {
        constructor */
 
 	py::class_<RunVars>(m, "RunVars")
+        // TODO readonly for all initial structs?
         .def_readwrite("orn", &RunVars::orn)
         .def_readwrite("ln", &RunVars::ln)
         .def_readwrite("pn", &RunVars::pn)
         .def_readwrite("ffapl", &RunVars::ffapl)
         .def_readwrite("kc", &RunVars::kc)
+        //
         .def_readonly("log", &RunVars::log)
+        .def_readwrite("verbose", &RunVars::verbose)
+        .def_readonly("ready", &RunVars::ready)
         .def(py::init<ModelParams const&>());
 
-    // TODO also expose 'disable'? cause problems w/ things writing to same file
-    // sequentially if not?
+    // TODO w/o explicit disable are there problems w/ things writing to same file
+    // sequentially if not? (haven't tested yet. might want to test multiple sequential
+    // calls [seems like it appends just fine] and also what happens if file either
+    // never exists in first place, or if python makes the file but then moves/deletes
+    // it (does C++ just keep appending to old path? doesn't seem anything blows up.)
+    // (if never need explicit, could remove disable from interface here again)
     py::class_<Logger>(m, "RVLogger")
         .def("redirect", py::overload_cast<const std::string &>(&Logger::redirect))
-        .def("tee", &Logger::tee);
+        .def("tee", &Logger::tee)
+        .def("tee_off", &Logger::tee_off)
+        .def("disable", &Logger::disable)
+        .def_readwrite("tee_color", &Logger::tee_color);
 
+    // TODO readonly for all sims here (and in ln/pn/etc)?
     py::class_<RunVars::ORN>(m, "RVORN")
-        .def_readwrite("sims", &RunVars::ORN::sims);
+        .def_readonly("sims", &RunVars::ORN::sims);
 
     py::class_<RunVars::LN>(m, "RVLN")
         .def_readwrite("ln_inhA", &RunVars::LN::inhA)
         .def_readwrite("ln_inhB", &RunVars::LN::inhB);
     py::class_<RunVars::LN::InhA>(m, "RVLNInhA")
-        .def_readwrite("sims", &RunVars::LN::InhA::sims);
+        .def_readonly("sims", &RunVars::LN::InhA::sims);
     py::class_<RunVars::LN::InhB>(m, "RVLNInhB")
-        .def_readwrite("sims", &RunVars::LN::InhB::sims);
+        .def_readonly("sims", &RunVars::LN::InhB::sims);
 
     // TODO why pn_sims and not sims here? any reason? change for consistency w/ orn
     // handling?
@@ -175,12 +188,16 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wPNAPL", &RunVars::PN::wPNAPL)
         .def_readwrite("wAPLPN_scale", &RunVars::PN::wAPLPN_scale)
         .def_readwrite("wPNAPL_scale", &RunVars::PN::wPNAPL_scale)
-        .def_readwrite("pn_sims", &RunVars::PN::sims)
-        .def_readwrite("bouton_sims", &RunVars::PN::bouton_sims);
+        // TODO change *_unscaled to readwrite or nah?
+        .def_readonly("wAPLPN_unscaled", &RunVars::PN::wAPLPN_unscaled)
+        .def_readonly("wPNAPL_unscaled", &RunVars::PN::wPNAPL_unscaled)
+        //
+        .def_readonly("pn_sims", &RunVars::PN::sims)
+        .def_readonly("bouton_sims", &RunVars::PN::bouton_sims);
 
     py::class_<RunVars::FFAPL>(m, "RVFFAPL")
-        .def_readwrite("vm_sims", &RunVars::FFAPL::vm_sims)
-        .def_readwrite("coef_sims", &RunVars::FFAPL::coef_sims);
+        .def_readonly("vm_sims", &RunVars::FFAPL::vm_sims)
+        .def_readonly("coef_sims", &RunVars::FFAPL::coef_sims);
 
     py::class_<RunVars::KC>(m, "RVKC")
         .def_readwrite("wPNKC", &RunVars::KC::wPNKC)
@@ -188,30 +205,35 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wKCAPL", &RunVars::KC::wKCAPL)
         .def_readwrite("wAPLKC_scale", &RunVars::KC::wAPLKC_scale)
         .def_readwrite("wKCAPL_scale", &RunVars::KC::wKCAPL_scale)
-        .def_readwrite("pks", &RunVars::KC::pks)
+        // TODO change *_unscaled to readwrite or nah?
+        .def_readonly("wAPLKC_unscaled", &RunVars::KC::wAPLKC_unscaled)
+        .def_readonly("wKCAPL_unscaled", &RunVars::KC::wKCAPL_unscaled)
+        //
+        .def_readonly("pks", &RunVars::KC::pks)
         .def_readwrite("spont_in", &RunVars::KC::spont_in)
         .def_readwrite("thr", &RunVars::KC::thr)
-        .def_readwrite("responses", &RunVars::KC::responses)
-        .def_readwrite("spike_counts", &RunVars::KC::spike_counts)
-        .def_readwrite("vm_sims", &RunVars::KC::vm_sims)
-        .def_readwrite("spike_recordings", &RunVars::KC::spike_recordings)
-        .def_readwrite("nves_sims", &RunVars::KC::nves_sims)
-        .def_readwrite("inh_sims", &RunVars::KC::inh_sims)
-        .def_readwrite("Is_sims", &RunVars::KC::Is_sims)
-        .def_readwrite("claw_sims", &RunVars::KC::claw_sims)
+        // TODO readonly for all these main output vars? any reason not to?
+        // (was readwrite initially)
+        .def_readonly("responses", &RunVars::KC::responses)
+        .def_readonly("spike_counts", &RunVars::KC::spike_counts)
+        .def_readonly("vm_sims", &RunVars::KC::vm_sims)
+        .def_readonly("spike_recordings", &RunVars::KC::spike_recordings)
+        .def_readonly("nves_sims", &RunVars::KC::nves_sims)
+        .def_readonly("inh_sims", &RunVars::KC::inh_sims)
+        .def_readonly("Is_sims", &RunVars::KC::Is_sims)
+        .def_readonly("Is_from_kcs", &RunVars::KC::Is_from_kcs)
+        .def_readonly("Is_from_pns", &RunVars::KC::Is_from_pns)
+        .def_readonly("claw_sims", &RunVars::KC::claw_sims)
+        //
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
         .def_readwrite("compartment_to_claws", &RunVars::KC::compartment_to_claws)
+        .def_readonly("tuning_successful", &RunVars::KC::tuning_successful)
         // TODO delete? for debugging
-        .def_readwrite("odor_stats", &RunVars::KC::odor_stats)
-        // TODO delete
-        //.def_readwrite("max_kc_apl_drive", &RunVars::KC::max_kc_apl_drive)
-        //.def_readwrite("avg_kc_apl_drive", &RunVars::KC::avg_kc_apl_drive)
-        //.def_readwrite("max_bouton_apl_drive", &RunVars::KC::max_bouton_apl_drive)
-        //.def_readwrite("avg_bouton_apl_drive", &RunVars::KC::avg_bouton_apl_drive)
-        //
+        .def_readonly("odor_stats", &RunVars::KC::odor_stats)
+        .def_readonly("stat_names", &RunVars::KC::stat_names)
         ;
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(

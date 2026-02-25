@@ -30,11 +30,43 @@ public:
     /* Begin appending output to the given file. */
     void redirect(std::string const& path);
 
-    /* Also write to stdout, in addition to file from previous redirect call. */
+    /* Also write to stdout (in addition to file from any redirect calls, whether
+     * before/after). */
     void tee();
 
-    /* Shut off output. */
+    /* Turn off writing to stdout */
+    void tee_off();
+
+    /* Shut off output to file from redirect. Does not affect stdout output from tee().
+     * */
     void disable();
+
+    /* If >0, uses this color code in a control sequence prefix ("\x1b[<COLOR-CODE>m")
+     * to each line printed to tee output (currently stdout), with a corresponding
+     * control code to terminate the colored text at the end of each log output
+     * ("\x1b[0m").
+     *
+     * Some valid color codes can be taken from python termcolor.COLORED dict
+     * (name->color code). Current contents of that variable for me:
+     * {'black': 30,
+     *  'grey': 30,
+     *  'red': 31,
+     *  'green': 32,
+     *  'yellow': 33,
+     *  'blue': 34,
+     *  'magenta': 35,
+     *  'cyan': 36,
+     *  'light_grey': 37,
+     *  'dark_grey': 90,
+     *  'light_red': 91,
+     *  'light_green': 92,
+     *  'light_yellow': 93,
+     *  'light_blue': 94,
+     *  'light_magenta': 95,
+     *  'light_cyan': 96,
+     *  'white': 97}
+     * */
+    int tee_color;
 };
 
 /* Use to show intent. */
@@ -147,7 +179,6 @@ struct ModelParams {
             double sd;
         } noise;
 
-
         /* bouton related below */
 
         /* The total # of boutons. Should be >0 (and > #-glomeruli, but < #-claws) if
@@ -156,16 +187,12 @@ struct ModelParams {
         // TODO rename, either this or nclaws_total (that even used?), to be consistent?
         unsigned n_total_boutons;
 
-        // TODO TODO TODO add parameter to control strength of APL<>PN stuff relative to
+        // TODO TODO add parameter to control strength of APL<>PN stuff relative to
         // strength of KC<>APL stuff (or just handle via scale factor between these
         // weights in python? at least make sure python tries a sweep that includes
         // varying PN>APL separately from APL>PN?)
         bool preset_wAPLPN;
         bool preset_wPNAPL;
-
-        // TODO delete? (currently unused, but may want to try disabling PN<>APL stuff
-        // in tuning?)
-        //bool pn_apl_tune;
 
         // TODO delete (/use)
         //double apl_taum;
@@ -226,6 +253,11 @@ struct ModelParams {
          *
          * Only relevant if wPNKC_one_row_per_claw=true. */
         bool pn_claw_to_APL;
+
+        /* Will treat each microglomerulus as a separate (uncoupled with other
+         * microglomeruli, for now) APL, if true. If false, there will be one global
+         * scalar set of APL dynamics. */
+        bool microglomeruli_apl_units;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
@@ -387,6 +419,7 @@ struct ModelParams {
     /* Only (re?)simulate the given odors. If empty, simulate everything. */
     std::vector<unsigned> sim_only;
 };
+// this is referenced in python bindings, despite only being defined in .cpp
 extern ModelParams const DEFAULT_PARAMS;
 
 /* Variables and storage space that is useful to each run.
@@ -510,13 +543,31 @@ struct RunVars {
         /* Timeseries of the vesicle depletion factor for each odor. */
         std::vector<Matrix> nves_sims;
 
-        /* Timeseries of APL potential for each odor. */
-        std::vector<Row> inh_sims;
+        /* Timeseries of APL potential for each odor.
+         *
+         * If kc.microglomeruli_apl_units=false, each element will be a Row of length
+         * #-timepoints [shape=(1, #-timepoints)].
+         *
+         * If kc.microglomeruli_apl_units=true, each element will be of shape
+         * (p.pn.n_total_boutons, #-timepoints). */
+        std::vector<Matrix> inh_sims;
 
         // TODO clarify in doc that it is always just a single number (sum? mean?)
         // across all KCs (it is, right?)
-        /* Timeseries of KC->APL synapse current for each odor. */
-        std::vector<Row> Is_sims;
+        /* Timeseries of KC->APL synapse current for each odor.
+         *
+         * See inh_sims comment for what shape elements of this will be. */
+        std::vector<Matrix> Is_sims;
+
+        /* Timeseries of KC>APL & PN>APL "current" inputs to APL for each odor.
+         *
+         * Will only be used if we are using bouton PN<>APL weights
+         * (via pn.preset_w[APLPN|PNAPL]=true and pn.n_total_boutons > 0), because
+         * otherwise this would be the same as inh_sims below).
+         *
+         * See inh_sims comment for what shape elements of this will be. */
+        std::vector<Matrix> Is_from_kcs;
+        std::vector<Matrix> Is_from_pns;
 
         /* Contribution each claw makes to its KC's membrane potential.
          *
@@ -557,18 +608,16 @@ struct RunVars {
         // TODO doc better (+ use this more consistently)
         unsigned nclaws_total;
 
+        /* Starts false and set true if fit_sparseness terminates with sparsity in
+         * tolerance, within max_iters iterations. Mainly to check so we can print
+         * certain debug information only on calls after tuning has completed. */
+        bool tuning_successful;
+
         // TODO delete?
         // for debugging weight scaling
-        // TODO TODO also add one for claw>apl (no spiking required)? or just use kc
-        // ones for that too? (latter, probably)
         std::vector<Eigen::VectorXd> odor_stats;
-        // TODO delete. couldn't get to work (read only compile error when trying to set
-        // based on index in sim_KC_layer, adding odor_index param [passing loop vars to
-        // each call])
-        //std::vector<double> max_kc_apl_drive;
-        //std::vector<double> avg_kc_apl_drive;
-        //std::vector<double> max_bouton_apl_drive;
-        //std::vector<double> avg_bouton_apl_drive;
+        // TODO const?
+        std::vector<std::string> stat_names;
     } kc;
 
     /* Logger for this run. */
@@ -577,6 +626,15 @@ struct RunVars {
     /* Info from the model parameters is needed to correctly initialize matrix
      * sizes.*/
     RunVars(ModelParams const&);
+
+    // TODO move to mp? or only for things not expected to change w/in run (or after rv
+    // init?)? i do feel like i change a few of them in some cases though?
+    bool verbose;
+
+    /* Set true after model properly initialized, and set false if model put into a
+     * state where future simulation calls would produce invalid output (e.g. if
+     * remove_all_pretime called). */
+    bool ready;
 };
 
 /* Load HC data from file. */
@@ -619,6 +677,9 @@ void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
         Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims,
+        Matrix& Is_from_kcs,
+        Matrix& Is_from_pns,
+
         // TODO TODO replace odor_index w/ passing in reference to a vector to put all
         // odor stats into? (seems we can't set std::vector elements by index b/c read
         // only compile error. not sure 100% why...)
