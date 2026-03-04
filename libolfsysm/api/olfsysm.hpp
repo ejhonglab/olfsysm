@@ -339,10 +339,6 @@ struct ModelParams {
         double apl_taum;
         double tau_apl2kc;
 
-        /* APL compartment coupling constants*/
-        double apl_coup_const;
-        int comp_num;
-
         /* Synaptic depression params; see Hennig 2013 equation 3. Synaptic
          * depression can be disabled by setting ves_p = 0. */
         double tau_r;
@@ -566,6 +562,7 @@ struct RunVars {
          * otherwise this would be the same as inh_sims below).
          *
          * See inh_sims comment for what shape elements of this will be. */
+        // TODO TODO rename dIsdt_*, rather than Is_* (since that's what these are!)
         std::vector<Matrix> Is_from_kcs;
         std::vector<Matrix> Is_from_pns;
 
@@ -595,15 +592,6 @@ struct RunVars {
         /*map of claws to their kc*/
         // TODO TODO doc better
         std::vector<std::vector<unsigned>> kc_to_claws;
-
-        /*Vector of the compartment associated with each claw*/
-        // TODO doc better
-        // TODO change type to Matrix (/ Column/Row, whichever appropriate. matter?)?
-        Eigen::VectorXi claw_compartments;
-
-        /*map of claws to their compartment */
-        // TODO doc better
-        std::vector<std::vector<unsigned>> compartment_to_claws;
 
         // TODO doc better (+ use this more consistently)
         unsigned nclaws_total;

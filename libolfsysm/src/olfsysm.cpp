@@ -246,9 +246,6 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
 
-    p.kc.apl_coup_const        = -1;
-    p.kc.comp_num              = 0;
-
     // TODO what's tau_r? for vesicle release?
     p.kc.tau_r                 = 1.0;
     // olfsysm.hpp says that setting this to 0 should disable synaptic depression
@@ -997,8 +994,6 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
     // TODO what happens if we initialize to one size, and then set with rvalue
     // that is another size? (or e.g. a matrix) err hopefully? or need to add
     // checks that size is as expected, even if predefining size?
-    // NOTE: was previously only declared w/ this size explicitly in compartment code,
-    // but i'm assuming it should work w/ other branches
     // TODO rename from claw_drive? at least pn_drive is sorta generic?
     Eigen::VectorXd claw_drive(rv.kc.wPNKC.rows());
     if (p.pn.n_total_boutons > 0) {
@@ -2051,12 +2046,15 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.kc.tuning_iters--;
         }
     }}
+    // TODO log newline here (at least if verbose?)
     if (p.kc.tune_apl_weights) {
         check(initial_rel_sp_diff != 0);
         check(initial_wAPLKC_scale != 0);
         if (rv.verbose) {
             double wAPLKC_delta_from_initial = initial_wAPLKC_scale - rv.kc.wAPLKC_scale;
             double lr_to_tune_in_one_iter = wAPLKC_delta_from_initial / initial_rel_sp_diff;
+            // TODO TODO print even if verbose=False? getting a lot of other output less
+            // important than this now...
             rv.log(cat("sp_lr_coeff to tune in one step: ", abs(lr_to_tune_in_one_iter)));
         }
     }
@@ -2160,161 +2158,6 @@ void sim_PN_layer(
         // ann also handle the 2 cases the same way?
         pn_t.col(t) = (0.0 < pn_t.col(t).array()).select(pn_t.col(t), 0.0);
     }
-
-    // TODO delete. replace w/ old code [now above] (don't want to keep any changes
-    // after 2cda53a80df [one of my last commits before Tianpei], right?)
-    /*
-    const int ng = get_ngloms(p);
-    pn_t.setZero();
-    // Baseline spontaneous activity, scaled for inhibition
-    // TODO at least rename to pn_spont. store in RunVars if i end up wanting later?
-    // or just calc later (i.e. in run_KC_sims)
-    // TODO refactor to share w/ other pn activity calc? (should be same, right?)
-    Column spont = p.orn.data.spont * p.pn.inhsc / (p.orn.data.spont.sum() + p.pn.inhadd);
-
-    // Time-series vectors for PN<->APL interaction
-    Matrix inh = Matrix::Zero(1, p.time.steps_all());
-    Matrix Is = Matrix::Zero(1, p.time.steps_all());
-
-    // TODO prob break into two separate (or only have one bool flag to enable both)
-    if (!p.pn.preset_wAPLPN || !p.pn.preset_wPNAPL) {
-        rv.pn.wAPLPN.setZero();
-        rv.pn.wPNAPL.setZero();
-    }
-
-    Column spont_btn;       // Spontaneous activity per bouton
-    Column orn_delta_btn;   // ORN delta activity per bouton
-    Column dPNdt;
-    // TODO delete? think i only want matrices of shape # btns in sim_KC_layer
-    //if (p.pn.preset_Btn) {
-    //    // total bouton count
-    //    // TODO TODO TODO is this really not used anywhere else? mistake? just not
-    //    // implemented yet? change that (still want to use this var?)
-    //    int total_btns = rv.pn.Btn_to_pn.size();
-    //    pn_t.resize(total_btns, p.time.steps_all());
-    //    spont_btn.resize(total_btns, 1);
-
-    //    // ADDED: Resize loop variables now that we know their dimension.
-    //    orn_delta_btn.resize(total_btns, 1);
-    //    dPNdt.resize(total_btns, 1);
-
-    //    // fill each bouton row with its per-bouton baseline across time
-    //    for (int g = 0; g < ng; ++g) {
-    //        // std::vector<unsigned> of bouton indices for glom g
-    //        const auto& btns = rv.pn.pn_to_Btns[g];
-    //        const int Bg = (int)btns.size();
-    //        // STEP 1: Calculate initialization value from RAW data.
-    //        // const double per_btn_init = (Bg > 0) ? p.orn.data.spont(g) / double(Bg) : 0.0;
-    //        const double per_btn_init = (Bg > 0) ? p.orn.data.spont(g): 0.0;
-    //        // STEP 2: Calculate simulation baseline from the SCALED 'spont' variable.
-    //        // const double per_btn_baseline = (Bg > 0) ? spont(g) / double(Bg) : 0.0;
-    //        const double per_btn_baseline = (Bg > 0) ? spont(g) : 0.0;
-
-    //        for (int k = 0; k < Bg; ++k) {
-    //            const int b = btns[k];                  // bouton row index in pn_t
-    //            spont_btn(b) = per_btn_baseline;
-    //            // Fill the full row (1×T): scalar * time row
-    //            pn_t.row(b) = per_btn_init * p.time.row_all();
-    //        }
-    //    }
-    //} else {
-    //    pn_t = p.orn.data.spont*p.time.row_all();
-
-    //    // ADDED: Resize dPNdt for the non-bouton case.
-    //    // orn_delta_btn is not used in this case, so it can remain size 0.
-    //    dPNdt.resize(ng, 1);
-    //}
-    // TODO replace w/ old code?
-    pn_t = p.orn.data.spont*p.time.row_all();
-    dPNdt.resize(ng, 1);
-    //
-
-    double inh_PN = 0.0;
-    Column orn_delta;
-
-    for (unsigned t = 1; t < p.time.steps_all(); t++) {
-        // --- 4a. Select correct inputs (bouton or glomerulus) ---
-
-        const Column* spont_ref; // Pointer to use either spont or spont_btn
-        Column orn_delta;        // Will hold either per-glom or per-bouton delta
-
-        Column orn_delta_glom = orn_t.col(t-1) - p.orn.data.spont; // ng x 1
-
-        // TODO TODO delete this here, and only copy glomeruli -> btns at start of KC
-        // simulation (where then inh can be applied as needed). does it matter
-        // actually?
-        //if (p.pn.preset_Btn) {
-        //    spont_ref = &spont_btn;
-        //    // Expand glomerulus delta to bouton delta
-        //    for (int g = 0; g < ng; ++g) {
-        //        const auto& btns = rv.pn.pn_to_Btns[g];
-        //        // const int Bg = static_cast<int>(btns.size());
-        //        // const double per_btn_delta = (Bg > 0) ? orn_delta_glom(g) / double(Bg) : 0.0;
-        //        const double per_btn_delta = orn_delta_glom(g);
-        //        for (int bouton_idx : btns) {
-        //            orn_delta_btn(bouton_idx) = per_btn_delta;
-        //        }
-        //    }
-        //    orn_delta = orn_delta_btn;
-        //} else {
-        //    spont_ref = &spont;
-        //    orn_delta = orn_delta_glom;
-        //}
-        //spont_ref = &spont;
-        // TODO replace w/ old code?
-        // TODO TODO delete?
-        orn_delta = orn_delta_glom;
-        //
-
-        // TODO is pn_apl_tune best name for this?
-        // TODO TODO ever make sense to have this controlled separately from
-        // pn_claw_to_APL=true? (is this even related to that?) use that flag (after renaming?) to control
-        // this as well?
-        //if (p.pn.pn_apl_tune) {
-        //    // TODO TODO TODO when i'm actually implementing PN<>APL interactions (in
-        //    // sim_KC_layer, do i want it to depend only on activity above baseline, or
-        //    // also just raw PN activity? (may need to recalc or return/store spont_ref
-        //    // if want it)
-        //    // and (related) have i checked what KC outputs look like w/ const thresh,
-        //    // instead of only a thresh relative to spontanenous input (do so, if
-        //    // haven't)?
-        //    //
-        //    // PN activity above baseline (rectified)
-        //    // TODO use cwiseMax(0.0) in place of select calls that are used elsewhere
-        //    // for same purpose?
-        //    Column pn_act = (pn_t.col(t-1) - *spont_ref).cwiseMax(0.0);
-
-        //    // Drive from PNs to the inhibitory APL neuron
-        //    double pn_apl_drive = (rv.pn.wPNAPL * pn_act).value();
-
-        //    // TODO TODO TODO does this part make sense here? at least refactor to share
-        //    // w/ APL activity code in sim_KC_layer?
-
-        //    // Update inhibition dynamics
-        //    double dIsdt = -Is(t-1) + pn_apl_drive;
-        //    double dinhdt = -inh(t-1) + Is(t-1);
-        //    Is(t) = Is(t-1) + dIsdt * p.time.dt / p.pn.apl_taum;
-        //    inh(t) = inh(t-1) + dinhdt * p.time.dt / p.pn.tau_apl2pn;
-
-        //    const double inh_scalar = inh(t-1);
-
-        //    // TODO TODO TODO shouldn't PN activity here depend on APL activity more
-        //    // broadly (including KC input), rather than just some similar looking "APL"
-        //    // activity defined only using PN activity in here? rewrite?
-        //    dPNdt = -pn_t.col(t-1) + *spont_ref + rv.pn.wAPLPN * inh_scalar;
-        //} else {
-        //    dPNdt = -pn_t.col(t-1) + *spont_ref; // APL effect removed
-        //}
-
-        // TODO what is unaryExpr... for?
-        dPNdt += 200.0 * ((orn_delta.array() + p.pn.offset) * p.pn.tanhsc / 200.0 * inh_PN)
-                           .matrix().unaryExpr<double(*)(double)>(&tanh);
-
-        inh_PN = p.pn.inhsc / (p.pn.inhadd + 0.25 * inhA(t) + 0.75 * inhB(t));
-        pn_t.col(t) = pn_t.col(t-1) + dPNdt * p.time.dt / p.pn.taum;
-        pn_t.col(t) = (pn_t.col(t).array() < 0.0).select(0.0, pn_t.col(t));
-    }
-    */
 }
 
 // NOTE: this seems to only have ever been called from run_FFAPL_sims, which was only
@@ -2368,8 +2211,6 @@ void sim_KC_layer(
      * - Is: KC->APL synapse current (across all KCs) timeseries
      * */
 
-    // Determine number of compartments
-    // int n_compartments = rv.kc.claw_compartments.maxCoeff() + 1;
     Vm.setZero();
     spikes.setZero();
     // TODO why setOnes here?
@@ -2390,8 +2231,8 @@ void sim_KC_layer(
         // existing time constants for KC<>APL interactions? need to track per-bouton
         // dynamics then?)
         // TODO also initialize most other things w/ NAN (-> also check no NAN after)
-        // TODO TODO TODO is there some reason the loop starts from 3001 instead of
-        // 3000? first entry in this will still be NaN, unless that is changed
+        // TODO TODO is there some reason the loop starts from 3001 (t+1) instead
+        // of 3000 (t)? first entry in this will still be NaN, unless that is changed
         bouton_sims.setConstant(NAN);
     } else {
         check(!p.pn.preset_wAPLPN);
@@ -2399,13 +2240,11 @@ void sim_KC_layer(
     }
 
     // TODO delete. for debugging
-    // TODO TODO also store time points these are at? (esp if e.g. averaging many spont
-    // inputs produces higher max than averaging peak PN inputs?)
     double max_kc_apl_drive = 0;
     double max_bouton_apl_drive = 0;
     double total_kc_apl_drive = 0;
     double total_bouton_apl_drive = 0;
-    // TODO TODO also want max for these two?
+    // TODO also want max for these two?
     double total_kc_inh = 0;
     double total_kc_pre_inh = 0;
     double total_bouton_inh = 0;
@@ -2432,449 +2271,275 @@ void sim_KC_layer(
 
         claw_sims.setZero();
 
-        if (p.kc.apl_coup_const != -1) {
-            const auto& claws_by_compartment = rv.kc.compartment_to_claws;
-            const unsigned num_comp = claws_by_compartment.size();
-            double g_voltage_coup = p.kc.apl_coup_const;
+        Column dKCdt;
+        for (unsigned t=p.time.start_step()+1; t < p.time.steps_all(); t++) {
+            // TODO double check python always sets p.kc.N to # KCs, never # claws
+            // TODO (done? should prob be in run_KC_sims) add assertion (or at least
+            // log a warning) somewhere in setup here, if p.kc.N >= n_claws (prob
+            // best to err, unless some flag set explicitly allowing?)
 
-            Eigen::VectorXd Is_prev_per_comp = Eigen::VectorXd::Zero(num_comp);
-            Eigen::VectorXd Is_curr_per_comp = Is_prev_per_comp;
+            // TODO also declare size of vector here (currently done inside
+            // pn_to_kc_drive_at_t)?
+            //
+            // this will also initialize bouton_sims.col(t) to values from
+            // pn_t.col(t)
+            Eigen::VectorXd claw_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t,
+                bouton_sims
+            );
+            // TODO TODO assert bouton_sims.col(t) is all not NaN / whatever here
+            // (non-0, if initialized that way) (am i passing ref to it correctly?)
+            total_kc_pre_inh += claw_drive.sum();
+            Column claw_inh = rv.kc.wAPLKC * inh(t-1);
+            total_kc_inh += claw_inh.sum();
 
-            // APL has its own membrane potential, which replaces 'inh' for feedback
-            Eigen::VectorXd Vm_apl_prev_per_comp = Eigen::VectorXd::Zero(num_comp);
-            Eigen::VectorXd Vm_apl_curr_per_comp = Vm_apl_prev_per_comp;
+            // TODO TODO TODO also experiment w/ subtracting spont from bouton_sims?
+            // or maybe doing something like that in claws instead?
+            if (p.pn.preset_wAPLPN) {
+                total_bouton_pre_inh += bouton_sims.col(t).sum();
 
-            // 'inh' is preserved for other uses but not for feedback in this loop
-            Eigen::VectorXd inh_prev_per_comp  = Eigen::VectorXd::Zero(num_comp);
-            Eigen::VectorXd inh_curr_per_comp  = inh_prev_per_comp;
+                // this should guarantee that bouton_inh are all positive
+                check(inh(t-1) >= 0);
+                // TODO TODO cap each of these at amount that would bring the
+                // unit to 0 (currently average of this is > average of pre_inh)
+                // (just to accurately represent in odor_stats, wouldn't change calc
+                // that is currently limited w/ min 0 anyway)
+                Column bouton_inh = rv.pn.wAPLPN * inh(t-1);
+                // TODO TODO assert bouton_inh all positive (just to sanity
+                // check unexpected effect of wAPLPN on sparsity. opposite direction
+                // of what i expected)
+                total_bouton_inh += bouton_inh.sum();
 
-            // Scalars evolve in lock-step as sums of vectors
-            double inh_prev = inh_prev_per_comp.sum();
-            double Is_prev  = Is_prev_per_comp.sum();
-            double inh_curr = inh_prev;
-            double Is_curr  = Is_prev;
+                // TODO refactor to share w/ wAPLKC?
+                // TODO replace w/ -= syntax?
+                bouton_sims.col(t) = bouton_sims.col(t) - bouton_inh;
+                //
+                // TODO refactor to share w/ wAPLKC below
+                // TODO see other comment about `auto const` issue
+                // TODO TODO also log # lt0 here (+ into odor_stats?)?
+                auto const bouton_sims_lt0 = bouton_sims.col(t).array() < 0;
+                //auto const bouton_sims_lt0 = (bouton_sims.col(t).array() < 0).eval();
+                // replace per-bouton sims to min of 0
+                bouton_sims.col(t) = bouton_sims_lt0.select(0.0, bouton_sims.col(t));
+                // TODO make conditional (/delete)
+                check(bouton_sims.col(t).minCoeff() >= 0);
+                //
 
-            // TODO TODO shouldn't rest of values be filled in? am i missing
-            // something? (they are below, right? but is this code doing anything?
-            // delete?)
-            inh(0,0) = inh_prev;   // log scalar aggregates (global)
-            Is(0,0)  = Is_prev;
-
-            // (rest of setup is the same)
-            Column dKCdt;
-            Eigen::VectorXd comp_drive(num_comp);
-            Eigen::VectorXd pn_drive(p.kc.N);
-            Eigen::VectorXd kc_apl_inh(p.kc.N);
-
-            check_is_col(rv.kc.wAPLKC);
-            check_is_row(rv.kc.wKCAPL);
-
-            for (unsigned t=p.time.start_step() + 1; t<p.time.steps_all(); ++t) {
-                // (1) KC -> APL drive per compartment (Unchanged)
-                const Eigen::VectorXd kc_activity =
-                    (nves.col(t-1).array() * spikes.col(t-1).array()).matrix();
-
-                // TODO also replace this def of claw_drive w/ call to
-                // pn_to_kc_drive_at_t (adapting, if needed)
-                // TODO can it also be initialized to this size in other two cases? yes,
-                // right?
-                Eigen::VectorXd claw_drive(rv.kc.wPNKC.rows());
-                // TODO what is .noalias() doing here? would .array() also work? need it
-                // at all?
-                claw_drive.noalias() = rv.kc.wPNKC * pn_t.col(t);
-
-                comp_drive.setZero();
-
-                if (!p.kc.pn_claw_to_APL) {
-                    // TODO refactor to use sum_across_...? add per-comparment handling
-                    // there? separate fn for that?
-                    for (unsigned comp=0; comp<num_comp; ++comp) {
-                        double s = 0.0;
-                        for (unsigned claw : claws_by_compartment[comp]) {
-                            const unsigned kc = rv.kc.claw_to_kc[claw];
-                            // TODO still redo indexing to avoid 0 if i can
-                            // (use VectorXd [/Column] instead of Row vector?)
-                            const double w_kc_apl = rv.kc.wKCAPL(0, claw);
-                            s += w_kc_apl * kc_activity[kc];
-                        }
-                        comp_drive[comp] = 1e4 * s;
-                    }
-                } else {
-                    for (unsigned comp=0; comp<num_comp; ++comp) {
-                        double s = 0.0;
-                        for (int claw : claws_by_compartment[comp]) {
-                            const double w_kc_apl = rv.kc.wKCAPL(0, claw);
-                            s += w_kc_apl * claw_drive[claw];
-                        }
-                        comp_drive[comp] = 0.2 * s;
-                    }
-                }
-                // (2) APL Internal Dynamics (REVISED)
-                // (2a) The synaptic current 'Is' is updated as before.
-                Eigen::VectorXd dIs_comp_dt = -Is_prev_per_comp + comp_drive;
-
-                // (2b) Calculate APL voltage change using the simplified capacitive model.
-                const double inv_Cm = 1.0 / p.kc.apl_Cm;       // The single new parameter
-                const double inv_taum = 1.0 / p.kc.apl_taum; // Existing parameter
-                Eigen::VectorXd dVm_apl_dt = Eigen::VectorXd::Zero(num_comp);
-                for (unsigned c=0; c<num_comp; ++c) {
-                    // Synaptic current from KCs
-                    const double I_syn = Is_prev_per_comp[c];
-
-                    // Electrical coupling current from neighbors
-                    const int L = (c - 1 + num_comp) % num_comp;
-                    const int R = (c + 1) % num_comp;
-                    const double I_coupling = g_voltage_coup * (Vm_apl_prev_per_comp[L] + Vm_apl_prev_per_comp[R]
-                                                            - 2.0 * Vm_apl_prev_per_comp[c]);
-
-                    // Sum the currents
-                    const double I_total = I_syn + I_coupling;
-
-                    // The change in voltage is the leak plus the integrated total current.
-                    // dV/dt = -V/tau + I_total/Cm
-                    dVm_apl_dt[c] = -inv_taum * Vm_apl_prev_per_comp[c] + inv_Cm * I_total;
-                }
-
-                // (2c) 'inh' variable is updated as before for other uses.
-                Eigen::VectorXd dInh_comp_dt = -inh_prev_per_comp + Is_prev_per_comp;
-
-                double dIsdt  = dIs_comp_dt.sum();
-                double dinhdt = dInh_comp_dt.sum();
-
-                // (3) APL -> KC Feedback (MODIFIED)
-                pn_drive.setZero();
-                kc_apl_inh.setZero();
-
-                // use the *vector* per-compartment inhibition (previous step)
-                for (unsigned comp=0; comp<num_comp; ++comp) {
-                    const double apl_comp_prev = inh_prev_per_comp[comp];
-
-                    for (unsigned claw : claws_by_compartment[comp]) {
-                        const unsigned kc = rv.kc.claw_to_kc[claw];
-                        pn_drive[kc] += claw_drive[claw];
-
-                        // TODO delete need for this (seems it's effectively 1D either
-                        // way. just have both branches initialize w/ consistent dim
-                        // order...)
-                        // TODO assert same whether we include 2nd 0 index or not (->
-                        // delete)
-                        const double w_apl_kc = rv.kc.wAPLKC(claw, 0);
-                        // compartment-specific inhibition:
-                        kc_apl_inh[kc] += w_apl_kc * apl_comp_prev;
-                    }
-                }
-
-                dKCdt = (-Vm.col(t-1) + pn_drive - kc_apl_inh).array()
-                        - use_ffapl * ffapl_t(t-1);
-                Vm.col(t) = Vm.col(t-1) + dKCdt * (p.time.dt / p.kc.taum);
-
-                // (5) Advance APL state variables (Unchanged from previous version)
-                Is_curr_per_comp   = Is_prev_per_comp   + (p.time.dt / p.kc.tau_apl2kc) * dIs_comp_dt;
-                inh_curr_per_comp  = inh_prev_per_comp  + (p.time.dt / p.kc.apl_taum)   * dInh_comp_dt;
-                Vm_apl_curr_per_comp = Vm_apl_prev_per_comp + p.time.dt * dVm_apl_dt;
-
-                Is_curr  = Is_prev  + (p.time.dt / p.kc.tau_apl2kc) * dIsdt;
-                inh_curr = inh_prev + (p.time.dt / p.kc.apl_taum)   * dinhdt;
-
-                // TODO delete commented code? (some non-commented code also unused tho?)
-                // Is_curr  = Is_curr_per_comp.sum();
-                // inh_curr = inh_curr_per_comp.sum();
-                // TODO check equiv to a LHS w/o `0,` prefix (-> replace w/ that
-                // syntax)?
-                Is(0,t)  = Is_curr;
-                inh(0,t) = inh_curr;
-
-                // (6) Vesicles + thresholding (unchanged)
-                nves.col(t) = nves.col(t-1);
-                nves.col(t) += p.time.dt * ((1.0 - nves.col(t-1).array()).matrix()/p.kc.tau_r)
-                            - (p.kc.ves_p * spikes.col(t-1).array() * nves.col(t-1).array()).matrix();
-
-                auto const over_thr = Vm.col(t).array() > rv.kc.thr.array();
-                // TODO TODO probably avoid the `auto const` (and may need eval
-                // anyway?) apparently this is one of the common causes of segfaults in
-                // Eigen. included in commont pitfalls doc page. adding eval to all
-                // calls defined this way didn't fix my latest seg fault issue though.
-                //auto const over_thr = (Vm.col(t).array() > rv.kc.thr.array()).eval();
-                spikes.col(t) = over_thr.select(1.0, spikes.col(t));
-                Vm.col(t)     = over_thr.select(0.0, Vm.col(t));
-
-                // TODO what is this doing?
-                std::swap(Is_prev_per_comp,  Is_curr_per_comp);
-                std::swap(Vm_apl_prev_per_comp, Vm_apl_curr_per_comp);
-                std::swap(inh_prev_per_comp, inh_curr_per_comp);
-                Is_prev  = Is_curr;
-                inh_prev = inh_curr;
+                // TODO TODO count + store (in odor_stats) # bouton_sims == 0
+                // (average? max? what?)
             }
-        } else {
-            Column dKCdt;
-            for (unsigned t=p.time.start_step()+1; t < p.time.steps_all(); t++) {
-                // TODO double check python always sets p.kc.N to # KCs, never # claws
-                // TODO (done? should prob be in run_KC_sims) add assertion (or at least
-                // log a warning) somewhere in setup here, if p.kc.N >= n_claws (prob
-                // best to err, unless some flag set explicitly allowing?)
+            // TODO replace this separate vector w/ claw_sims.col(t)?
+            // (should be same, but maybe confirm w/ repro test? overkill...)
+            // TODO update comment wording. inh(t-1) is a scalar, no?
+            // (still accurate that LHS and RHS of `-` are same shape...)
+            //
+            // all of these have 1 col and #-claws rows (e.g. 9472),
+            // as does claw_sims.col(t)
+            Eigen::VectorXd claw_drive_with_inh = claw_drive - claw_inh;
+            claw_sims.col(t) = claw_drive_with_inh;
 
-                // TODO also declare size of vector here (currently done inside
-                // pn_to_kc_drive_at_t)?
-                //
-                // this will also initialize bouton_sims.col(t) to values from
-                // pn_t.col(t)
-                Eigen::VectorXd claw_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t,
-                    bouton_sims
-                );
-                // TODO TODO assert bouton_sims.col(t) is all not NaN / whatever here
-                // (non-0, if initialized that way) (am i passing ref to it correctly?)
-                total_kc_pre_inh += claw_drive.sum();
-                Column claw_inh = rv.kc.wAPLKC * inh(t-1);
-                total_kc_inh += claw_inh.sum();
+            if (!p.kc.allow_net_inh_per_claw) {
+                // there typically will be claws that would get sent negative b/c of
+                // inhibition, so we do need to clip if we want to avoid single
+                // claws contribution inhibition exceeding their excitation
+                // TODO see other comment about `auto const` issue
+                auto const claw_drives_lt0 = claw_sims.col(t).array() < 0;
+                //auto const claw_drives_lt0 = (claw_sims.col(t).array() < 0).eval();
+                // replace per-claw drives to min of 0
+                claw_sims.col(t) = claw_drives_lt0.select(0.0, claw_sims.col(t));
+                // TODO make conditional (/delete)
+                check(claw_sims.col(t).minCoeff() >= 0);
+            }
 
-                // TODO TODO TODO also experiment w/ subtracting spont from bouton_sims?
-                // or maybe doing something like that in claws instead?
-                if (p.pn.preset_wAPLPN) {
-                    total_bouton_pre_inh += bouton_sims.col(t).sum();
+            double dIsdt;
+            double kc_apl_drive = 0.0;
+            double bouton_apl_drive = 0.0;
+            double total_apl_drive = 0.0;
+            if (!p.kc.pn_claw_to_APL) {
+                // APL activity depends on KC spiking
 
-                    // this should guarantee that bouton_inh are all positive
-                    check(inh(t-1) >= 0);
-                    // TODO TODO cap each of these at amount that would bring the
-                    // unit to 0 (currently average of this is > average of pre_inh)
-                    // (just to accurately represent in odor_stats, wouldn't change calc
-                    // that is currently limited w/ min 0 anyway)
-                    Column bouton_inh = rv.pn.wAPLPN * inh(t-1);
-                    // TODO TODO TODO assert bouton_inh all positive (just to sanity
-                    // check unexpected effect of wAPLPN on sparsity. opposite direction
-                    // of what i expected)
-                    total_bouton_inh += bouton_inh.sum();
+                // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
+                Eigen::VectorXd kc_activity = (
+                    nves.col(t-1).array() * spikes.col(t-1).array()
+                ).matrix();
 
-                    // TODO refactor to share w/ wAPLKC?
-                    // TODO replace w/ -= syntax?
-                    bouton_sims.col(t) = bouton_sims.col(t) - bouton_inh;
-                    //
-                    // TODO refactor to share w/ wAPLKC below
-                    // TODO see other comment about `auto const` issue
-                    // TODO TODO also log # lt0 here into odor_stats?
-                    auto const bouton_sims_lt0 = bouton_sims.col(t).array() < 0;
-                    //auto const bouton_sims_lt0 = (bouton_sims.col(t).array() < 0).eval();
-                    // replace per-bouton sims to min of 0
-                    bouton_sims.col(t) = bouton_sims_lt0.select(0.0, bouton_sims.col(t));
-                    // TODO make conditional (/delete)
-                    check(bouton_sims.col(t).minCoeff() >= 0);
-                    //
-
-                    // TODO TODO count + store (in odor_stats) # bouton_sims == 0
-                    // (average? max? what?)
+                // TODO TODO replace w/ duplicate_vals_for_each_subunit_id and
+                // sum_across_claws_within_each_kc (need to support Eigen Vector in
+                // duplicate_..., if doesn't already [can indexing be same as a
+                // std::vector?]?)
+                for (unsigned claw=0; claw<n_claws; ++claw) {
+                    unsigned kc = rv.kc.claw_to_kc[claw];
+                    // TODO need to pass a fn to sum_across.. to make this
+                    // work, or can i precompute and pass something? how to expand
+                    // kc_activity to # claws? separate fn for that?
+                    kc_apl_drive += rv.kc.wKCAPL(claw) * kc_activity[kc];
                 }
-                // TODO replace this separate vector w/ claw_sims.col(t)?
-                // (should be same, but maybe confirm w/ repro test? overkill...)
-                // TODO update comment wording. inh(t-1) is a scalar, no?
-                // (still accurate that LHS and RHS of `-` are same shape...)
-                //
-                // all of these have 1 col and #-claws rows (e.g. 9472),
-                // as does claw_sims.col(t)
-                Eigen::VectorXd claw_drive_with_inh = claw_drive - claw_inh;
-                claw_sims.col(t) = claw_drive_with_inh;
-
-                if (!p.kc.allow_net_inh_per_claw) {
-                    // there typically will be claws that would get sent negative b/c of
-                    // inhibition, so we do need to clip if we want to avoid single
-                    // claws contribution inhibition exceeding their excitation
-                    // TODO see other comment about `auto const` issue
-                    auto const claw_drives_lt0 = claw_sims.col(t).array() < 0;
-                    //auto const claw_drives_lt0 = (claw_sims.col(t).array() < 0).eval();
-                    // replace per-claw drives to min of 0
-                    claw_sims.col(t) = claw_drives_lt0.select(0.0, claw_sims.col(t));
-                    // TODO make conditional (/delete)
-                    check(claw_sims.col(t).minCoeff() >= 0);
-                }
-
-                double dIsdt;
-                double kc_apl_drive = 0.0;
-                double bouton_apl_drive = 0.0;
-                double total_apl_drive = 0.0;
-                if (!p.kc.pn_claw_to_APL) {
-                    // APL activity depends on KC spiking
-
-                    // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
-                    Eigen::VectorXd kc_activity = (
-                        nves.col(t-1).array() * spikes.col(t-1).array()
-                    ).matrix();
-
-                    // TODO TODO replace w/ duplicate_vals_for_each_subunit_id and
-                    // sum_across_claws_within_each_kc (need to support Eigen Vector in
-                    // duplicate_..., if doesn't already [can indexing be same as a
-                    // std::vector?]?)
-                    for (unsigned claw=0; claw<n_claws; ++claw) {
-                        unsigned kc = rv.kc.claw_to_kc[claw];
-                        // TODO need to pass a fn to sum_across.. to make this
-                        // work, or can i precompute and pass something? how to expand
-                        // kc_activity to # claws? separate fn for that?
-                        kc_apl_drive += rv.kc.wKCAPL(claw) * kc_activity[kc];
-                    }
-
-                    //double kc_apl_drive = sum_across_claws_within_each_kc(p, rv,
-                    //    rv.kc.wKCAPL * kc_activity[kc]
-                    //);
-                    // TODO TODO TODO some reason we shouldn't just use the same 1e4
-                    // scale factor in both cases, instead of just this condition?
-                    total_apl_drive = kc_apl_drive * 1e4;
-                } else {
-                    // APL activity (through KCs only even) does not depend on spiking.
-                    // Can get input directly from subthreshold claw activity here.
-                    kc_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
-                    // TODO TODO TODO dont want the 1e4 (or other?) scale factor, like
-                    // above? compare magnitudes in the two cases? (+ compare magnitude
-                    // both cases have vs bouton drive)
-                    // TODO want to restore a * .2 multiplier here? prob not...
-                    total_apl_drive = kc_apl_drive;
-                    // TODO delete
-                    // TODO TODO what is this 0.2 doing here? add as a parameter
-                    // (/delete)?  (or at least move into dIsdt calculation below, to be
-                    // consistent w/ handling of other case? or need it for other uses
-                    // of kc_apl_drive?)
-                    // TODO (what is concern really? delete? isn't behavior already
-                    // diff, esp w/ tuning?) this change behavior of my
-                    // allow_net_inh_per_claw=False path? add test that would catch it!
-                    //kc_apl_drive = bouton_apl_drive + kc_apl_drive * 0.2;
-                }
+                // TODO TODO TODO some reason we shouldn't just use the same 1e4
+                // scale factor in both cases, instead of just this condition?
+                // TODO use *= 1e4? matter? need to make sure we are multiplying by
+                // float type?
+                kc_apl_drive = kc_apl_drive * 1e4;
+                //double kc_apl_drive = sum_across_claws_within_each_kc(p, rv,
+                //    rv.kc.wKCAPL * kc_activity[kc]
+                //);
+            } else {
+                // APL activity (through KCs only even) does not depend on spiking.
+                // Can get input directly from subthreshold claw activity here.
+                kc_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
+                // TODO TODO TODO dont want the 1e4 (or other?) scale factor, like
+                // above? compare magnitudes in the two cases? (+ compare magnitude
+                // both cases have vs bouton drive)
+                // TODO want to restore a * .2 multiplier here? prob not...
+                // TODO delete
+                // TODO TODO what is this 0.2 doing here? add as a parameter
+                // (/delete)?  (or at least move into dIsdt calculation below, to be
+                // consistent w/ handling of other case? or need it for other uses
+                // of kc_apl_drive?)
+                // TODO (what is concern really? delete? isn't behavior already
+                // diff, esp w/ tuning?) this change behavior of my
+                // allow_net_inh_per_claw=False path? add test that would catch it!
+                //kc_apl_drive = bouton_apl_drive + kc_apl_drive * 0.2;
+            }
+            total_apl_drive = kc_apl_drive;
+            if (!p.kc.microglomeruli_apl_units) {
+                Is_from_kcs(t) = kc_apl_drive;
+            } else {
+                // TODO TODO TODO how to properly index/set here?
+            }
+            if (p.pn.preset_wPNAPL) {
+                // TODO TODO TODO how to scale this relative to above tho? use
+                // same scale factor from loop below? may first need to at least
+                // start by checking that produces similar tuning scale outputs to
+                // scale factor here?
+                // TODO TODO if i end up trying to hardcode these, also try
+                // hardcoding during thr tuning step?
+                // TODO (delete) what's appropriate scale factor on this?
+                // several hundred? want same as in loop below? param for it?
+                bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
                 if (!p.kc.microglomeruli_apl_units) {
-                    Is_from_kcs(t) = bouton_apl_drive;
+                    Is_from_pns(t) = bouton_apl_drive;
                 } else {
                     // TODO TODO TODO how to properly index/set here?
                 }
+                total_apl_drive += bouton_apl_drive;
+            }
+            dIsdt = -Is(t-1) + total_apl_drive;
+
+            // TODO delete. for debugging.
+            if (t >= stim_start && t <= stim_end) {
+                if (kc_apl_drive > max_kc_apl_drive) {
+                    max_kc_apl_drive = kc_apl_drive;
+                }
+                total_kc_apl_drive += kc_apl_drive;
+
                 if (p.pn.preset_wPNAPL) {
-                    // TODO TODO TODO how to scale this relative to above tho? use
-                    // same scale factor from loop below? may first need to at least
-                    // start by checking that produces similar tuning scale outputs to
-                    // scale factor here?
-                    // TODO TODO if i end up trying to hardcode these, also try
-                    // hardcoding during thr tuning step?
-                    // TODO (delete) what's appropriate scale factor on this?
-                    // several hundred? want same as in loop below? param for it?
-                    bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
-                    if (!p.kc.microglomeruli_apl_units) {
-                        Is_from_pns(t) = bouton_apl_drive;
-                    } else {
-                        // TODO TODO TODO how to properly index/set here?
+                    if (bouton_apl_drive > max_bouton_apl_drive) {
+                        max_bouton_apl_drive = bouton_apl_drive;
                     }
-                    total_apl_drive += bouton_apl_drive;
+                    total_bouton_apl_drive += bouton_apl_drive;
                 }
-                dIsdt = -Is(t-1) + total_apl_drive;
+            }
+            //
 
-                // TODO delete. for debugging.
-                if (t >= stim_start && t <= stim_end) {
-                    if (kc_apl_drive > max_kc_apl_drive) {
-                        max_kc_apl_drive = kc_apl_drive;
-                    }
-                    total_kc_apl_drive += kc_apl_drive;
+            // TODO also want to include a term for PN<>APL stuff here?
+            // (probably fine just in dIsdt above?)
+            double dinhdt = -inh(t-1) + Is(t-1);
 
-                    if (p.pn.preset_wPNAPL) {
-                        if (bouton_apl_drive > max_bouton_apl_drive) {
-                            max_bouton_apl_drive = bouton_apl_drive;
-                        }
-                        total_bouton_apl_drive += bouton_apl_drive;
-                    }
-                }
+            // TODO factor into a fn to sum over claws? (something w/ generic types
+            // [how?], or at least a version both for vector and scalar
+            // input/outputs?)
+            // TODO TODO can i pass a function to access claw_sims like this? or
+            // should i pass the data and a function to access it separately?
+            // should this fn always be indexing, and thus not need an arbitrary fn
+            // input (just something with .rows() == # claws?)?
+            Eigen::VectorXd pn_drive = sum_across_claws_within_each_kc(p, rv,
+                claw_sims.col(t)
+            );
+
+            // NOTE: pn_drive includes inh (effect of wAPLKC) here, since calculated
+            // per claw above
+            dKCdt = (-Vm.col(t-1) + pn_drive).array() - use_ffapl * ffapl_t(t-1);
+
+            Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
+            inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
+            // TODO TODO rename tau_apl2kc (back to what matt had it originally? i
+            // something more meaningful?), now that it might also be shared for
+            // PN<>APL calculation? or do i want a separate tau there? prob not?
+            // would that probably effectively need a separate APL? (or separate
+            // quantity tracked per bouton instead of 1 scalar globally? that even
+            // make sense, or any reason for complexity [vs 1 APL scalar multiplied
+            // by weights]?
+            Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
+
+            // TODO only even calculate this if certain conditions met? it's not
+            // used typoically, right? (or at least, effectively? is that just b/c
+            // it's all 1s? and why is that)?
+            nves.col(t) = nves.col(t-1);
+            nves.col(t) += (p.time.dt *
+                ((1.0 - nves.col(t-1).array()).matrix() / p.kc.tau_r) -
+                (p.kc.ves_p*spikes.col(t-1).array() *
+                 nves.col(t-1).array()).matrix()
+            );
+
+            // TODO <= 0 for consistency?
+            if (p.kc.n_claws_active_to_spike < 0) {
+                //auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
+                // TODO fix: (same issue if Row instead of Column)
+                // libolfsysm/include/Eigen/src/Core/util/XprHelper.h:816:96: error:
+                // static assertion failed:
+                // YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY
+                //thr_comp = Vm.col(t).array() > rv.kc.thr.array();
+
+                // TODO this solution also work in newer instance of
+                // similar issue i'm having in fit_sparseness? or already tried this
+                // code there? (have something working there, but would be good to
+                // check it's consistent if it can be)
+                // TODO see other comment about `auto const` issue
+                auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
+                //auto const thr_comp = (Vm.col(t).array() > rv.kc.thr.array()).eval();
+                // TODO de-dupe after fixing
+                // either go to 1 or _stay_ at 0.
+                spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+                // very abrupt repolarization!
+                Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
+                //
+            } else {
+                // TODO TODO what type is this? how to avoid compilation error about
+                // mixing types below?
+                auto const claw_thr_comp = claw_sims.col(t).array() > rv.kc.thr.array();
+                // TODO see other comment about `auto const` issue
+                //auto const claw_thr_comp = (claw_sims.col(t).array() > rv.kc.thr.array()).eval();
+
+                // NOTE: cast<double>() seems required to avoid compilation time
+                // Eigen complaint about mixing types here. Presumably the
+                // inequality above gives us something with int (unsigned?) type?
+                // TODO how to check type of above? just assign into a fixed type
+                // until it works?
+                // https://stackoverflow.com/questions/23946658
+                Eigen::VectorXd n_claws_active = sum_across_claws_within_each_kc(p,
+                    rv, claw_thr_comp.cast<double>()
+                );
+
+                // TODO see other comment about `auto const` issue
+                auto const thr_comp = n_claws_active.array() >= p.kc.n_claws_active_to_spike;
+                //auto const thr_comp = (n_claws_active.array() >= p.kc.n_claws_active_to_spike).eval();
+
+                // TODO de-dupe after fixing
+                // either go to 1 or _stay_ at 0.
+                spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+                // TODO TODO just have Vm entirely undefined in this case (all 0 or
+                // something)? still used for anything (would prob be incorrect if
+                // so...)?
+                // very abrupt repolarization!
+                Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
                 //
 
-                // TODO also want to include a term for PN<>APL stuff here?
-                // (probably fine just in dIsdt above?)
-                double dinhdt = -inh(t-1) + Is(t-1);
-
-                // TODO factor into a fn to sum over claws? (something w/ generic types
-                // [how?], or at least a version both for vector and scalar
-                // input/outputs?)
-                // TODO TODO can i pass a function to access claw_sims like this? or
-                // should i pass the data and a function to access it separately?
-                // should this fn always be indexing, and thus not need an arbitrary fn
-                // input (just something with .rows() == # claws?)?
-                Eigen::VectorXd pn_drive = sum_across_claws_within_each_kc(p, rv,
-                    claw_sims.col(t)
-                );
-
-                // NOTE: pn_drive includes inh (effect of wAPLKC) here, since calculated
-                // per claw above
-                dKCdt = (-Vm.col(t-1) + pn_drive).array() - use_ffapl * ffapl_t(t-1);
-
-                Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
-                inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
-                // TODO TODO rename tau_apl2kc (back to what matt had it originally? i
-                // something more meaningful?), now that it might also be shared for
-                // PN<>APL calculation? or do i want a separate tau there? prob not?
-                // would that probably effectively need a separate APL? (or separate
-                // quantity tracked per bouton instead of 1 scalar globally? that even
-                // make sense, or any reason for complexity [vs 1 APL scalar multiplied
-                // by weights]?
-                Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
-
-                // TODO only even calculate this if certain conditions met? it's not
-                // used typoically, right? (or at least, effectively? is that just b/c
-                // it's all 1s? and why is that)?
-                nves.col(t) = nves.col(t-1);
-                nves.col(t) += (p.time.dt *
-                    ((1.0 - nves.col(t-1).array()).matrix() / p.kc.tau_r) -
-                    (p.kc.ves_p*spikes.col(t-1).array() *
-                     nves.col(t-1).array()).matrix()
-                );
-
-                // TODO <= 0 for consistency?
-                if (p.kc.n_claws_active_to_spike < 0) {
-                    //auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-                    // TODO fix: (same issue if Row instead of Column)
-                    // libolfsysm/include/Eigen/src/Core/util/XprHelper.h:816:96: error:
-                    // static assertion failed:
-                    // YOU_MIXED_DIFFERENT_NUMERIC_TYPES__YOU_NEED_TO_USE_THE_CAST_METHOD_OF_MATRIXBASE_TO_CAST_NUMERIC_TYPES_EXPLICITLY
-                    //thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-
-                    // TODO this solution also work in newer instance of
-                    // similar issue i'm having in fit_sparseness? or already tried this
-                    // code there? (have something working there, but would be good to
-                    // check it's consistent if it can be)
-                    // TODO see other comment about `auto const` issue
-                    auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
-                    //auto const thr_comp = (Vm.col(t).array() > rv.kc.thr.array()).eval();
-                    // TODO de-dupe after fixing
-                    // either go to 1 or _stay_ at 0.
-                    spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-                    // very abrupt repolarization!
-                    Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
-                    //
-                } else {
-                    // TODO TODO what type is this? how to avoid compilation error about
-                    // mixing types below?
-                    auto const claw_thr_comp = claw_sims.col(t).array() > rv.kc.thr.array();
-                    // TODO see other comment about `auto const` issue
-                    //auto const claw_thr_comp = (claw_sims.col(t).array() > rv.kc.thr.array()).eval();
-
-                    // NOTE: cast<double>() seems required to avoid compilation time
-                    // Eigen complaint about mixing types here. Presumably the
-                    // inequality above gives us something with int (unsigned?) type?
-                    // TODO how to check type of above? just assign into a fixed type
-                    // until it works?
-                    // https://stackoverflow.com/questions/23946658
-                    Eigen::VectorXd n_claws_active = sum_across_claws_within_each_kc(p,
-                        rv, claw_thr_comp.cast<double>()
-                    );
-
-                    // TODO see other comment about `auto const` issue
-                    auto const thr_comp = n_claws_active.array() >= p.kc.n_claws_active_to_spike;
-                    //auto const thr_comp = (n_claws_active.array() >= p.kc.n_claws_active_to_spike).eval();
-
-                    // TODO de-dupe after fixing
-                    // either go to 1 or _stay_ at 0.
-                    spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-                    // TODO TODO just have Vm entirely undefined in this case (all 0 or
-                    // something)? still used for anything (would prob be incorrect if
-                    // so...)?
-                    // very abrupt repolarization!
-                    Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
-                    //
-
-                    // TODO also want to de/re-polarize claws? make sense (w/ and w/o?)?
-                }
-                // TODO restore here after de-duping above (/delete)
-                // either go to 1 or _stay_ at 0.
-                //spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-                // very abrupt repolarization!
-                //Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
+                // TODO also want to de/re-polarize claws? make sense (w/ and w/o?)?
             }
+            // TODO restore here after de-duping above (/delete)
+            // either go to 1 or _stay_ at 0.
+            //spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+            // very abrupt repolarization!
+            //Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
         }
     } else {
         Column dKCdt;
@@ -2892,20 +2557,31 @@ void sim_KC_layer(
             // TODO delete. these checks should already be run in check_weights
             //check(rv.kc.wKCAPL.rows() == 1);
             //check(rv.kc.wKCAPL.cols() > 1);
-            const double kc_apl_drive = rv.kc.wKCAPL.col(0).dot(kc_activity);
+            double kc_apl_drive = rv.kc.wKCAPL.col(0).dot(kc_activity);
             // TODO update all defs so wKCAPL is recognized as a vector at compile time?
             // currently this won't compile because of that.
             //const double kc_apl_drive = rv.kc.wKCAPL.dot(kc_activity);
 
             // use the scalar
             // TODO what is the 1e4 for?
-            const double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
+            // TODO TODO TODO TODO why is kc_apl_drive not directly providing current,
+            // instead of causing a change in current? how did ann's model work?  is
+            // this also how old matt code worked? (seems so)
+            // TODO TODO TODO TODO is this actually consistent w/ equations ann has in
+            // paper (not sure it is...). matt and ann both seemed to use same old
+            // equations though.
+            // TODO TODO TODO is this consistent at all w/ how KC Vm is working?
+            // anything else to compare to? other models in literature?
+            double dIsdt = -Is(t-1) + kc_apl_drive * 1e4;
             double dinhdt = -inh(t-1) + Is(t-1);
             dKCdt = (
                 (-Vm.col(t-1) + kc_drive -rv.kc.wAPLKC*inh(t-1)).array()
                 -use_ffapl*ffapl_t(t-1)
             );
 
+            // TODO move loop so it has the conditional inside of it (rather than
+            // multiple loops, one in each branch of conditional), then share these
+            // updates across branches (no changes, currently, at least for first few)?
             Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
             inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
             Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
@@ -3090,28 +2766,10 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         // don't support homeostatic thresholds (so neither "hstatic" or "mixed")
         check( (p.kc.thr_type == "uniform") || (p.kc.thr_type == "fixed") );
 
-        // not yet implemented for this code path
-        check(p.kc.apl_coup_const == -1);
-
         // TODO also check that n_claws_active_to_spike is at least <= max # claws?
         // could go further and check at least the target frac of KCs have >= this many
         // claws (but may be easier to handle this checking when actually computing
         // claw threshold)
-    }
-
-    // checking we aren't requesting features not yet implemented in the compartmented
-    // APL code.
-    if (p.kc.apl_coup_const != -1) {
-        check(!p.kc.save_claw_sims);
-        // TODO has tianpei fixed that in the code he messaged me about in early 2026?
-        //
-        // NOTE: currently just forcing to true (with a warning) in python fit_mb_model,
-        // if allow_net_inh_per_claw=false (the default) when `APL_coup_const != -1`
-        // NOTE: will have to change from default parameter on this one, in order to use
-        // current comparmented APL code
-        //
-        // just b/c not implemented in that branch yet
-        check(p.kc.allow_net_inh_per_claw);
     }
 
     if (regen) {
@@ -3134,14 +2792,22 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         // fit_sparseness currently)
         fit_sparseness(p, rv);
 
-        // TODO delete? redundant w/ check currently at start of fit_sparseness, at
-        // least if it's true that `claw_compartments.size() == claw_to_kc.size()`
+        // TODO delete? redundant w/ checks currently at start of fit_sparseness, at
+        // least if it's true that `kc_ids.size() == claw_to_kc.size()`
         // (add assertion for this latter thing, in fit_sparseness?)?
         // (may want to move / duplicate all checks at start of fit_sparesness to end of
         // that fn tho, only if there's a change they could be resized somewhere in
         // fit_sparesness)
+        // TODO TODO fix warning:
+        //   libolfsysm/src/olfsysm.cpp:2804:39: warning: comparison of integer
+        //   expressions of different signedness: ‘Eigen::Index’ {aka ‘long int’} and
+        //   ‘std::vector<long long int>::size_type’ {aka ‘long unsigned int’}
+        //   [-Wsign-compare]
+        // check(rv.kc.wAPLKC.rows() == p.kc.kc_ids.size());
+        // (would we also get this for check in `else`, if recompiling from scratch? why
+        // not, if not? kc.N is defined as unsigned)
         if (p.kc.wPNKC_one_row_per_claw) {
-            check(rv.kc.wAPLKC.rows() == rv.kc.claw_compartments.size());
+            check(rv.kc.wAPLKC.rows() == p.kc.kc_ids.size());
         } else {
             check(rv.kc.wAPLKC.rows() == p.kc.N);
         }
@@ -3370,6 +3036,8 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
     }
     if (p.kc.save_Is_sims) {
         check(r.kc.Is_sims.size() == n_odors);
+        check(r.kc.Is_from_kcs.size() == n_odors);
+        check(r.kc.Is_from_pns.size() == n_odors);
     }
     if (p.kc.save_claw_sims) {
         check(r.kc.claw_sims.size() == n_odors);
@@ -3413,6 +3081,8 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
             }
             if (p.kc.save_Is_sims) {
                 cut(r.kc.Is_sims[i]);
+                cut(r.kc.Is_from_kcs[i]);
+                cut(r.kc.Is_from_pns[i]);
             }
             if (p.kc.save_claw_sims) {
                 cut(r.kc.claw_sims[i]);
@@ -3565,6 +3235,8 @@ void save_odor_dynamics(ModelParams const& p, RunVars& r, std::string path, unsi
     }
     if (p.kc.save_Is_sims) {
         np::to_npy(r.kc.Is_sims[i], path + "/Is_sims");
+        np::to_npy(r.kc.Is_from_kcs[i], path + "/Is_from_kcs");
+        np::to_npy(r.kc.Is_from_pns[i], path + "/Is_from_pns");
     }
     if (p.kc.save_claw_sims) {
         np::to_npy(r.kc.claw_sims[i], path + "/claw_sims");

@@ -132,8 +132,6 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw)
         .def_readwrite("allow_net_inh_per_claw", &ModelParams::KC::allow_net_inh_per_claw)
-        .def_readwrite("comp_num", &ModelParams::KC::comp_num)
-        .def_readwrite("apl_coup_const", &ModelParams::KC::apl_coup_const)
         ;
 
 
@@ -228,8 +226,6 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
-        .def_readwrite("claw_compartments", &RunVars::KC::claw_compartments)
-        .def_readwrite("compartment_to_claws", &RunVars::KC::compartment_to_claws)
         .def_readonly("tuning_successful", &RunVars::KC::tuning_successful)
         // TODO delete? for debugging
         .def_readonly("odor_stats", &RunVars::KC::odor_stats)
