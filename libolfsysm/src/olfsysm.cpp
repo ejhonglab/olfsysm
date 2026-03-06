@@ -184,16 +184,6 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.preset_wAPLPN   = false;
     p.pn.preset_wPNAPL   = false;
 
-    // TODO delete this one? or repurpose in correct spot?
-    // (could still choose whether PN<>APL interactions are enabled during APL tuning?)
-    //p.pn.pn_apl_tune     = false;
-    //
-
-    // TODO delete these two, or use (just one?) + rename
-    //p.pn.apl_taum   = 0.05;
-    //p.pn.tau_apl2pn = 0.01;
-    //
-
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
     p.kc.uniform_pns           = false;
@@ -204,10 +194,29 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.preset_wAPLKC         = false;
     p.kc.preset_wKCAPL         = false;
 
+    // TODO TODO TODO is there actually a refractory period at all? add one, if not?
+    // if unclear, add test driving w/ arbitrarily strong ORN input? (+ check that gets
+    // preserved thru PNs -> check min spike-to-spike time)
+    // TODO is Vm resetting also typically done in integrate-and-fire models (should be,
+    // right?), or was that a hack to add something like a refractory period here?
+    // change anything about how the resetting is done?
+
+    // TODO TODO TODO separate flags for "currents" from KCs (spiking KCs only probably)
+    // vs from claws/boutons directly? or only one flag, for the single one that makes
+    // sense, if there's only one (may only make sense to have this 2nd time constant to
+    // smooth out spiking KC-spiking input)? or one flag to control both, regardless?
+    // TODO TODO TODO also check we don't need a similar flag like this for PN (bouton
+    // and/or non-spiking claw) inputs?S
+    //
+    // TODO TODO TODO implement
+    p.kc.apl_current_from_kcs_is_integral = true;
+
     // TODO rename to indicate this is controlling whether spiking is required to drive
     // APL (and where APL input comes from)
-    p.kc.pn_claw_to_APL           = false;
+    p.kc.pn_claw_to_apl           = false;
+    // TODO TODO TODO implement
     p.kc.microglomeruli_apl_units = false;
+
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
     p.kc.n_claws_active_to_spike  = -1;
@@ -221,7 +230,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.use_homeostatic_thrs  = true;
     p.kc.thr_type              = "";
     p.kc.sp_target             = 0.1;
-    p.kc.sp_factor_pre_APL     = 2.0;
+    p.kc.sp_factor_pre_apl     = 2.0;
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 10.0;
 
@@ -243,6 +252,23 @@ ModelParams const DEFAULT_PARAMS = []() {
     // in .hpp file
     p.kc.taum                  = 0.01;
     p.kc.apl_Cm                = 0.1;
+    // TODO TODO experiment w/ faster tau_inh? what do dynamics / responses look
+    // like then?
+    // from ann's matlab code about the meaning of each of these time constants:
+    // "tau_inh: assume APL inhibition is slow (following the lead of LN
+    // inhibition)"
+    // "tau_Is: synaptic time constant, KC->inh"
+    //
+    // TODO TODO rename tau_apl2kc (back to what matt had it originally? what was
+    // thiat? i something more meaningful?), now that it might also be shared for
+    // PN<>APL calculation? or do i want a separate tau there? prob not?
+    // would that probably effectively need a separate APL? (or separate
+    // quantity tracked per bouton instead of 1 scalar globally? that even
+    // make sense, or any reason for complexity [vs 1 APL scalar multiplied
+    // by weights]?
+    // TODO TODO TODO is tau_apl2kc even accurate here? this is more a time constant
+    // for KC synaptic release onto APL, right? (and just for spiking KC responses,
+    // probably?)
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
 
@@ -463,6 +489,11 @@ RunVars::KC::KC(ModelParams const& p) :
     // TODO ever want these w/o #-boutons > 0? check preset_wAPLPN/etc instead?
     // (was getting out of range issues in some paths when i was setting len of these
     // std::vectors to 0 when not n_total_boutons > 0 though)
+    // TODO TODO TODO should this not be of length equal to # KCs (/claws, when
+    // appropriate), with decay applied for each? maybe 3 dimensions, w/ first dimension
+    // either being that or 1 (then 1/#boutons, timepoints) (or maybe have 1/#boutons be
+    // first, followed by # KCs/claws?)
+    // TODO TODO did ann also have only one scalar across all KCs, at least?
     Is_from_kcs(p.kc.save_Is_sims ? get_nodors(p) : 0,
         Matrix(
             p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
@@ -568,6 +599,7 @@ bool all_nonneg(Matrix& mat) {
 // TODO just want vector input/output always?
 // TODO TODO should this not be a reference to unit_vec, like most other fns?
 // maybe const too?
+// TODO TODO expose to python bindings, to test? or unit test in new C++ unit tests?
 template<typename T>
 Eigen::VectorXd duplicate_vals_for_each_subunit_id(Eigen::VectorXd unit_vec,
     T unit_id_for_each_subunit) {
@@ -601,6 +633,7 @@ Eigen::VectorXd duplicate_vals_for_each_subunit_id(Eigen::VectorXd unit_vec,
 // TODO do we actually want to support input other than vectors? (could try
 // template<typename T> if needed) don't think so tho
 // TODO any reason i can't use const for rv here? (seems ok so far...)
+// TODO TODO expose to python bindings, to test? or unit test in new C++ unit tests?
 Eigen::VectorXd sum_across_claws_within_each_kc(ModelParams const& p, RunVars const& rv,
     Eigen::VectorXd claw_vec) {
     // TODO check wPNKC_one_row_per_claw=true (should only be called then anyway...)?
@@ -1089,7 +1122,7 @@ Column choose_KC_thresh_uniform(
         // KCpks? (to try to figure out limits of precision in sparsity achievable
         // through setting threshold alone)
         thr_const = KCpks(std::min(
-            int(p.kc.sp_target * p.kc.sp_factor_pre_APL * double(p.kc.N*tlist_sz)),
+            int(p.kc.sp_target * p.kc.sp_factor_pre_apl * double(p.kc.N*tlist_sz)),
             int(p.kc.N*tlist_sz)-1));
 
     // TODO delete. if i implement automatic threshold picking for this case, move into
@@ -1129,7 +1162,7 @@ Column choose_KC_thresh_homeostatic(
      * lack of stl iterators in Eigen <=3.4. */
     Column thr = 2.0*spont_in;
     unsigned cols = KCpks.cols();
-    unsigned wanted = p.kc.sp_target * p.kc.sp_factor_pre_APL * double(cols);
+    unsigned wanted = p.kc.sp_target * p.kc.sp_factor_pre_apl * double(cols);
     KCpks.transposeInPlace();
     KCpks.resize(1, KCpks.size());
     /* Choose a threshold for each KC by inspecting its sorted responses. */
@@ -2220,11 +2253,10 @@ void sim_KC_layer(
 
     // TODO just set this automatically (to wPNKC.cols()) if wPNKC.cols() >
     // get_ngloms(p)?
+    // TODO also use NaN here?
+    Is_from_kcs.setZero();
+    Is_from_pns.setZero();
     if (p.pn.n_total_boutons > 0) {
-        // TODO also use NaN here?
-        Is_from_kcs.setZero();
-        Is_from_pns.setZero();
-
         // TODO TODO should some parameter exist for like a bouton time constant
         // (or moving average window?), something with which to balance effect of APL vs
         // PN feedforward activity (will i actually want to try something other than
@@ -2362,9 +2394,9 @@ void sim_KC_layer(
         double kc_apl_drive = 0.0;
         double bouton_apl_drive = 0.0;
         double total_apl_drive = 0.0;
-        // NOTE: pn_claw_to_APL=false if wPNKC_one_row_per_claw=false (checked at
+        // NOTE: pn_claw_to_apl=false if wPNKC_one_row_per_claw=false (checked at
         // start of run_KC_sims)
-        if (!p.kc.pn_claw_to_APL) {
+        if (!p.kc.pn_claw_to_apl) {
             // APL activity depends on KC spiking
 
             // TODO is this multiplication elementwise? is that the point if
@@ -2406,6 +2438,8 @@ void sim_KC_layer(
             }
             // TODO TODO some reason we shouldn't just use the same 1e4
             // scale factor in both cases, instead of just this condition?
+            // TODO TODO maybe multiply by # of KCs[/claws, when appropriate] instead
+            // (and by # of boutons below?)?
             // TODO use *= 1e4? matter? need to make sure we are multiplying by
             // float type?
             kc_apl_drive = kc_apl_drive * 1e4;
@@ -2464,7 +2498,7 @@ void sim_KC_layer(
         // TODO TODO TODO is this consistent at all w/ how KC Vm is working?
         // anything else to compare to? other models in literature?
         // TODO TODO TODO TODO maybe it makes sense to have the two timecourses for the
-        // discrete KC input, when pn_claw_to_APL=false, but otherwise just provide
+        // discrete KC input, when pn_claw_to_apl=false, but otherwise just provide
         // input directly as current? change to only apply this timeconstant for KC
         // inputs, never for bouton/claw inputs?
         // TODO TODO TODO should i still try and see what happens when even KC spiking
@@ -2474,6 +2508,11 @@ void sim_KC_layer(
 
         // TODO can i use a consistent variable across the two cases (-> and
         // get rid of the conditional)?
+        // TODO rename pn_drive[_with_inh] + kc_drive? still a bit confusing. downside
+        // to reusing pn_drive name for what is currently kc_drive? at least then it
+        // wouldn't look like it is the only case where it's of length equal to # KCs
+        // (true for all of these, at least after sum_across_claws_within_each_kc
+        // called, if needed)
         Column dKCdt;
         if (p.kc.wPNKC_one_row_per_claw) {
             // NOTE: kc_drive includes inh (effect of wAPLKC) here, since calculated
@@ -2490,18 +2529,6 @@ void sim_KC_layer(
 
         Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
         inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
-        // from ann's matlab code about the meaning of each of these time constants:
-        // "tau_inh: assume APL inhibition is slow (following the lead of LN
-        // inhibition)"
-        // "tau_Is: synaptic time constant, KC->inh"
-        //
-        // TODO TODO rename tau_apl2kc (back to what matt had it originally? what was
-        // thiat? i something more meaningful?), now that it might also be shared for
-        // PN<>APL calculation? or do i want a separate tau there? prob not?
-        // would that probably effectively need a separate APL? (or separate
-        // quantity tracked per bouton instead of 1 scalar globally? that even
-        // make sense, or any reason for complexity [vs 1 APL scalar multiplied
-        // by weights]?
         Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
 
         // TODO only even calculate this if certain conditions met? it's not
@@ -2533,6 +2560,13 @@ void sim_KC_layer(
             // TODO de-dupe after fixing
             // either go to 1 or _stay_ at 0.
             spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+            // TODO TODO TODO actually implement a refractory period (3ms in Ann's
+            // model, i believe)? at least check we aren't getting spikes at shorter
+            // intervals than that parameter (add mp.kc.refactory_period_ms for this?),
+            // even if not implemented?
+            // TODO TODO need to store separate vector (length KCs) of last spike time,
+            // in order to implement?
+            //
             // very abrupt repolarization!
             Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
             //
@@ -2557,10 +2591,12 @@ void sim_KC_layer(
             auto const thr_comp = n_claws_active.array() >= p.kc.n_claws_active_to_spike;
             //auto const thr_comp = (n_claws_active.array() >= p.kc.n_claws_active_to_spike).eval();
 
-            // TODO de-dupe after fixing
+            // TODO TODO de-dupe after fixing (these last two lines are same as in
+            // above. any issue w/ moving below conditional? was it just thr_comp def
+            // that had an issue?)
             // either go to 1 or _stay_ at 0.
             spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-            // TODO TODO just have Vm entirely undefined in this case (all 0 or
+            // TODO TODO just have Vm entirely undefined in this case (all NaN/0 or
             // something)? still used for anything (would prob be incorrect if
             // so...)?
             // very abrupt repolarization!
@@ -2709,7 +2745,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         rv.log(cat("p.kc.wPNKC_one_row_per_claw=", p.kc.wPNKC_one_row_per_claw));
         if (p.kc.wPNKC_one_row_per_claw) {
             rv.log(cat("p.kc.allow_net_inh_per_claw=", p.kc.allow_net_inh_per_claw));
-            rv.log(cat("p.kc.pn_claw_to_APL=", p.kc.pn_claw_to_APL));
+            rv.log(cat("p.kc.pn_claw_to_apl=", p.kc.pn_claw_to_apl));
         }
         rv.log(cat("p.kc.N=", p.kc.N));
         rv.log(cat("rv.kc.wPNKC.rows()=", rv.kc.wPNKC.rows()));
@@ -2742,7 +2778,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     // TODO anything else we only want to support in one-row-per-claw cases?
     // TODO care to assert that allow_net_inh_per_claw is left at default?
-    if (p.kc.pn_claw_to_APL) {
+    if (p.kc.pn_claw_to_apl) {
         check(p.kc.wPNKC_one_row_per_claw);
     }
 
@@ -2840,12 +2876,18 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
         Matrix Is_here;
         if (!p.kc.save_Is_sims) {
+            // TODO TODO TODO should there be one decay per KC (so this shape of # of
+            // KCs, for 1st/2nd component of shape? maybe on top of additional two
+            // dims?) (same question for Is_from_kc, as long as that is a separate
+            // variable from this)
             Is_here = Matrix(1, p.time.steps_all());
         }
 
         if (p.kc.microglomeruli_apl_units) {
             check(p.pn.n_total_boutons > 1);
         }
+        // TODO TODO TODO just replace w/ Is? (after removing PN component from that)
+        // or rename Is->Is_from_kcs?
         Matrix Is_from_kcs;
         if (!p.kc.save_Is_sims) {
             Is_from_kcs = Matrix(
@@ -2853,6 +2895,9 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 p.time.steps_all()
             );
         }
+        // TODO TODO maybe i don't need separate dynamics for Is_from_pns (or at
+        // least, not separate decay [+ not apply the Is decay for the KC>APL
+        // "synapses"]. could still track for debugging
         Matrix Is_from_pns;
         if (!p.kc.save_Is_sims) {
             Is_from_pns = Matrix(
@@ -2860,13 +2905,6 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 p.time.steps_all()
             );
         }
-        // TODO delete
-        // TODO rows/cols are both 0 here (at least sometimes). that ok?
-        //rv.log(cat("Is_from_pns.rows(): ", Is_from_pns.rows()));
-        //rv.log(cat("Is_from_pns.cols(): ", Is_from_pns.cols()));
-        //rv.log(cat("Is_from_kcs.rows(): ", Is_from_kcs.rows()));
-        //rv.log(cat("Is_from_kcs.cols(): ", Is_from_kcs.cols()));
-        //
 
         Matrix claw_here;
         if (!p.kc.save_claw_sims) {

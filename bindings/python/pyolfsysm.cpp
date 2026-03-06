@@ -98,7 +98,10 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tune_apl_weights", &ModelParams::KC::tune_apl_weights)
         .def_readwrite("preset_wAPLKC", &ModelParams::KC::preset_wAPLKC)
         .def_readwrite("preset_wKCAPL", &ModelParams::KC::preset_wKCAPL)
-        .def_readwrite("pn_claw_to_APL", &ModelParams::KC::pn_claw_to_APL)
+        .def_readwrite("apl_current_from_kcs_is_integral",
+            &ModelParams::KC::apl_current_from_kcs_is_integral
+        )
+        .def_readwrite("pn_claw_to_apl", &ModelParams::KC::pn_claw_to_apl)
         .def_readwrite("microglomeruli_apl_units", &ModelParams::KC::microglomeruli_apl_units)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
@@ -109,7 +112,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("use_homeostatic_thrs", &ModelParams::KC::use_homeostatic_thrs)
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
-        .def_readwrite("sp_factor_pre_APL", &ModelParams::KC::sp_factor_pre_APL)
+        .def_readwrite("sp_factor_pre_apl", &ModelParams::KC::sp_factor_pre_apl)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
         .def_readwrite("hardcode_initial_sp", &ModelParams::KC::hardcode_initial_sp)
@@ -135,7 +138,6 @@ PYBIND11_MODULE(olfsysm, m) {
         ;
 
 
-
 	/* TODO convert all values in DEFAULT_PARAMS to default kwargs on a python
        constructor */
 
@@ -152,12 +154,14 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readonly("ready", &RunVars::ready)
         .def(py::init<ModelParams const&>());
 
-    // TODO w/o explicit disable are there problems w/ things writing to same file
-    // sequentially if not? (haven't tested yet. might want to test multiple sequential
-    // calls [seems like it appends just fine] and also what happens if file either
-    // never exists in first place, or if python makes the file but then moves/deletes
-    // it (does C++ just keep appending to old path? doesn't seem anything blows up.)
-    // (if never need explicit, could remove disable from interface here again)
+    // TODO (delete. don't think this is an issue, but should prob add a test to
+    // establish behavior) w/o explicit disable are there problems w/ things writing to
+    // same file sequentially if not? (haven't tested yet.  might want to test multiple
+    // sequential calls [seems like it appends just fine] and also what happens if file
+    // either never exists in first place, or if python makes the file but then
+    // moves/deletes it (does C++ just keep appending to old path? doesn't seem anything
+    // blows up.) (if never need explicit, could remove disable from interface here
+    // again)
     py::class_<Logger>(m, "RVLogger")
         .def("redirect", py::overload_cast<const std::string &>(&Logger::redirect))
         .def("tee", &Logger::tee)
@@ -186,10 +190,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wPNAPL", &RunVars::PN::wPNAPL)
         .def_readwrite("wAPLPN_scale", &RunVars::PN::wAPLPN_scale)
         .def_readwrite("wPNAPL_scale", &RunVars::PN::wPNAPL_scale)
-        // TODO change *_unscaled to readwrite or nah?
         .def_readonly("wAPLPN_unscaled", &RunVars::PN::wAPLPN_unscaled)
         .def_readonly("wPNAPL_unscaled", &RunVars::PN::wPNAPL_unscaled)
-        //
         .def_readonly("pn_sims", &RunVars::PN::sims)
         .def_readonly("bouton_sims", &RunVars::PN::bouton_sims);
 
@@ -203,15 +205,11 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wKCAPL", &RunVars::KC::wKCAPL)
         .def_readwrite("wAPLKC_scale", &RunVars::KC::wAPLKC_scale)
         .def_readwrite("wKCAPL_scale", &RunVars::KC::wKCAPL_scale)
-        // TODO change *_unscaled to readwrite or nah?
         .def_readonly("wAPLKC_unscaled", &RunVars::KC::wAPLKC_unscaled)
         .def_readonly("wKCAPL_unscaled", &RunVars::KC::wKCAPL_unscaled)
-        //
         .def_readonly("pks", &RunVars::KC::pks)
         .def_readwrite("spont_in", &RunVars::KC::spont_in)
         .def_readwrite("thr", &RunVars::KC::thr)
-        // TODO readonly for all these main output vars? any reason not to?
-        // (was readwrite initially)
         .def_readonly("responses", &RunVars::KC::responses)
         .def_readonly("spike_counts", &RunVars::KC::spike_counts)
         .def_readonly("vm_sims", &RunVars::KC::vm_sims)
@@ -222,7 +220,6 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readonly("Is_from_kcs", &RunVars::KC::Is_from_kcs)
         .def_readonly("Is_from_pns", &RunVars::KC::Is_from_pns)
         .def_readonly("claw_sims", &RunVars::KC::claw_sims)
-        //
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)

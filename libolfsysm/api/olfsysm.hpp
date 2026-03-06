@@ -243,6 +243,9 @@ struct ModelParams {
         /* Set to true if using a pre-loaded KC->APL weight vector. */
         bool preset_wKCAPL;
 
+        // TODO keep?
+        bool apl_current_from_kcs_is_integral;
+
         /* If false, APL activity will depend on KC spiking, and then a KC spiking will
          * cause all of its claws to provide input to the APL (just multiplied by
          * wKCAPL).
@@ -252,7 +255,7 @@ struct ModelParams {
          * inhibition [-> rectification] to each claw will be applied first).
          *
          * Only relevant if wPNKC_one_row_per_claw=true. */
-        bool pn_claw_to_APL;
+        bool pn_claw_to_apl;
 
         /* Will treat each microglomerulus as a separate (uncoupled with other
          * microglomeruli, for now) APL, if true. If false, there will be one global
@@ -304,11 +307,11 @@ struct ModelParams {
         /* The target sparsity. */
         double sp_target;
 
-        /* (sp_target * sp_factor_pre_APL) is sparsity (>sp_target) achieved by setting
+        /* (sp_target * sp_factor_pre_apl) is sparsity (>sp_target) achieved by setting
          * KC spike thresholds alone, then sparsity is brought down to sp_target by
          * tuning APL. Must be >1, but small enough that (sp_target *
-         * sp_factor_pre_APL) <= 1.0 */
-        double sp_factor_pre_APL;
+         * sp_factor_pre_apl) <= 1.0 */
+        double sp_factor_pre_apl;
 
         /* Specifies the fraction +/- of the given target that is considered an
          * acceptable sparsity. */
