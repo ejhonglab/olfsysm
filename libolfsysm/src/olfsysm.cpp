@@ -1837,13 +1837,18 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 // (ever going to use other thr_type's again though?)
                 log_stats(rv, spont_in, "spont_in");
 
-                // TODO why error w/ .array() on spont_in here, but it's used in calc
-                // elsewhere (presumably out of necessity)?
-                Column fixed_thr = rv.kc.thr - spont_in*2.0;
-                double fixed_thr_max = fixed_thr.maxCoeff();
-                double fixed_thr_min = fixed_thr.minCoeff();
-                rv.log(cat("fixed_thr: ", fixed_thr_min));
-                check(abs(fixed_thr_max - fixed_thr_min) < 1e-6);
+                // can not reduce down to a single values in homeostatic_thrs case,
+                // because then there is a separate threshold for each KC (and not all
+                // at same offset with respect to spont_in either)
+                if (!p.kc.use_homeostatic_thrs) {
+                    // TODO why error w/ .array() on spont_in here, but it's used in
+                    // calc elsewhere (presumably out of necessity)?
+                    Column fixed_thr = rv.kc.thr - spont_in*2.0;
+                    double fixed_thr_max = fixed_thr.maxCoeff();
+                    double fixed_thr_min = fixed_thr.minCoeff();
+                    rv.log(cat("fixed_thr: ", fixed_thr_min));
+                    check(abs(fixed_thr_max - fixed_thr_min) < 1e-6);
+                }
             }
         }
 
