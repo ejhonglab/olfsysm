@@ -338,7 +338,6 @@ struct ModelParams {
 
         /* Time constants. */
         double taum;
-        double apl_Cm;
         double apl_taum;
         double tau_apl2kc;
 

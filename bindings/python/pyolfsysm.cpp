@@ -120,7 +120,6 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)
         .def_readwrite("apltune_subsample", &ModelParams::KC::apltune_subsample)
         .def_readwrite("taum", &ModelParams::KC::taum)
-        .def_readwrite("apl_Cm", &ModelParams::KC::apl_Cm)
         .def_readwrite("apl_taum", &ModelParams::KC::apl_taum)
         .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc)
         .def_readwrite("tau_r", &ModelParams::KC::tau_r)
