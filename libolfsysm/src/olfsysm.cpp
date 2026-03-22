@@ -54,7 +54,7 @@ std::string cat(Args&&... args) {
     return ss.str();
 }
 
-Logger::Logger(): tee_color(0) {}
+Logger::Logger(): _tee(false), tee_color(0) {}
 Logger::Logger(Logger const&) {
     throw std::runtime_error("Can't copy Logger instances.");
 }
@@ -526,21 +526,8 @@ RunVars::KC::KC(ModelParams const& p) :
 
     tuning_successful(false),
 
-    // TODO get from stat_names.size() instead of 4?
-    // TODO init w/ NaN or something easier to distinguish from real output instead? -1?
-    odor_stats(get_nodors(p), Eigen::VectorXd(8))
+    sp_lr_coeff_to_tune_in_one_iter(0.0)
 {
-    stat_names = {
-        "max_kc_apl_drive",
-        "avg_kc_apl_drive",
-        "max_bouton_apl_drive",
-        "avg_bouton_apl_drive",
-        "avg_kc_pre_inh",
-        "avg_bouton_pre_inh",
-        "avg_kc_inh",
-        "avg_bouton_inh"
-    };
-
     if (p.kc.wPNKC_one_row_per_claw) {
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
         claw_to_kc.resize(raw.size());
@@ -1747,7 +1734,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             for (unsigned i=0; i<tlist.size(); i++) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                     Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
-                    Is_from_kcs, Is_from_pns, rv.kc.odor_stats[tlist[i]]
+                    Is_from_kcs, Is_from_pns
                 );
                 // TODO (probably at end of sim_KC_layer), check all quantities are
                 // fully initialized? maybe init w/ NaN or something (instead of 0,
@@ -1978,7 +1965,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             for (unsigned i=0; i<tlist.size(); i+=p.kc.apltune_subsample) {
                 sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                     Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
-                    Is_from_kcs, Is_from_pns, rv.kc.odor_stats[tlist[i]]
+                    Is_from_kcs, Is_from_pns
                 );
                 // TODO assert this is not true here? was it only because scale
                 // factor was negative here? expect above, but not here, right?
@@ -2035,10 +2022,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         check(initial_wAPLKC_scale != 0);
         if (rv.verbose) {
             double wAPLKC_delta_from_initial = initial_wAPLKC_scale - rv.kc.wAPLKC_scale;
-            double lr_to_tune_in_one_iter = wAPLKC_delta_from_initial / initial_rel_sp_diff;
+            double lr_to_tune_in_one_iter = abs(wAPLKC_delta_from_initial / initial_rel_sp_diff);
             // TODO print even if verbose=False? getting a lot of other output less
             // important than this now...
-            rv.log(cat("sp_lr_coeff to tune in one step: ", abs(lr_to_tune_in_one_iter)));
+            rv.log(cat("sp_lr_coeff to tune in one step: ", lr_to_tune_in_one_iter));
+            rv.kc.sp_lr_coeff_to_tune_in_one_iter = lr_to_tune_in_one_iter;
         }
     }
 
@@ -2187,8 +2175,7 @@ void sim_KC_layer(
     Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is,
     // TODO delete
     //Matrix& claw_sims, Matrix& bouton_sims, unsigned odor_index) {
-    Matrix& claw_sims, Matrix& bouton_sims, Matrix& Is_from_kcs, Matrix& Is_from_pns,
-    Eigen::VectorXd& odor_stats) {
+    Matrix& claw_sims, Matrix& bouton_sims, Matrix& Is_from_kcs, Matrix& Is_from_pns) {
     /* Args:
      * - inh: APL potential timeseries
      * - Is: KC->APL synapse current (across all KCs) timeseries
@@ -2221,26 +2208,6 @@ void sim_KC_layer(
         check(!p.pn.preset_wPNAPL);
     }
 
-    // TODO delete. for debugging
-    double max_kc_apl_drive = 0;
-    double max_bouton_apl_drive = 0;
-    double total_kc_apl_drive = 0;
-    double total_bouton_apl_drive = 0;
-    // TODO also want max for these two?
-    double total_kc_inh = 0;
-    double total_kc_pre_inh = 0;
-    double total_bouton_inh = 0;
-    double total_bouton_pre_inh = 0;
-    //
-    // TODO rename to *idx?
-    unsigned stim_start = p.time.start_step() + unsigned(
-        (p.time.stim.start-p.time.start)/(p.time.dt)
-    );
-    unsigned stim_end = p.time.start_step() + unsigned(
-        (p.time.stim.end-p.time.start)/(p.time.dt)
-    );
-    //
-
     unsigned n_claws = 0;
     if (p.kc.wPNKC_one_row_per_claw) {
         // TODO change to use same variable as everywhere else we get # claws,
@@ -2270,12 +2237,10 @@ void sim_KC_layer(
         );
         // TODO check pn_drive is shape we expect (should change depending on
         // wPNKC_one_row_per_claw=true/false)? already done at end of above fn?
-        total_kc_pre_inh += pn_drive.sum();
         // TODO TODO add check that this is shape we expect (especially to check no bugs
         // when adding microglomeruli_apl_units=true support, or support for this being
         // of length equal to #-claws[/KCs])
         Column kc_inh = rv.kc.wAPLKC * inh(t-1);
-        total_kc_inh += kc_inh.sum();
 
         // currently checking that wPNKC_one_row_per_claw=true, if either
         // preset_w[APLPN|PNAPL]=true (at top of run_KC_sims)
@@ -2283,23 +2248,9 @@ void sim_KC_layer(
             // TODO assert bouton_sims.col(t) is all not NaN / whatever here
             // (non-0, if initialized that way)?
 
-            // TODO delete? save separate dynamics for this and check in
-            // test_dynamics_indexing?
-            total_bouton_pre_inh += bouton_sims.col(t).sum();
-
             // this should guarantee that bouton_inh are all positive
             check(inh(t-1) >= 0);
-            // TODO TODO cap each of these at amount that would bring the unit to 0
-            // (currently average of this is > average of pre_inh) (just to accurately
-            // represent in odor_stats, wouldn't change calc that is currently limited
-            // w/ min 0 anyway)
             Column bouton_inh = rv.pn.wAPLPN * inh(t-1);
-            // TODO delete? save separate dynamics for this and check in
-            // test_dynamics_indexing?
-            // TODO assert bouton_inh all positive (just to sanity check unexpected
-            // effect of wAPLPN on sparsity. opposite direction of what i expected)
-            total_bouton_inh += bouton_inh.sum();
-            //
 
             // TODO TODO also experiment w/ subtracting spont from bouton_sims?
             // or maybe doing something like that in claws instead?
@@ -2310,7 +2261,6 @@ void sim_KC_layer(
             //
             // TODO refactor to share w/ wAPLKC below
             // TODO see other comment about `auto const` issue
-            // TODO TODO also log # lt0 here (+ into odor_stats?)?
             auto const bouton_sims_lt0 = bouton_sims.col(t).array() < 0;
             //auto const bouton_sims_lt0 = (bouton_sims.col(t).array() < 0).eval();
             // replace per-bouton sims to min of 0
@@ -2318,9 +2268,6 @@ void sim_KC_layer(
             // TODO make conditional (/delete)
             check(bouton_sims.col(t).minCoeff() >= 0);
             //
-
-            // TODO count + store (in odor_stats) # bouton_sims == 0
-            // (average? max? what?)
         }
         // TODO (delete? replace this separate vector w/ claw_sims.col(t)?
         // (should be same, but maybe confirm w/ repro test? overkill...)
@@ -2348,12 +2295,18 @@ void sim_KC_layer(
             }
         }
 
-        double kc_apl_drive = 0.0;
+        double dIsdt = -Is(t-1);
+        // dIsdt_from_spiking is change in KC synaptic dynamics, which then drive APL
+        // through Is. not directly driving APL.
+        double dIsdt_from_spiking = 0.0;
+        double kc_apl_drive;
         double bouton_apl_drive = 0.0;
         // NOTE: pn_claw_to_apl=false if wPNKC_one_row_per_claw=false (checked at
         // start of run_KC_sims)
         if (!p.kc.pn_claw_to_apl) {
-            // APL activity depends on KC spiking
+            // APL activity depends on KC spiking, which filters through synaptic
+            // dynamics in Is (currently one scalar shared across all KCs)
+            kc_apl_drive = Is(t-1);
 
             // TODO is this multiplication elementwise? is that the point if
             // .array()? (with matrices, by default, docs say it would be
@@ -2383,10 +2336,10 @@ void sim_KC_layer(
                     // (though would need to do more to compute Is_from_kcs here,
                     // because they have their own dynamics in this case [and only these
                     // pn_claw_to_apl=true cases])
-                    kc_apl_drive += rv.kc.wKCAPL(claw) * kc_activity[kc];
+                    dIsdt_from_spiking += rv.kc.wKCAPL(claw) * kc_activity[kc];
                 }
                 // TODO delete? get to work and replace above w/ this?
-                //kc_apl_drive = sum_across_claws_within_each_kc(p, rv,
+                //dIsdt_from_spiking = sum_across_claws_within_each_kc(p, rv,
                 //    rv.kc.wKCAPL * kc_activity[kc]
                 //);
             } else {
@@ -2394,10 +2347,10 @@ void sim_KC_layer(
                 // (though would need to do more to compute Is_from_kcs here, because
                 // they have their own dynamics in this case [and only these
                 // pn_claw_to_apl=true cases])
-                kc_apl_drive = rv.kc.wKCAPL.col(0).dot(kc_activity);
+                dIsdt_from_spiking = rv.kc.wKCAPL.col(0).dot(kc_activity);
                 // TODO update all defs so wKCAPL is recognized as a vector at
                 // compile time? currently this won't compile because of that.
-                //kc_apl_drive = rv.kc.wKCAPL.dot(kc_activity);
+                //dIsdt_from_spiking = rv.kc.wKCAPL.dot(kc_activity);
             }
             // TODO TODO some reason we shouldn't just use the same 1e4
             // scale factor in both cases, instead of just this condition?
@@ -2405,8 +2358,23 @@ void sim_KC_layer(
             // (and by # of boutons below?)?
             // TODO use *= 1e4? matter? need to make sure we are multiplying by
             // float type?
-            kc_apl_drive = kc_apl_drive * 1e4;
+            dIsdt_from_spiking = dIsdt_from_spiking * 1e4;
+
+            // TODO should i still try and see what happens when even KC spiking input
+            // to APL isn't filtered through this extra integration + decay? see if it
+            // really does become less well behaved somehow? (would prob immediately
+            // become spikier, or at least change more in discrete steps?)
+            // TODO TODO experiment w/ this being of length # claws? (each w/ their own
+            // timecourse of decay? (and w/ Is also being of that shape, and storing the
+            // dynamics of the decay)
+            dIsdt += dIsdt_from_spiking;
         } else {
+            // TODO maybe there should be a flag to also run this through (separate
+            // [i.e. distinct from Is]? potentially [w/ another flag?] per-claw length)
+            // dynamics, like Is?
+            // (or doesn't matter, b/c already smooth enough? any reasons beyond that?)
+
+            // TODO TODO TODO test this dot product in python too
             // APL activity (through KCs only even) does not depend on spiking.
             // Can get input directly from subthreshold claw activity here.
             kc_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
@@ -2414,17 +2382,19 @@ void sim_KC_layer(
             // above? compare magnitudes in the two cases? (+ compare magnitude
             // both cases have vs bouton drive)
         }
-        if (!p.kc.microglomeruli_apl_units) {
-            Is_from_kcs(t) = kc_apl_drive;
-        } else {
-            // TODO how to properly index/set here?
-        }
+
+        // NOTE: this is just going to be Is shifted by one, in pn_claw_to_apl=false
+        // case. so when plotting, probably only want to plot one of the two.
+        // (there is now some mb_model code that successfully asserts it is just shifted
+        // by one in that case)
+        Is_from_kcs(t) = kc_apl_drive;
+
         if (p.pn.preset_wPNAPL) {
-            // TODO TODO how to scale this relative to above tho? use
+            // TODO how to scale this relative to above tho? use
             // same scale factor from loop below? may first need to at least
             // start by checking that produces similar tuning scale outputs to
             // scale factor here?
-            // TODO TODO (delete?) if i end up trying to hardcode these, also try
+            // TODO (delete?) if i end up trying to hardcode these, also try
             // hardcoding during thr tuning step?
             bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
             if (!p.kc.microglomeruli_apl_units) {
@@ -2433,22 +2403,6 @@ void sim_KC_layer(
                 // TODO how to properly index/set here?
             }
         }
-
-        // TODO delete. for debugging.
-        if (t >= stim_start && t <= stim_end) {
-            if (kc_apl_drive > max_kc_apl_drive) {
-                max_kc_apl_drive = kc_apl_drive;
-            }
-            total_kc_apl_drive += kc_apl_drive;
-
-            if (p.pn.preset_wPNAPL) {
-                if (bouton_apl_drive > max_bouton_apl_drive) {
-                    max_bouton_apl_drive = bouton_apl_drive;
-                }
-                total_bouton_apl_drive += bouton_apl_drive;
-            }
-        }
-        //
 
         // Why is APL drive not directly providing current, instead of causing a change
         // in current? How did ann's model work? Is this also how old matt code worked?
@@ -2466,27 +2420,10 @@ void sim_KC_layer(
         // Now just the component from KC spiking [and only when pn_claw_to_apl=false])
         // gets filtered through Is and its time constant.
         //
-        // TODO TODO add python test that Is remains all 0 in all pn_claw_to_apl cases
-        double dIsdt = -Is(t-1);
-        if (!p.kc.pn_claw_to_apl) {
-            // TODO should i still try and see what happens when even KC spiking input
-            // to APL isn't filtered through this extra integration + decay? see if it
-            // really does become less well behaved somehow? (would prob immediately
-            // become spikier, or at least change more in discrete steps?)
-
-            // TODO TODO experiment w/ this being of length # claws? (each w/ their own
-            // timecourse of decay? (and w/ Is also being of that shape, and storing the
-            // dynamics of the decay)
-            dIsdt += kc_apl_drive;
-        }
-        double dinhdt = -inh(t-1) + Is(t-1);
-        // TODO TODO maybe there should be a flag to also run this through (separate
-        // [i.e. distinct from Is]? potentially [w/ another flag?] per-claw length)
-        // dynamics, like Is?
-        // (or doesn't matter, b/c already smooth enough? any reasons beyond that?)
-        if (p.kc.pn_claw_to_apl) {
-            dinhdt += kc_apl_drive;
-        }
+        // NOTE: kc_apl_drive is either:
+        // - Is(t-1), in pn_claw_to_apl=false case, or
+        // - direct input from claws, in pn_claw_to_apl=true case
+        double dinhdt = -inh(t-1) + kc_apl_drive;
         if (p.pn.preset_wPNAPL) {
             dinhdt += bouton_apl_drive;
         }
@@ -2599,33 +2536,6 @@ void sim_KC_layer(
     // TODO TODO assert nves is all 1, if ves_p == 0 (which it should be)?
     // TODO add assertion that checks spikes max is 1? or that unique values are
     // 0/1?
-
-    // TODO delete
-    // TODO use double for this instead, so output type of all expressions using this is
-    // consistent?
-    unsigned n_odor_timepoints = unsigned(
-        (p.time.stim.end-p.time.stim.start)/p.time.dt
-    );
-    // TODO any issue to divide by unsigned? should i use double instead?
-    double avg_kc_apl_drive = total_kc_apl_drive / n_odor_timepoints;
-    double avg_bouton_apl_drive = total_bouton_apl_drive / n_odor_timepoints;
-
-    double avg_kc_pre_inh = total_kc_pre_inh / n_odor_timepoints;
-    double avg_bouton_pre_inh = total_bouton_pre_inh / n_odor_timepoints;
-    double avg_kc_inh = total_kc_inh / n_odor_timepoints;
-    double avg_bouton_inh = total_bouton_inh / n_odor_timepoints;
-
-    // TODO delete?
-    // TODO nicer init format? what are options?
-    odor_stats(0) = max_kc_apl_drive;
-    odor_stats(1) = avg_kc_apl_drive;
-    odor_stats(2) = max_bouton_apl_drive;
-    odor_stats(3) = avg_bouton_apl_drive;
-    // TODO fix segfault i'm getting here now...
-    odor_stats(4) = avg_kc_pre_inh;
-    odor_stats(5) = avg_bouton_pre_inh;
-    odor_stats(6) = avg_kc_inh;
-    odor_stats(7) = avg_bouton_inh;
 }
 
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
@@ -2881,8 +2791,9 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         if (p.kc.microglomeruli_apl_units) {
             check(p.pn.n_total_boutons > 1);
         }
-        // TODO TODO just replace w/ Is? (after removing PN component from that)
-        // or rename Is->Is_from_kcs?
+        // TODO just replace w/ Is? (after removing PN component from that)
+        // or rename Is->Is_from_kcs? (prob want to rename all of these some other way
+        // actually, or maybe just rename Is[_sims])
         Matrix Is_from_kcs;
         if (!p.kc.save_Is_sims) {
             Is_from_kcs = Matrix(
@@ -2944,23 +2855,12 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             Matrix& Is_from_pns_link = p.kc.save_Is_sims ? rv.kc.Is_from_pns.at(i)
                 : Is_from_pns;
 
-            // TODO delete
-            //#ifdef _OPENMP
-            //if (omp_get_thread_num() == 0) {
-            //    // only seems to work w/in `#pragma omp parallel` block
-            //    // (would answer change in omp for below? hopefully not)
-            //    rv.log(cat("i=", i));
-            //}
-            //#endif
-            //
             // TODO some way to have one progress bar per thread, each filling up as the
             // threads go through time points?
             sim_KC_layer(
                 p, rv, rv.pn.sims[i], rv.ffapl.vm_sims[i], Vm_link, spikes_link,
                 nves_link, inh_link, Is_link, claw_link, bouton_link,
-                // TODO delete odor_stats now that we have these? or still might want to
-                // put some stuff in there?
-                Is_from_kcs_link, Is_from_pns_link, rv.kc.odor_stats[i]
+                Is_from_kcs_link, Is_from_pns_link
             );
             respcol = spikes_link.rowwise().sum();
             respcol_bin = (respcol.array() > 0.0).select(1.0, respcol);
@@ -2978,41 +2878,6 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     // (or assert on all the other outputs too?)
     check(!rv.kc.responses.hasNaN());
 
-    const unsigned n_odors = get_nodors(p);
-    if (rv.verbose) {
-        Eigen::VectorXd curr_stats;
-        // TODO just test one_row_per_claw (/ other relevant condition) instead?
-        bool all0 = true;
-        for (unsigned j=0; j<n_odors; j++) {
-            curr_stats = rv.kc.odor_stats[j];
-            if (!curr_stats.isZero()) {
-                all0 = false;
-                break;
-            }
-        }
-        if (!all0) {
-            rv.log();
-            rv.log("average (across odor) values in odor_stats:");
-            unsigned n_stats = rv.kc.odor_stats[0].size();
-            for (unsigned i=0; i<n_stats; i++) {
-                double stat_sum = 0.0;
-                for (unsigned j=0; j<n_odors; j++) {
-                    curr_stats = rv.kc.odor_stats[j];
-                    check(curr_stats.size() == n_stats);
-                    stat_sum += curr_stats(i);
-                }
-
-                // TODO delete comments. have both now (but may not want to keep).
-                // TODO also store+print average KC / bouton activity per odor?
-                // (same as *drive params, but w/o multiplying by weights to APL)
-                // TODO + print average extent APL inhibits each of these (to
-                // compare extent of inhibition to scale of average activities in each)?
-                rv.log(cat(rv.kc.stat_names[i], ": ", stat_sum / double(n_odors)));
-            }
-            rv.log();
-        }
-    }
-
     // TODO TODO check all key outputs have no NaN?
     // TODO + no negative/zero, as appropriate
 
@@ -3021,6 +2886,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     // TODO also assert all 0/1? at least, if some checks flag is set?
     check(p.kc.N == rv.kc.responses.rows());
+    const unsigned n_odors = get_nodors(p);
     check(n_odors == rv.kc.responses.cols());
     // TODO delete? / put behind extra verbosity level?
     //if (rv.verbose) {

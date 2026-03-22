@@ -603,11 +603,8 @@ struct RunVars {
          * certain debug information only on calls after tuning has completed. */
         bool tuning_successful;
 
-        // TODO delete?
-        // for debugging weight scaling
-        std::vector<Eigen::VectorXd> odor_stats;
-        // TODO const?
-        std::vector<std::string> stat_names;
+        // to access in python, to shortcut tuning on future calls
+        double sp_lr_coeff_to_tune_in_one_iter;
     } kc;
 
     /* Logger for this run. */
@@ -669,12 +666,7 @@ void sim_KC_layer(
         Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims,
         Matrix& Is_from_kcs,
         Matrix& Is_from_pns,
-
-        // TODO TODO replace odor_index w/ passing in reference to a vector to put all
-        // odor stats into? (seems we can't set std::vector elements by index b/c read
-        // only compile error. not sure 100% why...)
-        //Matrix& bouton_sims, unsigned odor_index);
-        Matrix& bouton_sims, Eigen::VectorXd& odor_stats);
+        Matrix& bouton_sims);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);

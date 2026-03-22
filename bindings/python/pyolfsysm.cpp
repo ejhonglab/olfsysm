@@ -223,9 +223,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readonly("tuning_successful", &RunVars::KC::tuning_successful)
-        // TODO delete? for debugging
-        .def_readonly("odor_stats", &RunVars::KC::odor_stats)
-        .def_readonly("stat_names", &RunVars::KC::stat_names)
+        .def_readonly("sp_lr_coeff_to_tune_in_one_iter", &RunVars::KC::sp_lr_coeff_to_tune_in_one_iter)
         ;
 
     m.def("load_hc_data", &load_hc_data, R"pbdoc(

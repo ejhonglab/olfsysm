@@ -7,6 +7,12 @@ from setuptools.command.build_ext import build_ext
 import sys
 import setuptools
 
+# TODO look over when trying to decide if worth migrating to pyproject.toml:
+# https://stackoverflow.com/questions/77933206
+# https://setuptools.pypa.io/en/latest/userguide/quickstart.html#setuppy-discouraged
+# main point is that some use of setup.py may still be supported, as long as it's
+# relatively limited. could combine that w/ pyproject.toml, if there's some advantage
+
 __version__ = '0.0.1'
 
 
@@ -23,7 +29,6 @@ class get_pybind_include(object):
     def __str__(self):
         import pybind11
         return pybind11.get_include(self.user)
-
 
 # TODO more proper way than an env var? where do pip's new --config-settings go? e.g.
 # https://stackoverflow.com/questions/76112858 (though other things in this setup.py
