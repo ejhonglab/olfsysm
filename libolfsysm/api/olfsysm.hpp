@@ -343,8 +343,87 @@ struct ModelParams {
 
         /* Synaptic depression params; see Hennig 2013 equation 3. Synaptic
          * depression can be disabled by setting ves_p = 0. */
+        // TODO TODO say for which synapse this applies to (PN>KC? KC>APL?)
         double tau_r;
         double ves_p;
+
+        // TODO maybe it's important that we actually get some baseline KC
+        // spiking (at the slow ~0.1Hz or whatever is observed), so that single spikes
+        // matter less in response phase. turner/bazhenov/laurent 2007 define response
+        // as KCs spike rate exceeding baseline by 3.5 SD, at any time in the 2s after
+        // odor onset. they also estimated lower sparsity 6+-5% ([1, 11%] or 5% of .06?
+        // former i assume?). they see 14/71 = 19% silent cells, across their 25 odors.
+        // all their odors at -2 (1:100) in pfo, and 1:10 air dilution (same air
+        // dilution as ours). each KC was tested w/ a random 10/25 odors, on average
+        //
+        // also from turner/bazhenov/laurent 2007:
+        // "a'/b' KCs were more broadly tuned than the other two types"
+        // "Overall, a trend of decreasing responsiveness could be detected from a'/b'
+        // to a/b to y KCs, with statistically significant differences only between y
+        // and a'/b' KCs"
+        //
+        // "In addition to being more broadly tuned, a'/b' KCs had the highest baseline
+        // firing rate and the most vigorous responses to odors: they fired 4.9+/-3.0
+        // spikes during an odor response, significantly more than a/b KCs 2.2+/-1.2"
+        //
+        // (when KCs were held at 58+/-2 mV, if that matters)
+        // "EPSP rise time was short (~2ms)"
+        // with Vhold = -60mV voltage clamp:
+        // "EPSP 10-90% rise times were 2.1+/-0.5ms, and decays were well fit with a
+        // single exponential (11.5+/-5.3ms)"
+        // NOTE: some comments are about EPSC [=currents] and some are about EPSP
+        // [=potentials]
+        // "EPSC rise time was 0.9+/-0.4ms, and decay time constant was 2.8+/-1.2ms"
+        // "Although EPSP kinetics were fast, the membrane time constant, measured at
+        // the soma by hyperpolarizing current injection, was very long (200 ms).  These
+        // observations suggest that EPSP kinetics are determined mostly by synaptic
+        // (and possibly, voltage-gated) conductances in the dendrites."
+        // "The total number of PN outputs in the mushroom body is the product of three
+        // quantities: the number of PNs projecting to the mushroom body; the number of
+        // synaptic boutons per PN; and the number release sites per terminal."
+        // TODO TODO do we have the # release sites from connectome data? should i have
+        // wPNKC entries by that for each bouton? is this one of those things prat had
+        // been trying to get across for a while?
+        //
+        // "model unitary EPSP amplitude was chosen to be either the mean (1.4 mV) or
+        // the median (1.2 mV) of the experimental distribution"
+        // NOTE: these EPSP amplitudes are as measured at the soma. i assume they should
+        // be considerably larger in the boutons? any rough way to estimate, other than
+        // doing simulation? i suppose it doesn't matter, since i'm not implementing
+        // that spatial decay from claw->KC, it probably actually makes more sense to
+        // use the value measured at the soma
+        //
+        // "The difference between resting potential and spike threshold is shown for 17
+        // KCs in Fig. 3G (21.5+/-5.6mV). The average holding potential for the KCs was
+        // -57.8mV; thus we set the voltage threshold for our model KCs at -36.3mV."
+        //
+        // NOTE: they report a respones rate more like 6%, so maybe that's a target
+        // sparsity i should try?
+        //
+        // TODO TODO which 8 odors do they use at hallem concentrations (fig 5)? what
+        // response rates / spiking do they estimate for each (and how do my current
+        // outputs compare?)
+        //
+        // NOTE: their baseline a'/b' firing rate is ~0.25-0.3 Hz it seems, with other
+        // two classes essentially at 0 (maybe 2E is just one example cell of each
+        // though? what's average, if they report?)
+        //
+        // TODO TODO can i recreate their fig 5 A, w/ angular separation between odors
+        // in ORN (Hallem) and KC space (w/ my model KCs)?
+        // "The angular separation between vectors representing two different odors was
+        // calculated as 1-cos(alpha), where alpha is the angle between the vectors"
+        //
+        // TODO TODO do they ever report IPSC/P amplitudes? clear at all from some of
+        // their plots?
+        //
+        // TODO TODO what do i need to do to get the offset responses they see e.g. in
+        // 1E, to 1-hexanol (or similar offset responses remy sees). just inhibition
+        // that decays faster than the PN>KC synapse and compartment dynamics? or must
+        // it be feedforward inhibition (e.g. from inhibitory PNs / LH)? it's not just
+        // a single spike, so to the extent that a spike resets claw potentials, ig
+        // there is still some transmitter at the synapse / some channels open? add
+        // something to reflect that? and actually, those cells do have a small onset
+        // response too (1-2 spikes), so that behavior would also be acceptable
 
         /* Output options. */
         bool save_vm_sims;
@@ -676,7 +755,6 @@ void run_PN_sims(ModelParams const& p, RunVars& rv);
 
 /* Run feedforward APL sims for all odors. */
 void run_FFAPL_sims(ModelParams const& p, RunVars& rv);
-
 
 /* Regenerate PN->KC connectivity, re-tune thresholds and APL, and run KC sims
  * for all odors.

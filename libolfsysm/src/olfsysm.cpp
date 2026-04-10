@@ -275,6 +275,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.tau_r                 = 1.0;
     // olfsysm.hpp says that setting this to 0 should disable synaptic depression
     // (tau_r above is another parameter for synaptic depression)
+    // TODO TODO what would be a good value for this if not disabled? grep matt's code
+    // for this, and see if he has any non-zero values?
     p.kc.ves_p                 = 0.0;
 
     p.kc.save_vm_sims          = false;
@@ -1000,6 +1002,11 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
         // bouton_sims that make sense)
         // TODO TODO change def of this fn and pass by reference instead (like most
         // other things)
+        // TODO TODO TODO TODO test that establishes this indexing is correct
+        // (and does it matter that i'm now sorting wPNKC columns? that change anything
+        // at all? maybe breaks things?)
+        // TODO TODO TODO TODO why is this not also being called on evoked pn activity?
+        // how is expansion happening there?
         pn_spont = duplicate_vals_for_each_subunit_id(pn_spont, rv.pn.Btn_to_pn);
         check(pn_spont.size() == p.pn.n_total_boutons);
     }
@@ -1009,7 +1016,7 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
 // TODO can i also specify shape of output type here? just assert within? or take ref to
 // claw_drive, and set into that, rather than returning?
 Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
-    Matrix const& pn_t, unsigned t, Matrix& bouton_sims) {
+    Matrix const& pn_t, unsigned t, Matrix& bouton_sims, double last_inh) {
     // TODO what happens if we initialize to one size, and then set with rvalue
     // that is another size? (or e.g. a matrix) err hopefully? or need to add
     // checks that size is as expected, even if predefining size?
@@ -1049,8 +1056,6 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             // TODO (delete) should it really not be just directly relaying pn_t (which
             // was already expanded to # boutons [no it wasn't. that was just for inh
             // calc], presumably in order matching wPNKC?)
-            // TODO TODO TODO add test w/ APL>PN disabled and check that bouton_sims
-            // match pn_sims, as expected
             std::vector<unsigned> btn_indices = rv.pn.pn_to_Btns[i];
             unsigned n_glom_boutons = btn_indices.size();
             // TODO duplicate in python check in advance?
@@ -1072,8 +1077,40 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
         // TODO delete (above should work, and matches preceeding check better)
         check(!bouton_sims.col(t).hasNaN());
 
+        // currently checking that wPNKC_one_row_per_claw=true, if either
+        // preset_w[APLPN|PNAPL]=true (at top of run_KC_sims)
+        if (p.pn.preset_wAPLPN) {
+            // TODO assert bouton_sims.col(t) is all not NaN / whatever here
+            // (non-0, if initialized that way)?
+
+            // this should guarantee that bouton_inh are all positive
+            check(last_inh >= 0);
+            // TODO TODO TODO test this indexing is correct
+            // TODO TODO maybe save into separate variable just for that
+            Column bouton_inh = rv.pn.wAPLPN * last_inh;
+
+            // TODO TODO also experiment w/ subtracting spont from bouton_sims?
+            // or maybe doing something like that in claws instead?
+
+            // TODO refactor to share w/ wAPLKC?
+            // TODO replace w/ -= syntax?
+            bouton_sims.col(t) = bouton_sims.col(t) - bouton_inh;
+            //
+            // TODO refactor to share w/ wAPLKC below
+            // TODO see other comment about `auto const` issue
+            auto const bouton_sims_lt0 = bouton_sims.col(t).array() < 0;
+            //auto const bouton_sims_lt0 = (bouton_sims.col(t).array() < 0).eval();
+            // replace per-bouton sims to min of 0
+            bouton_sims.col(t) = bouton_sims_lt0.select(0.0, bouton_sims.col(t));
+            // TODO make conditional (/delete)
+            check(bouton_sims.col(t).minCoeff() >= 0);
+            //
+        }
+
         // TODO what happens if RHS (of assignment) is ever not same shape as claw_drive
         // is defined w/ above? test?
+        // TODO TODO test this is correct (already established in test dynamics
+        // indexing, or somewhere else? still true now that i'm sorting wPNKC columns)
         claw_drive = rv.kc.wPNKC * bouton_sims.col(t);
 
         // TODO TODO TODO this actually working? seems i still have NaN in output
@@ -1910,7 +1947,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             }
 
             if (p.pn.preset_wAPLPN) {
-                // TODO TODO TODO something else to init this?
+                // TODO TODO something else to init this?
                 rv.pn.wAPLPN_scale = rv.kc.wAPLKC_scale;
                 //
                 rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
@@ -2232,8 +2269,10 @@ void sim_KC_layer(
         //
         // this will also initialize bouton_sims.col(t) to values from pn_t.col(t),
         // if appropriate
+        // TODO TODO TODO TODO if this is going to be what i use to initialize
+        // bouton_sims, shouldn't it also be subtracting the inhibition?
         Eigen::VectorXd pn_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t,
-            bouton_sims
+            bouton_sims, inh(t-1)
         );
         // TODO check pn_drive is shape we expect (should change depending on
         // wPNKC_one_row_per_claw=true/false)? already done at end of above fn?
@@ -2242,33 +2281,6 @@ void sim_KC_layer(
         // of length equal to #-claws[/KCs])
         Column kc_inh = rv.kc.wAPLKC * inh(t-1);
 
-        // currently checking that wPNKC_one_row_per_claw=true, if either
-        // preset_w[APLPN|PNAPL]=true (at top of run_KC_sims)
-        if (p.pn.preset_wAPLPN) {
-            // TODO assert bouton_sims.col(t) is all not NaN / whatever here
-            // (non-0, if initialized that way)?
-
-            // this should guarantee that bouton_inh are all positive
-            check(inh(t-1) >= 0);
-            Column bouton_inh = rv.pn.wAPLPN * inh(t-1);
-
-            // TODO TODO also experiment w/ subtracting spont from bouton_sims?
-            // or maybe doing something like that in claws instead?
-
-            // TODO refactor to share w/ wAPLKC?
-            // TODO replace w/ -= syntax?
-            bouton_sims.col(t) = bouton_sims.col(t) - bouton_inh;
-            //
-            // TODO refactor to share w/ wAPLKC below
-            // TODO see other comment about `auto const` issue
-            auto const bouton_sims_lt0 = bouton_sims.col(t).array() < 0;
-            //auto const bouton_sims_lt0 = (bouton_sims.col(t).array() < 0).eval();
-            // replace per-bouton sims to min of 0
-            bouton_sims.col(t) = bouton_sims_lt0.select(0.0, bouton_sims.col(t));
-            // TODO make conditional (/delete)
-            check(bouton_sims.col(t).minCoeff() >= 0);
-            //
-        }
         // TODO (delete? replace this separate vector w/ claw_sims.col(t)?
         // (should be same, but maybe confirm w/ repro test? overkill...)
         // TODO update comment wording. inh(t-1) is a scalar, no?
@@ -2276,6 +2288,10 @@ void sim_KC_layer(
         //
         // all of these have 1 col and #-claws rows (e.g. 9472),
         // as does claw_sims.col(t)
+        // TODO TODO TODO check indexing of both sides of this
+        // (maybe it's pn_drive that is wrong? if either)
+        // TODO TODO TODO TODO is this the bug? using pn_drive instead of
+        // bouton_sims.col(t)?
         Eigen::VectorXd pn_drive_with_inh = pn_drive - kc_inh;
 
         if (p.kc.wPNKC_one_row_per_claw) {
@@ -2389,6 +2405,9 @@ void sim_KC_layer(
         // by one in that case)
         Is_from_kcs(t) = kc_apl_drive;
 
+        // TODO TODO TODO add some kind of flag so that PN>APL input is only from
+        // additional PN activity beyond spontaneous?
+
         if (p.pn.preset_wPNAPL) {
             // TODO how to scale this relative to above tho? use
             // same scale factor from loop below? may first need to at least
@@ -2396,6 +2415,8 @@ void sim_KC_layer(
             // scale factor here?
             // TODO (delete?) if i end up trying to hardcode these, also try
             // hardcoding during thr tuning step?
+            // TODO TODO TODO TODO test this indexing is correct
+            // (if we can recreate Is_from_pns, it should be, right?)
             bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
             if (!p.kc.microglomeruli_apl_units) {
                 Is_from_pns(t) = bouton_apl_drive;
@@ -2449,13 +2470,28 @@ void sim_KC_layer(
             );
         }
 
+        // TODO TODO TODO add one save* flag that enables saving of mean kc/claw and
+        // bouton (if boutons enabled) activity pre/post apl inhibition. include those
+        // timecourses in mb_model.plot_apl_dynamics, on claw and bouton ax
+        // TODO TODO use as another step of sanity checking [mean] scales of the two
+        // (weights and or activities)
+
         Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
         inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
         Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
 
         // TODO only even calculate this if certain conditions met? it's not
-        // used typoically, right? (or at least, effectively? is that just b/c
+        // used typically, right? (or at least, effectively? is that just b/c
         // it's all 1s? and why is that)?
+        // TODO TODO TODO is this only for KC>APL or what?
+        // TODO TODO TODO should i add similar thing (also of shape claws/kcs) to
+        // integrate input to each claw (which would then let us reset the claws when
+        // KCs spike, which might be meaningful)
+        // TODO TODO what is overall consequence of this fn, if ves_p is enabled? (and
+        // what value should it be for that?)
+        // TODO TODO TODO add option to have PN spike rate go through a poisson spike
+        // generator, to allow use of the same form on PN/bouton outputs? any other way
+        // to easily get same effect without having spikes?
         nves.col(t) = nves.col(t-1);
         nves.col(t) += (p.time.dt *
             ((1.0 - nves.col(t-1).array()).matrix() / p.kc.tau_r) -
@@ -2748,6 +2784,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
 #pragma omp parallel
     {
+        // TODO print this before tuning starts? must do in fit_sparseness #parallel
+        // block then, ig?
         // TODO delete?
         #ifdef _OPENMP
         // only seems to work w/in `#pragma omp parallel` block
