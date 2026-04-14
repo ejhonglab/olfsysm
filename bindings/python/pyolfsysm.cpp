@@ -98,11 +98,12 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tune_apl_weights", &ModelParams::KC::tune_apl_weights)
         .def_readwrite("preset_wAPLKC", &ModelParams::KC::preset_wAPLKC)
         .def_readwrite("preset_wKCAPL", &ModelParams::KC::preset_wKCAPL)
-        .def_readwrite("apl_current_from_kcs_is_integral",
-            &ModelParams::KC::apl_current_from_kcs_is_integral
-        )
         .def_readwrite("pn_claw_to_apl", &ModelParams::KC::pn_claw_to_apl)
+        .def_readwrite("claw_dynamics", &ModelParams::KC::claw_dynamics)
+        .def_readwrite("claw_tau", &ModelParams::KC::claw_tau)
+        // TODO implement / delete
         .def_readwrite("microglomeruli_apl_units", &ModelParams::KC::microglomeruli_apl_units)
+        //
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)
@@ -115,6 +116,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("sp_factor_pre_apl", &ModelParams::KC::sp_factor_pre_apl)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
+        .def_readwrite("n_spikes_required_for_response",
+            &ModelParams::KC::n_spikes_required_for_response
+        )
         .def_readwrite("hardcode_initial_sp", &ModelParams::KC::hardcode_initial_sp)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)

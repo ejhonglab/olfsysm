@@ -243,9 +243,6 @@ struct ModelParams {
         /* Set to true if using a pre-loaded KC->APL weight vector. */
         bool preset_wKCAPL;
 
-        // TODO keep?
-        bool apl_current_from_kcs_is_integral;
-
         /* If false, APL activity will depend on KC spiking, and then a KC spiking will
          * cause all of its claws to provide input to the APL (just multiplied by
          * wKCAPL).
@@ -257,6 +254,10 @@ struct ModelParams {
          * Only relevant if wPNKC_one_row_per_claw=true. */
         bool pn_claw_to_apl;
 
+        bool claw_dynamics;
+        double claw_tau;
+
+        // TODO implement/delete
         /* Will treat each microglomerulus as a separate (uncoupled with other
          * microglomeruli, for now) APL, if true. If false, there will be one global
          * scalar set of APL dynamics. */
@@ -319,6 +320,8 @@ struct ModelParams {
 
         /* Changes the scaling of the ~1/(n^2) tuning step-size curve. */
         double sp_lr_coeff;
+
+        unsigned n_spikes_required_for_response;
 
         // See comment in .cpp file.
         bool hardcode_initial_sp;

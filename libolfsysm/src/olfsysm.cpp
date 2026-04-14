@@ -194,27 +194,28 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.preset_wAPLKC         = false;
     p.kc.preset_wKCAPL         = false;
 
-    // TODO TODO TODO is there actually a refractory period at all? add one, if not?
+    // TODO TODO is there actually a refractory period at all (no)? add one, if not?
     // if unclear, add test driving w/ arbitrarily strong ORN input? (+ check that gets
     // preserved thru PNs -> check min spike-to-spike time)
     // TODO is Vm resetting also typically done in integrate-and-fire models (should be,
     // right?), or was that a hack to add something like a refractory period here?
     // change anything about how the resetting is done?
 
-    // TODO TODO TODO separate flags for "currents" from KCs (spiking KCs only probably)
-    // vs from claws/boutons directly? or only one flag, for the single one that makes
-    // sense, if there's only one (may only make sense to have this 2nd time constant to
-    // smooth out spiking KC-spiking input)? or one flag to control both, regardless?
-    // TODO TODO TODO also check we don't need a similar flag like this for PN (bouton
-    // and/or non-spiking claw) inputs?S
-    //
-    // TODO TODO TODO implement
-    p.kc.apl_current_from_kcs_is_integral = true;
-
     // TODO rename to indicate this is controlling whether spiking is required to drive
     // APL (and where APL input comes from)
     p.kc.pn_claw_to_apl           = false;
-    // TODO TODO TODO implement
+
+    // If false, claws will copy bouton (/PN) activity, and then inhibition will be
+    // subtracted from there. If true, claw activity will start at, and return to 0,
+    // with its own time constant, and it will integrate the input from the boutons.
+    p.kc.claw_dynamics            = false;
+    // TODO TODO maybe this should be faster than KCs? maybe about twice as fast?
+    // (that's what i'm setting it to for now)
+    // TODO TODO TODO try diff tau? longer? in conjunction w/ PN<>APL stuff actually
+    // doing more? confirm this is having effect i expect?
+    p.kc.claw_tau                 = 0.05;
+
+    // TODO TODO implement (/delete)
     p.kc.microglomeruli_apl_units = false;
 
     p.kc.ignore_ffapl             = false;
@@ -233,6 +234,11 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.sp_factor_pre_apl     = 2.0;
     p.kc.sp_acc                = 0.1;
     p.kc.sp_lr_coeff           = 10.0;
+    // TODO TODO TODO implement
+    p.kc.n_spikes_required_for_response = 1;
+    // TODO TODO TODO need to have a tuning process in threshold choosing now, where we
+    // step it down and sim KCs until we have initial target percent spikign N times?
+    // TODO TODO add another lr/acc param for that? or use above?
 
     // Will probably remain necessary to set this true, to exactly replicate Matt's
     // outputs, and paper outputs. Matt just did this to simplify and hasten convergence
@@ -245,7 +251,7 @@ ModelParams const DEFAULT_PARAMS = []() {
 
     // TODO make this higher? 50? could end up taking a long time just b/c of some code
     // error then though...
-    p.kc.max_iters             = 10;
+    p.kc.max_iters             = 100;
     p.kc.apltune_subsample     = 1;
 
     // TODO doc how each of these are diff (w/ units if i can). not currently mentioned
@@ -1405,6 +1411,15 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         // TODO TODO was it just that the initial value was set based on kc.N instead of
         // # claws?
         rv.kc.wKCAPL_scale += delta / double(p.kc.N);
+        // TODO delete! this was seeming to make it much harder to find learning rate to
+        // get convergence (if not impossible). maybe it just needs to be much lower.
+        // 1.5 works fine in both pn_claw_to_apl=true/false for prat_boutons case w/ old
+        // line above (dividing by # of KCs)
+        //if (p.kc.wPNKC_one_row_per_claw) {
+        //    rv.kc.wKCAPL_scale += delta / double(rv.kc.claw_to_kc.size());
+        //} else {
+        //    rv.kc.wKCAPL_scale += delta / double(p.kc.N);
+        //}
         // TODO delete
         // TODO seems this was causing fixed_inh tests to fail actually? verify which
         // calculation specifically was awry? (just this one?) (even when initial value
@@ -1928,6 +1943,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             //} else {
             //    rv.kc.wKCAPL_scale = rv.kc.wAPLKC_scale / double(p.kc.kc_ids.size());
             //}
+            // TODO TODO TODO now that i've changed normalization in mb_model, also
+            // divide by # claws here when appropriate? or nah?
             rv.kc.wKCAPL_scale = rv.kc.wAPLKC_scale / double(p.kc.N);
             if (!p.kc.preset_wKCAPL) {
                 if (p.kc.wPNKC_one_row_per_claw) {
@@ -2289,14 +2306,26 @@ void sim_KC_layer(
         // all of these have 1 col and #-claws rows (e.g. 9472),
         // as does claw_sims.col(t)
         // TODO TODO TODO check indexing of both sides of this
-        // (maybe it's pn_drive that is wrong? if either)
-        // TODO TODO TODO TODO is this the bug? using pn_drive instead of
-        // bouton_sims.col(t)?
+        // (maybe it's pn_drive that is wrong? if either. can't be, since we can
+        // recreate claw_sims in python, at least when inhibition is disabled)
         Eigen::VectorXd pn_drive_with_inh = pn_drive - kc_inh;
 
         if (p.kc.wPNKC_one_row_per_claw) {
-            claw_sims.col(t) = pn_drive_with_inh;
+            if (!p.kc.claw_dynamics) {
+                claw_sims.col(t) = pn_drive_with_inh;
+            } else {
+                // TODO TODO should KC spiking (somewhat?) reset claw dynamics?
+                Eigen::VectorXd dclawdt = (
+                    -claw_sims.col(t-1) + pn_drive_with_inh
+                ).array();
+                claw_sims.col(t) = claw_sims.col(t-1) + dclawdt*p.time.dt/p.kc.claw_tau;
+            }
 
+            // TODO TODO TODO only apply this before calculating KC activity, not to
+            // claw_sims themselves (esp in case where we have claw_dynamics)
+            // TODO TODO i'm thinking i want to test the case where the claws can go
+            // negative, but they don't propagate that to the KC. add a separate flag as
+            // to whether any net inh per claw can propagate to the KC?
             if (!p.kc.allow_net_inh_per_claw) {
                 // there typically will be claws that would get sent negative b/c of
                 // inhibition, so we do need to clip if we want to avoid single
@@ -2448,6 +2477,10 @@ void sim_KC_layer(
         if (p.pn.preset_wPNAPL) {
             dinhdt += bouton_apl_drive;
         }
+
+        // TODO TODO if i implement claw dynamics, maybe allow those to go negative, but
+        // still prevent them from propagating that negative value to KC? separate flag
+        // for that?
 
         // TODO can i use a consistent variable across the two cases (-> and
         // get rid of the conditional)?
@@ -2675,6 +2708,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         if (p.kc.wPNKC_one_row_per_claw) {
             rv.log(cat("p.kc.allow_net_inh_per_claw=", p.kc.allow_net_inh_per_claw));
             rv.log(cat("p.kc.pn_claw_to_apl=", p.kc.pn_claw_to_apl));
+            rv.log(cat("p.kc.claw_dynamics=", p.kc.claw_dynamics));
         }
         rv.log(cat("p.kc.N=", p.kc.N));
         rv.log(cat("rv.kc.wPNKC.rows()=", rv.kc.wPNKC.rows()));
