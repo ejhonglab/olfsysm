@@ -7,6 +7,9 @@ from setuptools.command.build_ext import build_ext
 import sys
 import setuptools
 
+# the minimal pyproject.toml now guarantees we should have this in the build step
+import pybind11
+
 # TODO look over when trying to decide if worth migrating to pyproject.toml:
 # https://stackoverflow.com/questions/77933206
 # https://setuptools.pypa.io/en/latest/userguide/quickstart.html#setuppy-discouraged
@@ -15,20 +18,6 @@ import setuptools
 
 __version__ = '0.0.1'
 
-
-class get_pybind_include(object):
-    """Helper class to determine the pybind11 include path
-
-    The purpose of this class is to postpone importing pybind11
-    until it is actually installed, so that the ``get_include()``
-    method can be invoked. """
-
-    def __init__(self, user=False):
-        self.user = user
-
-    def __str__(self):
-        import pybind11
-        return pybind11.get_include(self.user)
 
 # TODO more proper way than an env var? where do pip's new --config-settings go? e.g.
 # https://stackoverflow.com/questions/76112858 (though other things in this setup.py
@@ -110,24 +99,6 @@ if use_cnpy:
     ])
 
 
-ext_modules = [
-    Extension(
-        'olfsysm',
-        ['libolfsysm/src/olfsysm.cpp', 'bindings/python/pyolfsysm.cpp'],
-        include_dirs=[
-            'libolfsysm/api',
-            'libolfsysm/include',
-            get_pybind_include(),
-            get_pybind_include(user=True)
-        ],
-        libraries=libraries,
-        extra_compile_args=extra_compile_args,
-        extra_link_args=extra_link_args,
-        language='c++'
-    ),
-]
-
-
 # As of Python 3.6, CCompiler has a `has_flag` method.
 # cf http://bugs.python.org/issue26689
 def has_flag(compiler, flagname):
@@ -182,15 +153,27 @@ class BuildExt(build_ext):
 setup(
     name='olfsysm',
     version=__version__,
-    author="",
-    author_email='',
-    url='https://github.com/bauersmatthew/olfsysm',
-    # TODO
-    description='',
-    # TODO from readme
-    long_description='',
-    ext_modules=ext_modules,
-    install_requires=['pybind11>=2.2'],
+    url='https://github.com/ejhonglab/olfsysm',
+    ext_modules=[
+        Extension(
+            'olfsysm',
+            ['libolfsysm/src/olfsysm.cpp', 'bindings/python/pyolfsysm.cpp'],
+            include_dirs=[
+                'libolfsysm/api',
+                'libolfsysm/include',
+                # Matt was previously passing True/False to this (he called it user=),
+                # and adding the result from each call in a separate entry, but I
+                # currently seem to be getting same output either way, so just appending
+                # one.
+                pybind11.get_include(),
+            ],
+            libraries=libraries,
+            extra_compile_args=extra_compile_args,
+            extra_link_args=extra_link_args,
+            language='c++'
+        ),
+    ],
+
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
 
