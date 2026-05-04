@@ -114,11 +114,11 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("thr_type", &ModelParams::KC::thr_type)
         .def_readwrite("sp_target", &ModelParams::KC::sp_target)
         .def_readwrite("sp_factor_pre_apl", &ModelParams::KC::sp_factor_pre_apl)
+        .def_readwrite("thr_sp_acc", &ModelParams::KC::thr_sp_acc)
         .def_readwrite("sp_acc", &ModelParams::KC::sp_acc)
+        .def_readwrite("thr_sp_lr_coeff", &ModelParams::KC::thr_sp_lr_coeff)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
-        .def_readwrite("n_spikes_required_for_response",
-            &ModelParams::KC::n_spikes_required_for_response
-        )
+        .def_readwrite("n_spikes_for_response", &ModelParams::KC::n_spikes_for_response)
         .def_readwrite("hardcode_initial_sp", &ModelParams::KC::hardcode_initial_sp)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)
         .def_readwrite("tune_from", &ModelParams::KC::tune_from)
@@ -223,10 +223,12 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readonly("Is_from_kcs", &RunVars::KC::Is_from_kcs)
         .def_readonly("Is_from_pns", &RunVars::KC::Is_from_pns)
         .def_readonly("claw_sims", &RunVars::KC::claw_sims)
+        .def_readwrite("thr_tuning_iters", &RunVars::KC::thr_tuning_iters)
         .def_readwrite("tuning_iters", &RunVars::KC::tuning_iters)
         .def_readwrite("claw_to_kc", &RunVars::KC::claw_to_kc)
         .def_readwrite("kc_to_claws", &RunVars::KC::kc_to_claws)
         .def_readonly("tuning_successful", &RunVars::KC::tuning_successful)
+        .def_readonly("thr_sp_lr_coeff_to_tune_in_one_iter", &RunVars::KC::thr_sp_lr_coeff_to_tune_in_one_iter)
         .def_readonly("sp_lr_coeff_to_tune_in_one_iter", &RunVars::KC::sp_lr_coeff_to_tune_in_one_iter)
         ;
 

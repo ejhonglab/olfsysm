@@ -315,13 +315,18 @@ struct ModelParams {
         double sp_factor_pre_apl;
 
         /* Specifies the fraction +/- of the given target that is considered an
-         * acceptable sparsity. */
+         * acceptable sparsity. For threshold tuning (only relevant if
+         * `n_spikes_for_response > 1`) or APL weight tuning, respectively. */
+        double thr_sp_acc;
         double sp_acc;
+
+        /* Only used for `n_spikes_for_response > 1` case */
+        double thr_sp_lr_coeff;
 
         /* Changes the scaling of the ~1/(n^2) tuning step-size curve. */
         double sp_lr_coeff;
 
-        unsigned n_spikes_required_for_response;
+        unsigned n_spikes_for_response;
 
         // See comment in .cpp file.
         bool hardcode_initial_sp;
@@ -658,6 +663,10 @@ struct RunVars {
          * Only relevant if wPNKC_one_row_per_claw=true. */
         std::vector<Matrix> claw_sims;
 
+        /* The number of iterations done during threshold tuning.
+         * (only relevant for `n_spikes_for_response > 1` case) */
+        unsigned thr_tuning_iters;
+
         /* The number of iterations done during APL tuning. */
         unsigned tuning_iters;
 
@@ -686,6 +695,7 @@ struct RunVars {
         bool tuning_successful;
 
         // to access in python, to shortcut tuning on future calls
+        double thr_sp_lr_coeff_to_tune_in_one_iter;
         double sp_lr_coeff_to_tune_in_one_iter;
     } kc;
 
