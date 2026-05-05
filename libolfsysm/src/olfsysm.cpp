@@ -1554,74 +1554,37 @@ double get_unique_fixed_thr(RunVars const& rv) {
 
 
 void update_thr_offset(ModelParams const& p, RunVars& rv, double sp) {
-    bool thr_all_nonneg = false;
-    double lr;
-    double delta;
-    double rel_sp_diff;
-
-    // to check we don't add additional 0 entries later (which would not be able
-    // to be updated on any future iterations).
-    // code below will currently fail if count of either changes (don't want to
-    // add 0s). no current implementation of backtracking or any other way to
-    // rectify the situation without failing.
-    // TODO replace w/ lt 0, rather than eq 0 here? at least since i'm planning on
-    // updating via adding and not multiplication, shouldn't matter if we hit 0. may
-    // need to update via multiplication to keep some of the properties of APL tuning
-    // tho, like being able to shortcut as easily, after tuning once
-    int n_thr_eq0_initial = (rv.kc.thr.array() == 0.0).count();
-
     double pre_apl_target = pre_apl_sp_target(p);
+    /* Modify the APL<->KC weights in order to move in the
+     * direction of the target sparsity. */
+    double lr = p.kc.thr_sp_lr_coeff / sqrt(double(rv.kc.thr_tuning_iters + 1));
+    // do need to calculate this way, rather than using rel_sp_diff like:
+    // delta = rel_sp_diff * lr;
+    // ...just to preserve exact numerical behavior for previous outputs. probably
+    // not otherwise important. could also compare against thr in old outputs w/
+    // np.isclose/similar.
+    double delta = (sp - pre_apl_target) * lr / pre_apl_target;
+    double rel_sp_diff = (sp - pre_apl_target) / pre_apl_target;
 
-    do {
-        /* Modify the APL<->KC weights in order to move in the
-         * direction of the target sparsity. */
-        lr = p.kc.thr_sp_lr_coeff / sqrt(double(rv.kc.thr_tuning_iters + 1));
-        // do need to calculate this way, rather than using rel_sp_diff like:
-        // delta = rel_sp_diff * lr;
-        // ...just to preserve exact numerical behavior for previous outputs. probably
-        // not otherwise important. could also compare against thr in old outputs w/
-        // np.isclose/similar.
-        delta = (sp - pre_apl_target) * lr / pre_apl_target;
-        rel_sp_diff = (sp - pre_apl_target) / pre_apl_target;
+    rv.kc.thr.array() += delta;
 
-        Column prev_thr = rv.kc.thr;
-        if ((rv.kc.thr.array() >= 0).all()) {
-            thr_all_nonneg = true;
-        }
-        rv.kc.thr.array() += delta;
+    rv.log(cat("i=", rv.kc.thr_tuning_iters, " sp=", sp,
+        " target=", pre_apl_target, " rel_sp_diff=", rel_sp_diff,
+        " acc=", p.kc.thr_sp_acc, " delta(thr)=", delta, " lr=", lr,
+        " thr.mean()=", rv.kc.thr.mean()
+    ));
 
-        if (!thr_all_nonneg) {
-            // TODO also backtrack if no longer any responses?
-            rv.kc.thr_tuning_iters++;
-            if (rv.kc.thr_tuning_iters > p.kc.max_iters) {
-                // will exit with err
-                sparsity_nonconvergence_failure(p, rv);
-            }
-            // TODO just immediately start at what we need? or change calc to
-            // not have the issue where it can give a delta that would bring thr
-            // [/whatever] below 0?
-            // TODO reword if using additive offset, not scaling
-            rv.log(cat("incrementing thr_tuning_iters=", rv.kc.thr_tuning_iters,
-                " to get lower step size (to keep all scaled thr values "
-                "positive)"
-            ));
-            // rollback to previous values before picking new (smaller) step size
-            rv.kc.thr = prev_thr;
-        } else {
-            rv.log(cat("i=", rv.kc.thr_tuning_iters, " sp=", sp,
-                " target=", pre_apl_target, " rel_sp_diff=", rel_sp_diff,
-                " acc=", p.kc.thr_sp_acc, " delta(thr)=", delta, " lr=", lr,
-                " thr.mean()=", rv.kc.thr.mean()
-            ));
-        }
-    } while (!thr_all_nonneg);
+    int n_thr_lte0 = (rv.kc.thr.array() <= 0.0).count();
+    // TODO also warn in python (esp at end)?
+    if (n_thr_lte0 > 0) {
+        rv.log(cat("WARNING: ", n_thr_lte0, " KCs with threshold <= 0!"));
+    }
 
-    if (delta < 0.0) {
-        int n_thr_lt0 = (rv.kc.thr.array() < 0.0).count();
-        check(n_thr_lt0 == 0);
-
-        int n_thr_eq0 = (rv.kc.thr.array() == 0.0).count();
-        check(n_thr_eq0_initial == n_thr_eq0);
+    // TODO re-order (wrt code above/below)? test case that actually should take max
+    // # iters (or set it to 0/1?) (should this be at top of fn?)
+    if (rv.kc.thr_tuning_iters > p.kc.max_iters) {
+        // will exit with err
+        sparsity_nonconvergence_failure(p, rv);
     }
 }
 
@@ -1728,6 +1691,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // TODO delete after debugging? do for orn_deltas input too, if don't already have?
     check(!spont_in.hasNaN());
 
+    double initial_fixed_thr_offset = 0;
+
     if (!p.kc.use_vector_thr) {
         if (!p.kc.use_fixed_thr) {
             /* Set starting values for the things we'll tune. */
@@ -1769,6 +1734,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 rv.kc.thr.setConstant(p.kc.fixed_thr);
             }
         }
+    // TODO is this code still used?
     } else {
         rv.log("using prespecified vector thresholds");
         // TODO even want to allow `add_fixed_thr_to_spont = False`? don't think it's
@@ -1818,7 +1784,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         ));
     }
     double initial_rel_sp_diff = 0;
-    double initial_fixed_thr_offset = 0;
     // if params were ever truly tuned independently, and not all linked to wAPLKC
     // scale, would need to expand on handling this provides
     double initial_wAPLKC_scale = 0;
@@ -1876,15 +1841,16 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
         Matrix bouton_sims(p.pn.n_total_boutons, p.time.steps_all());
 
-        // TODO assuming i want this for use_vector_thr. why don't i want to do below
-        // for TTFIXED?
-        if (thrtype != TTFIXED && !p.kc.use_vector_thr) {
+        // TODO did adding use_fixed_thr here break anything?
+        if (thrtype != TTFIXED && !(p.kc.use_vector_thr || p.kc.use_fixed_thr)) {
 #pragma omp single
             {
                 rv.log(cat("choosing thresholds from spontaneous input (thrtype=",
                    thrtype, " [=", p.kc.thr_type, "])"
                 ));
             }
+            // TODO problem that these checks are no longer running in
+            // (some? any?) use_fixed_thr=true cases?
             check(rv.kc.wAPLKC.isZero());
             check(rv.kc.wKCAPL.isZero());
             if (p.pn.preset_wAPLPN) {
@@ -1945,94 +1911,97 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // to find a (lower) threshold that has the (pre-APL) target
                     // fraction responding at the higher # of spikes
                     initial_fixed_thr_offset = get_unique_fixed_thr(rv);
+                    check(initial_fixed_thr_offset >= 0);
                     rv.log(cat("fixed_thr: ", initial_fixed_thr_offset));
                 } else {
                     check(p.kc.n_spikes_for_response == 1);
                 }
             }
-        }
 
-        if (p.kc.n_spikes_for_response > 1) {
+            if (p.kc.n_spikes_for_response > 1) {
 #pragma omp single
-            rv.log(cat("tuning threshold to get (pre-APL) target sparsity where ",
-                "n_spikes_for_response=", p.kc.n_spikes_for_response
-            ));
-            /* Continue tuning until we reach the threshold that provides the desired
-             * (no-APL) sparsity, for a given number of spikes required to be considered
-             * a response. */
-            do {
+                // redundant w/ check in `else` above, but just to be clear
+                check(!p.kc.use_homeostatic_thrs);
+
+                rv.log(cat("tuning threshold to get (pre-APL) target sparsity where ",
+                    "n_spikes_for_response=", p.kc.n_spikes_for_response
+                ));
+                /* Continue tuning until we reach the threshold that provides the
+                 * desired (no-APL) sparsity, for a given number of spikes required to
+                 * be considered a response. */
+                do {
 #pragma omp barrier
 
                 /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
-                // TODO TODO either rename this *subsample param (preferable, prob),
-                // define another, or always use all odors (here and in all cases?
-                // probably don't always want that on hallem...)
-                for (unsigned i=0; i<tlist.size(); i+=p.kc.apltune_subsample) {
-                    sim_KC_layer(p, rv, rv.pn.sims[tlist[i]],
-                        rv.ffapl.vm_sims[tlist[i]], Vm, spikes, nves, inh, Is,
-                        claw_sims, bouton_sims, Is_from_kcs, Is_from_pns
-                    );
-                    KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
-                }
-
-#pragma omp single
-                {
-                    KCmean_st = n_spikes_to_responses(p, rv, KCmean_st);
-                    sp = KCmean_st.mean();
-                    sparsity_not_converged = (
-                        abs(sp - pre_apl_sp_target(p)) >
-                        (p.kc.thr_sp_acc * pre_apl_sp_target(p))
-                    );
-                    under_max_iters = rv.kc.thr_tuning_iters <= p.kc.max_iters;
-
-                    if (rv.kc.thr_tuning_iters == 0) {
-                        initial_rel_sp_diff = (
-                            (sp - pre_apl_sp_target(p)) / pre_apl_sp_target(p)
+                    // TODO either rename this *subsample param (preferable, prob),
+                    // define another, or always use all odors (here and in all cases?
+                    // probably don't always want that on hallem...)
+                    for (unsigned i=0; i<tlist.size(); i+=p.kc.apltune_subsample) {
+                        sim_KC_layer(p, rv, rv.pn.sims[tlist[i]],
+                            rv.ffapl.vm_sims[tlist[i]], Vm, spikes, nves, inh, Is,
+                            claw_sims, bouton_sims, Is_from_kcs, Is_from_pns
                         );
+                        KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
                     }
-                    if (sparsity_not_converged) {
-                        update_thr_offset(p, rv, sp);
-                        rv.kc.thr_tuning_iters++;
+#pragma omp single
+                    {
+                        KCmean_st = n_spikes_to_responses(p, rv, KCmean_st);
+                        sp = KCmean_st.mean();
+                        sparsity_not_converged = (
+                            abs(sp - pre_apl_sp_target(p)) >
+                            (p.kc.thr_sp_acc * pre_apl_sp_target(p))
+                        );
+                        under_max_iters = rv.kc.thr_tuning_iters <= p.kc.max_iters;
+
+                        if (rv.kc.thr_tuning_iters == 0) {
+                            initial_rel_sp_diff = (
+                                (sp - pre_apl_sp_target(p)) / pre_apl_sp_target(p)
+                            );
+                        }
+                        if (sparsity_not_converged) {
+                            update_thr_offset(p, rv, sp);
+                            rv.kc.thr_tuning_iters++;
+                        }
                     }
-                }
-            // TODO define separate max_iters for this?
-            } while (sparsity_not_converged && under_max_iters);
+                // TODO define separate max_iters for this?
+                } while (sparsity_not_converged && under_max_iters);
 #pragma omp barrier
 #pragma omp single
-            {
-                rv.kc.thr_tuning_iters--;
-                rv.log(cat("done tuning threshold for n_spikes_for_response=",
-                    p.kc.n_spikes_for_response
-                ));
-                rv.log(cat("rv.kc.thr.mean()=", rv.kc.thr.mean(), " sp=", sp));
+                {
+                    rv.kc.thr_tuning_iters--;
+                    rv.log(cat("done tuning threshold for n_spikes_for_response=",
+                        p.kc.n_spikes_for_response
+                    ));
+                    rv.log(cat("rv.kc.thr.mean()=", rv.kc.thr.mean(), " sp=", sp));
 
-                if (!under_max_iters) {
-                    // this is just a hack to ensure we also failure in call below,
-                    // consistent w/ call above (only need b/c the x-- above that i'm
-                    // not currently sure if i can remove)
-                    rv.kc.thr_tuning_iters++;
-                    sparsity_nonconvergence_failure(p, rv);
+                    if (!under_max_iters) {
+                        // this is just a hack to ensure we also failure in call below,
+                        // consistent w/ call above (only need b/c the x-- above that
+                        // i'm not currently sure if i can remove)
+                        rv.kc.thr_tuning_iters++;
+                        sparsity_nonconvergence_failure(p, rv);
+                    }
+
+                    check(initial_fixed_thr_offset != 0);
+
+                    double tuned_fixed_thr_offset = get_unique_fixed_thr(rv);
+                    double thr_delta_from_initial = (
+                        initial_fixed_thr_offset - tuned_fixed_thr_offset
+                    );
+                    double lr_to_tune_in_one_iter = abs(
+                        thr_delta_from_initial / initial_rel_sp_diff
+                    );
+                    rv.kc.thr_sp_lr_coeff_to_tune_in_one_iter = lr_to_tune_in_one_iter;
+                    rv.log(cat("thr_sp_lr_coeff to tune in one step: ",
+                        lr_to_tune_in_one_iter
+                    ));
                 }
-
-                check(initial_fixed_thr_offset != 0);
-
-                double tuned_fixed_thr_offset = get_unique_fixed_thr(rv);
-                double thr_delta_from_initial = (
-                    initial_fixed_thr_offset - tuned_fixed_thr_offset
-                );
-                double lr_to_tune_in_one_iter = abs(
-                    thr_delta_from_initial / initial_rel_sp_diff
-                );
-                rv.kc.thr_sp_lr_coeff_to_tune_in_one_iter = lr_to_tune_in_one_iter;
-                rv.log(cat("thr_sp_lr_coeff to tune in one step: ",
-                    lr_to_tune_in_one_iter
-                ));
+            // TODO TODO err here if thr_tuning_iters == [thr_]max_iters! doesn't
+            // currently! (need to test that is still true, not that my one test is
+            // currently converging before max iters)
+            // (or make sure loop above is, which is probably isn't)
             }
-        // TODO TODO err here if thr_tuning_iters == [thr_]max_iters! doesn't
-        // currently! (need to test that is still true, not that my one test is
-        // currently converging before max iters)
-        // (or make sure loop above is, which is probably isn't)
         }
 
         // TODO if i move the stuff in this `#pragma omp single` block up enough, can i
