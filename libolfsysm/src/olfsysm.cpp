@@ -17,12 +17,6 @@
 #include <cmath>
 #include <stdexcept>
 
-// TODO delete
-// for seq (slicing for debug prints)
-// (nvm, would need to update Eigen for that...
-// https://stackoverflow.com/questions/57083605 not sure what to do for now)
-//#include "Eigen/Core"
-
 /* So code can be compiled single threaded, to support debugging.
  * Only other OMP references should be in the preprocessor directives, which I think can
  * just be ignored (though that will generate compilation warning, which is good).
@@ -33,10 +27,12 @@
    #define omp_get_thread_num() 0
 #endif
 
+// TODO delete? implementation of direct-array-saving that would use this is not
+// currently finished below
 /* Include cnpy.h only if we we have that .h file available (and referenced properly in
  * compilation). Optional library added as a git submodule, for writing dynamics
  * directly to .npy files for reading in Python. See README. */
-// TODO TODO set this in .hpp, so i can also conditionally use in binding code
+// TODO set this in .hpp, so i can also conditionally use in binding code
 // (or replace my own define w/  using has_include everywhere)
 #if defined __has_include
 # if __has_include ("cnpy.h")
@@ -100,7 +96,7 @@ void Logger::disable() {
 
 /* For random number generation. */
 // NOTE: g_randdev only used in definition of g_randgen
-// TODO TODO would this not need a mutex across threads? is one in use somewhere?
+// TODO would this not need a mutex across threads? is one in use somewhere?
 // diff seed for each thread too?
 // https://stackoverflow.com/questions/21237905
 thread_local std::random_device g_randdev;
@@ -1989,9 +1985,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     double thr_delta_from_initial = (
                         initial_fixed_thr_offset - tuned_fixed_thr_offset
                     );
-                    double lr_to_tune_in_one_iter = abs(
-                        thr_delta_from_initial / initial_rel_sp_diff
-                    );
+                    double lr_to_tune_in_one_iter;
+                    if (thr_delta_from_initial != 0) {
+                        lr_to_tune_in_one_iter = abs(
+                            thr_delta_from_initial / initial_rel_sp_diff
+                        );
+                    } else {
+                        lr_to_tune_in_one_iter = p.kc.thr_sp_lr_coeff;
+                    }
                     rv.kc.thr_sp_lr_coeff_to_tune_in_one_iter = lr_to_tune_in_one_iter;
                     rv.log(cat("thr_sp_lr_coeff to tune in one step: ",
                         lr_to_tune_in_one_iter
@@ -2248,7 +2249,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         check(initial_wAPLKC_scale != 0);
 
         double wAPLKC_delta_from_initial = initial_wAPLKC_scale - rv.kc.wAPLKC_scale;
-        double lr_to_tune_in_one_iter = abs(wAPLKC_delta_from_initial / initial_rel_sp_diff);
+        double lr_to_tune_in_one_iter;
+        if (wAPLKC_delta_from_initial != 0) {
+            lr_to_tune_in_one_iter = abs(
+                wAPLKC_delta_from_initial / initial_rel_sp_diff
+            );
+        } else {
+            lr_to_tune_in_one_iter = p.kc.sp_lr_coeff;
+        }
         rv.kc.sp_lr_coeff_to_tune_in_one_iter = lr_to_tune_in_one_iter;
 
         // TODO TODO move sparsity non-convergence error to some error code here,
