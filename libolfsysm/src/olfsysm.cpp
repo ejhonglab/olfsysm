@@ -2182,6 +2182,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
+                    // TODO log sparsity before at least? (in case it converges in one
+                    // step. currently this fn doesn't print loop info in that case)
                     scale_APL_weights(p, rv, sp);
                     rv.kc.tuning_iters++;
                 }
@@ -2226,9 +2228,15 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
                     if (sparsity_not_converged) {
+                        // TODO log sparsity before at least? (in case it converges in
+                        // one step. currently this fn doesn't print loop info in that
+                        // case)
                         scale_APL_weights(p, rv, sp);
-                        rv.kc.tuning_iters++;
                     }
+                    // TODO did moving this out of conditional above fix all cases that
+                    // converge in one iteration (expecting tuning_iters=1, after all is
+                    // said and done)? break anything else?
+                    rv.kc.tuning_iters++;
                 }
             }
         } while (sparsity_not_converged && under_max_iters);
@@ -2327,6 +2335,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     }
 
     // TODO move before printing lr_to_tune_in_one_iter above?
+    // TODO do unconditionally, or change how tuning_iters is managed (to start at 0,
+    // and not need decrementing after loop above)?
     if (!under_max_iters) {
         // this is just a hack to ensure we also failure in call below, consistent w/
         // call above (only need b/c the x-- above that i'm not currently sure if i can
