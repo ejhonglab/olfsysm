@@ -1279,7 +1279,7 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     do {
         /* Modify the APL<->KC weights in order to move in the
          * direction of the target sparsity. */
-        lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters));
+        lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters + 1.0));
         // do need to calculate this way, rather than using rel_sp_diff like:
         // delta = rel_sp_diff * lr;
         // ...just to preserve exact numerical behavior for previous outputs. probably
@@ -2048,9 +2048,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         if (p.kc.tune_apl_weights) {
 #pragma omp single
         {
-            // TODO delete? put behind verbose?
-            rv.log();
-            //
             // TODO delete? prints in scale_APL_weights replace this now?
             rv.log(cat("tuning APL<->KC weights; tuning begin (",
                         "target=", p.kc.sp_target,
@@ -2059,19 +2056,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         " thr=", rv.kc.thr.mean(),
                         ")"));
 
-            // TODO TODO just start at 0? might fix some problems...
-            //rv.kc.tuning_iters = 1;
-            // TODO delete
-            //rv.log("SETTING TUNING_ITERS TO 1");
-            //
-
-            // NOTE: this assumes it will be immediately (unconditionally) incremented
-            // in while loop, otherwise will cause undefined values when used in
-            // denominator to scale learning rate
             rv.kc.tuning_iters = 0;
-            // TODO delete
-            rv.log("SETTING TUNING_ITERS TO 0");
-            //
 
             // TODO maybe require/assume input preset vectors will be normalized or
             // scaled in a certain way? or compute appropriate w[APLKC|KCAPL]_scale
@@ -2188,9 +2173,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
 #pragma omp single
             {
-                rv.log("INCREMENTING TUNING_ITERS AT START OF WHILE LOOP");
-                rv.kc.tuning_iters++;
-
                 // always want this step to be at this point in the loop for the
                 // hardcode_initial_sp=true case, so we don't double up at the end of
                 // first pass.
@@ -2199,17 +2181,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
-                    // TODO TODO why not also checking convergence before
-                    // incrementing tuning iters here? should be consistent between this
-                    // case and below... (just increment in one place?)
-                    // TODO log sparsity before at least? (in case it converges in one
-                    // step. currently this fn doesn't print loop info in that case)
                     scale_APL_weights(p, rv, sp);
-                    // TODO delete (can leave to end now?)?
-                    //rv.kc.tuning_iters++;
-                    // TODO delete
-                    //rv.log("INCREMENTING TUNING_ITERS B/C HARDCODE_INTIAL_SP=TRUE");
-                    //
                 }
             }
 
@@ -2243,13 +2215,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     abs(sp - p.kc.sp_target) > (p.kc.sp_acc * p.kc.sp_target)
                 );
                 under_max_iters = rv.kc.tuning_iters <= p.kc.max_iters;
-                // TODO delete
-                rv.log(cat("sp=", sp));
-                rv.log(cat("abs(sp - p.kc.sp_target)=", abs(sp - p.kc.sp_target)));
-                rv.log(cat("sparsity_not_converged=", sparsity_not_converged));
-                rv.log(cat("under_max_iters=", under_max_iters));
-                //
-
                 // also don't want to duplicate calls in the hardcode=true case (so
                 // always doing above sim_KC_layer calls there)
                 if (!p.kc.hardcode_initial_sp) {
@@ -2258,42 +2223,16 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
                     if (sparsity_not_converged) {
-                        // TODO log sparsity before at least? (in case it converges in
-                        // one step. currently this fn doesn't print loop info in that
-                        // case)
                         scale_APL_weights(p, rv, sp);
                     }
                 }
 
-                //if (sparsity_not_converged) {
-                //    rv.kc.tuning_iters++;
-                //    rv.log("INCREMENTING TUNING_ITERS AT END OF WHILE LOOP (b/c not converged)");
-                //}
-
-                //rv.kc.tuning_iters++;
-                // TODO delete
-                // TODO TODO TODO how does this seem to be the last thing
-                // printed in a loop?
-                //rv.log("INCREMENTING TUNING_ITERS AT END OF WHILE LOOP");
-
-                // TODO delete
-                rv.log();
-                //
+                if (sparsity_not_converged) {
+                    rv.kc.tuning_iters++;
+                }
             }
         } while (sparsity_not_converged && under_max_iters);
 #pragma omp barrier
-//#pragma omp single
-//        {
-//            // TODO what is point of this? does loop above give us 1 above the
-//            // tuning_iters we want? even if only the initial tuning, and no subsequent
-//            // loop iterations? why not move after parallel block (put in conditional on
-//            // tune_apl_weights=true) instead of in this separate single-thread block at
-//            // end?
-//            rv.kc.tuning_iters--;
-//            // TODO delete
-//            rv.log("DECREMENTING TUNING_ITERS AFTER WHILE LOOP");
-//            //
-//        }
     }}
     // TODO not an issue that (all) below is not in a `#pragma omp single`? might be...
     if (p.kc.tune_apl_weights) {
@@ -2309,7 +2248,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         } else {
             lr_to_tune_in_one_iter = p.kc.sp_lr_coeff;
         }
-        // TODO TODO also assert matches any initial sp_lr_coeff, esp if different from
+        // TODO also assert matches any initial sp_lr_coeff, esp if different from
         // default sp_lr_coeff
         // TODO or set max_iters=1 when expecting to tune in one iter, to nip whatever
         // bug i have earlier?
@@ -2381,22 +2320,6 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log(cat("sp_lr_coeff to tune in one step: ", lr_to_tune_in_one_iter));
         }
     }
-
-    // TODO TODO test this case
-    // TODO move before printing lr_to_tune_in_one_iter above?
-    // TODO do unconditionally, or change how tuning_iters is managed (to start at 0,
-    // and not need decrementing after loop above)?
-    //if (!under_max_iters) {
-    //    // TODO delete
-    //    rv.log("INCREMENTING TUNING_ITERS B/C !UNDER_MAX_ITERS");
-    //    //
-
-    //    // this is just a hack to ensure we also failure in call below, consistent w/
-    //    // call above (only need b/c the x-- above that i'm not currently sure if i can
-    //    // remove)
-    //    rv.kc.tuning_iters++;
-    //    sparsity_nonconvergence_failure(p, rv);
-    //}
 
     // TODO delete this flag? if only going to use ready (and since this code is also
     // currently hit for fixed thr / APL weights case?)?
