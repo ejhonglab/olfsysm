@@ -2177,7 +2177,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 // hardcode_initial_sp=true case, so we don't double up at the end of
                 // first pass.
                 if (p.kc.hardcode_initial_sp) {
-                    if (rv.kc.tuning_iters == 1) {
+                    if (rv.kc.tuning_iters == 0) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
@@ -2218,7 +2218,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 // also don't want to duplicate calls in the hardcode=true case (so
                 // always doing above sim_KC_layer calls there)
                 if (!p.kc.hardcode_initial_sp) {
-                    if (rv.kc.tuning_iters == 1) {
+                    if (rv.kc.tuning_iters == 0) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
