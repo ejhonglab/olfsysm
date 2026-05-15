@@ -1286,11 +1286,11 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     do {
         rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
 
-        // TODO TODO actually need `sp > 0` to set *both* of these? is there one of them
-        // we can set regardless (and is it worth starting search as soon as other one
-        // is set?)? surely scale can not be negative, so could have 0 be one side of
-        // search...
-        if (sp > 0) {
+        if (p.kc.binary_search_on_overshoot && sp > 0) {
+            // TODO TODO actually need `sp > 0` to set *both* of these? is there one of
+            // them we can set regardless (and is it worth starting search as soon as
+            // other one is set?)? surely scale can not be negative, so could have 0 be
+            // one side of search...
             if (rel_sp_diff < 0 && rv.kc.too_high_wAPLKC_scale != 0) {
                 rv.kc.too_high_wAPLKC_scale = rv.kc.wAPLKC_scale;
                 // TODO delete
