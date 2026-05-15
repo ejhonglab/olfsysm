@@ -119,6 +119,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("thr_sp_lr_coeff", &ModelParams::KC::thr_sp_lr_coeff)
         .def_readwrite("sp_lr_coeff", &ModelParams::KC::sp_lr_coeff)
         .def_readwrite("linear_lr_falloff", &ModelParams::KC::linear_lr_falloff)
+        .def_readwrite("binary_search_on_overshoot", &ModelParams::KC::binary_search_on_overshoot)
         .def_readwrite("n_spikes_for_response", &ModelParams::KC::n_spikes_for_response)
         .def_readwrite("hardcode_initial_sp", &ModelParams::KC::hardcode_initial_sp)
         .def_readwrite("max_iters", &ModelParams::KC::max_iters)

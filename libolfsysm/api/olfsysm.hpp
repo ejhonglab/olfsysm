@@ -330,6 +330,11 @@ struct ModelParams {
         /* ~1/n instead of default ~1/sqrt(n) tuning step-size curve, if true */
         bool linear_lr_falloff;
 
+        /* If we [over/under]shoot target sparsity, start a binary search, rather than
+         * hoping whatever step size falloff strategy will get us to convergence in a
+         * timely manner. */
+        bool binary_search_on_overshoot;
+
         unsigned n_spikes_for_response;
 
         // See comment in .cpp file.

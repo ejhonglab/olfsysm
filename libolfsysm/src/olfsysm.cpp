@@ -234,6 +234,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     // TODO change default to ~1.5 now? in current one-row-per-claw cases at least?
     p.kc.sp_lr_coeff           = 10.0;
     p.kc.linear_lr_falloff     = false;
+    p.kc.binary_search_on_overshoot = false;
     p.kc.n_spikes_for_response = 1;
 
     // Will probably remain necessary to set this true, to exactly replicate Matt's
@@ -1283,33 +1284,78 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     }
 
     do {
-        /* Modify the APL<->KC weights in order to move in the
-         * direction of the target sparsity. */
-        // TODO TODO TODO if we start oscillating, do a binary search between the values
-        // that produce too-high and too-low sparsities?
-        if (!p.kc.linear_lr_falloff) {
-            lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters + 1.0));
-        } else {
-            lr = p.kc.sp_lr_coeff / double(rv.kc.tuning_iters + 1.0);
-        }
-        // do need to calculate this way, rather than using rel_sp_diff like:
-        // delta = rel_sp_diff * lr;
-        // ...just to preserve exact numerical behavior for previous outputs. probably
-        // not otherwise important. could also compare against wAPLKC in old outputs w/
-        // np.isclose/similar.
-        delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
         rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
 
-        // TODO TODO only set either of these if current sparsity is nonzero?
-        // TODO TODO and then don't change either, once (both?) are set, just start
-        // binary searching from there
+        // TODO TODO actually need `sp > 0` to set *both* of these? is there one of them
+        // we can set regardless (and is it worth starting search as soon as other one
+        // is set?)? surely scale can not be negative, so could have 0 be one side of
+        // search...
         if (sp > 0) {
-            // TODO TODO TODO how to implement the binary search?
-            if (rel_sp_diff < 0) {
+            if (rel_sp_diff < 0 && rv.kc.too_high_wAPLKC_scale != 0) {
                 rv.kc.too_high_wAPLKC_scale = rv.kc.wAPLKC_scale;
-            } else if (rel_sp_diff > 0) {
+                // TODO delete
+                rv.log(cat("INITIAL too_high_wAPLKC_scale: ", rv.kc.too_high_wAPLKC_scale));
+            } else if (rel_sp_diff > 0 && rv.kc.too_low_wAPLKC_scale != 0) {
                 rv.kc.too_low_wAPLKC_scale = rv.kc.wAPLKC_scale;
+                // TODO delete
+                rv.log(cat("INITIAL too_low_wAPLKC_scale: ", rv.kc.too_low_wAPLKC_scale));
             }
+            // TODO actually need to handle == 0 case? assert not encountered?
+
+            // TODO TODO only start the binary search if a certain flag is set?
+            if (rv.kc.too_high_wAPLKC_scale != 0 && rv.kc.too_low_wAPLKC_scale != 0) {
+                // TODO TODO reword? will it actually start on *this* iteration?
+                // TODO delete
+                rv.log("will start binary search on any future APL tuning iterations");
+            }
+        }
+
+        if (rv.kc.too_high_wAPLKC_scale != 0 && rv.kc.too_low_wAPLKC_scale != 0) {
+            // TODO assert ordering of too_[high|low]...?
+            // TODO delete
+            rv.log(cat("too_high_wAPLKC_scale: ", rv.kc.too_high_wAPLKC_scale));
+            rv.log(cat("too_low_wAPLKC_scale: ", rv.kc.too_low_wAPLKC_scale));
+            //
+            double midpoint = (
+                (rv.kc.too_high_wAPLKC_scale + rv.kc.too_low_wAPLKC_scale) / 2
+            );
+            // TODO delete
+            rv.log(cat("midpoint: ", midpoint));
+            if (rel_sp_diff < 0) {
+                // TODO TODO TODO test + make sure this line is correct
+                delta = rv.kc.too_high_wAPLKC_scale - midpoint;
+                // TODO TODO TODO set either high/low to middle of range depending on
+                // this if/else (-> implement rest of search surrounding that)
+                rv.kc.too_high_wAPLKC_scale = midpoint;
+            } else {
+                // TODO TODO TODO test + make sure this line is correct
+                delta = midpoint - rv.kc.too_low_wAPLKC_scale;
+                rv.kc.too_low_wAPLKC_scale = midpoint;
+            }
+            // TODO delete
+            rv.log(cat("delta (binary search): ", delta));
+            // just to be clear this is no longer meaningful when logged below
+            // (should just remove from logging in this case...)
+            lr = 0.0;
+            // TODO TODO need to handle case rel_sp_diff == 0? check it's not?
+            // TODO TODO TODO skip all (/ how much of) rest of loop? just change delta
+            // def here, but otherwise do rest of loop?
+        } else {
+            /* Modify the APL<->KC weights in order to move in the
+             * direction of the target sparsity. */
+            // TODO TODO TODO if we start oscillating, do a binary search between the
+            // values that produce too-high and too-low sparsities?
+            if (!p.kc.linear_lr_falloff) {
+                lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters + 1.0));
+            } else {
+                lr = p.kc.sp_lr_coeff / double(rv.kc.tuning_iters + 1.0);
+            }
+            // do need to calculate this way, rather than using rel_sp_diff like:
+            // delta = rel_sp_diff * lr;
+            // ...just to preserve exact numerical behavior for previous outputs.
+            // probably not otherwise important. could also compare against wAPLKC in
+            // old outputs w/ np.isclose/similar.
+            delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
         }
 
         // TODO need .array() if not preset? can i always do it?
@@ -1403,6 +1449,9 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         } else {
             // TODO still log at least some of this unconditionally? go back to having
             // it all unconditional?
+            // TODO TODO only log this LR if not binary searching (lr definition no
+            // longer meaningful there. could just set it to NaN/0/delta, if i didn't
+            // want to special case here?
             rv.log(cat("i=", rv.kc.tuning_iters, " sp=", sp, " target=", p.kc.sp_target,
                 " rel_sp_diff=", rel_sp_diff, " acc=", p.kc.sp_acc,
                 " wAPLKC_scale=", prev_wAPLKC_scale, " delta(wAPLKC)=", delta, " lr=", lr
@@ -1483,7 +1532,7 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     }
 
     // TODO put behind verbose flag
-    rv.log("in scale_APL_weights:");
+    rv.log("at end of scale_APL_weights:");
     log_apl_weights(p, rv);
 
     // probably want to abort (so we can change tuning params and re-run)
