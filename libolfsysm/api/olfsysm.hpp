@@ -323,8 +323,12 @@ struct ModelParams {
         /* Only used for `n_spikes_for_response > 1` case */
         double thr_sp_lr_coeff;
 
+        // TODO change doc? it's 1/sqrt(n) not 1/n^2, right?
         /* Changes the scaling of the ~1/(n^2) tuning step-size curve. */
         double sp_lr_coeff;
+
+        /* ~1/n instead of default ~1/sqrt(n) tuning step-size curve, if true */
+        bool linear_lr_falloff;
 
         unsigned n_spikes_for_response;
 
@@ -697,6 +701,9 @@ struct RunVars {
         // to access in python, to shortcut tuning on future calls
         double thr_sp_lr_coeff_to_tune_in_one_iter;
         double sp_lr_coeff_to_tune_in_one_iter;
+
+        double too_low_wAPLKC_scale;
+        double too_high_wAPLKC_scale;
     } kc;
 
     /* Logger for this run. */

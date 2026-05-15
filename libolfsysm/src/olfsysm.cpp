@@ -233,6 +233,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.thr_sp_lr_coeff       = 50.0;
     // TODO change default to ~1.5 now? in current one-row-per-claw cases at least?
     p.kc.sp_lr_coeff           = 10.0;
+    p.kc.linear_lr_falloff     = false;
     p.kc.n_spikes_for_response = 1;
 
     // Will probably remain necessary to set this true, to exactly replicate Matt's
@@ -530,7 +531,12 @@ RunVars::KC::KC(ModelParams const& p) :
     tuning_successful(false),
 
     thr_sp_lr_coeff_to_tune_in_one_iter(0.0),
-    sp_lr_coeff_to_tune_in_one_iter(0.0)
+    sp_lr_coeff_to_tune_in_one_iter(0.0),
+
+    // TODO TODO if both of these are nonzero, that means we oscillated, and then can
+    // begin binary searching between them
+    too_low_wAPLKC_scale(0.0),
+    too_high_wAPLKC_scale(0.0)
 {
     if (p.kc.wPNKC_one_row_per_claw) {
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
@@ -1279,7 +1285,13 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     do {
         /* Modify the APL<->KC weights in order to move in the
          * direction of the target sparsity. */
-        lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters + 1.0));
+        // TODO TODO TODO if we start oscillating, do a binary search between the values
+        // that produce too-high and too-low sparsities?
+        if (!p.kc.linear_lr_falloff) {
+            lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters + 1.0));
+        } else {
+            lr = p.kc.sp_lr_coeff / double(rv.kc.tuning_iters + 1.0);
+        }
         // do need to calculate this way, rather than using rel_sp_diff like:
         // delta = rel_sp_diff * lr;
         // ...just to preserve exact numerical behavior for previous outputs. probably
@@ -1287,6 +1299,18 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         // np.isclose/similar.
         delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
         rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
+
+        // TODO TODO only set either of these if current sparsity is nonzero?
+        // TODO TODO and then don't change either, once (both?) are set, just start
+        // binary searching from there
+        if (sp > 0) {
+            // TODO TODO TODO how to implement the binary search?
+            if (rel_sp_diff < 0) {
+                rv.kc.too_high_wAPLKC_scale = rv.kc.wAPLKC_scale;
+            } else if (rel_sp_diff > 0) {
+                rv.kc.too_low_wAPLKC_scale = rv.kc.wAPLKC_scale;
+            }
+        }
 
         // TODO need .array() if not preset? can i always do it?
         Column prev_wAPLKC = rv.kc.wAPLKC;
