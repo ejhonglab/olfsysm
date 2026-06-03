@@ -2279,27 +2279,22 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     if (rv.kc.tuning_iters == 0) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
-
-                        // TODO TODO TODO keep? need (in addition to?) a more general
-                        // fix?
+                    }
+                    scale_APL_weights(p, rv, sp);
+                    // TODO even possible for tuning_iters to be 0 here? (yes)
+                    // maybe i should move all increment of tuning iters into
+                    // scale_APL_weights fn tho?
+                    if (rv.kc.tuning_iters == 0) {
+                        // TODO keep? need (in addition to?) a more general fix?
+                        // (well, it has fixed test_hemibrain_paper_repro, for lack of
+                        // potentially some more general fix, and probably do need
+                        // this)
                         // TODO TODO TODO how to repro final tuning_iters==0 bug in
                         // cases other than hardcode_intial_sp=true? (see some of the
                         // parameter sweep in model_yang_mixtures.py? e.g. some of the
                         // n_spikes_for_response>1 cases?)
                         rv.kc.tuning_iters++;
-                        // TODO TODO TODO fix how this breaks sp_lr_coeff to tune in one
-                        // step calc below though (if we converge before 2nd set of
-                        // sim_KC_layer calls, should use input sp_lr_coeff, not
-                        // whatever updated value below)
-                        // TODO TODO TODO and is that related to why current outputs are
-                        // not matching (wAPLKC/wKCAPL), or is that some other issue?
-                        // i.e. test_hemibrain_paper_repro failure
-                        // following keys had mismatched values:
-                        // ['wAPLKC', 'wKCAPL']
-                        // k='wAPLKC': v=4.622950819672131 not equals v2=5.026279186562787
-                        // k='wKCAPL': v=0.0025165763852325156 not equals v2=0.0027361345599144185
                     }
-                    scale_APL_weights(p, rv, sp);
                 }
             }
 
@@ -2336,6 +2331,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 // also don't want to duplicate calls in the hardcode=true case (so
                 // always doing above sim_KC_layer calls there)
                 if (!p.kc.hardcode_initial_sp) {
+                    // TODO should i now be doing this regardless of hardcode_intial_sp?
                     if (rv.kc.tuning_iters == 0) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
