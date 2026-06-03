@@ -1561,6 +1561,8 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     rv.log("at end of scale_APL_weights:");
     log_apl_weights(p, rv);
 
+    rv.kc.tuning_iters++;
+
     // probably want to abort (so we can change tuning params and re-run)
     // rather than clip values (which would break overall shape of vector(s)
     // from connectome). or otherwise take steps to avoid this state (would
@@ -2281,6 +2283,12 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                     }
                     scale_APL_weights(p, rv, sp);
+                    // TODO delete? moving update to scale_APL_weights fix things?
+                    /*
+                    // TODO TODO TODO handle differently? in cases that don't converge
+                    // in one iteration, this is still broken, b/c between this and code
+                    // below, we jump from i=0 to i=2 (which breaks
+                    // test_uniform_paper_repro)
                     // TODO even possible for tuning_iters to be 0 here? (yes)
                     // maybe i should move all increment of tuning iters into
                     // scale_APL_weights fn tho?
@@ -2295,6 +2303,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         // n_spikes_for_response>1 cases?)
                         rv.kc.tuning_iters++;
                     }
+                    */
                 }
             }
 
@@ -2327,6 +2336,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 sparsity_not_converged = (
                     abs(sp - p.kc.sp_target) > (p.kc.sp_acc * p.kc.sp_target)
                 );
+                // TODO check that hardcode_initial_sp=true case also exits at same max
+                // # of iterations? hopefully none of cases for paper required that
+                // anyway tho... and wouldn't matter then
                 under_max_iters = rv.kc.tuning_iters <= p.kc.max_iters;
                 // also don't want to duplicate calls in the hardcode=true case (so
                 // always doing above sim_KC_layer calls there)
@@ -2341,12 +2353,16 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     }
                 }
 
+                // TODO delete? still need conditional on convergence?
+                // or ok to always do at end of scale_APL_weights now?
+                /*
                 // TODO also only do this if !p.kc.hardcode_initial_sp? or on first
                 // iteration? seems i currently needed to add an unconditional ++ of
                 // this value above for that case
                 if (sparsity_not_converged) {
                     rv.kc.tuning_iters++;
                 }
+                */
             }
         } while (sparsity_not_converged && under_max_iters);
 #pragma omp barrier
