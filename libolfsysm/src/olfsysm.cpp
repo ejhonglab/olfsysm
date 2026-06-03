@@ -988,10 +988,27 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
         if (i == 0) {
             continue;
         }
-
-        // TODO TODO TODO why was this failing in test_apl_weights_osm (in first
-        // run_KC_sims call in this test itself, w/ regen=True [+
+        // TODO TODO TODO (still?) why was this failing in test_apl_weights_osm (in
+        // first run_KC_sims call in this test itself, w/ regen=True [+
         // tune_apl_weights=false], w/ wAPLKC all set to 0)?
+        // TODO TODO TODO also why now failing in scripts/repro_remy_paper_modeling.py,
+        // on first call (why is last odor index uninitialized, but not in hemibrain
+        // repro test? seems like it also would be called from al-analysis? that true?)
+        // (b/c it's 18th odor, first of extra_orn_deltas, not last megamat odor.
+        // pn_sims uninitialized there currently, it seems)
+        // TODO delete
+        bool all_eq_1st = (
+            rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array() ==
+            rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array()
+        ).all();
+        if (!all_eq_1st) {
+            rv.log();
+            rv.log(cat("i=", i, " NOT all equal to 1st"));
+            rv.log(cat("pn means",
+                rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean()
+            ));
+        }
+        //
         check((rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array() ==
                rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array()
               ).all() );
@@ -1092,7 +1109,18 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             // TODO assert bouton_sims.col(t) is all not NaN / whatever here
             // (non-0, if initialized that way)?
 
+            // TODO TODO TODO fix. failing in current:
+            // prat-claws_True__prat-boutons_True__pn-claw-to-apl_True__
+            // allow-net-inh-per-claw_True__connectome-APL_True
+            // ...when tuned on megamat from model_yang_mixtures.py
+            // (had i really not tested this combo before tho? happens on first tuning
+            // iteration)
             // this should guarantee that bouton_inh are all positive
+            // TODO delete
+            if (t <= 3005 && last_inh < 0) {
+                rv.log(cat("t: ", t, " last_inh: ", last_inh));
+            }
+            //
             check(last_inh >= 0);
             // TODO TODO TODO test this indexing is correct
             // TODO TODO maybe save into separate variable just for that
@@ -1343,8 +1371,6 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         } else {
             /* Modify the APL<->KC weights in order to move in the
              * direction of the target sparsity. */
-            // TODO TODO TODO if we start oscillating, do a binary search between the
-            // values that produce too-high and too-low sparsities?
             if (!p.kc.linear_lr_falloff) {
                 lr = p.kc.sp_lr_coeff / sqrt(double(rv.kc.tuning_iters + 1.0));
             } else {
@@ -2253,6 +2279,25 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     if (rv.kc.tuning_iters == 0) {
                         initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                         initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
+
+                        // TODO TODO TODO keep? need (in addition to?) a more general
+                        // fix?
+                        // TODO TODO TODO how to repro final tuning_iters==0 bug in
+                        // cases other than hardcode_intial_sp=true? (see some of the
+                        // parameter sweep in model_yang_mixtures.py? e.g. some of the
+                        // n_spikes_for_response>1 cases?)
+                        rv.kc.tuning_iters++;
+                        // TODO TODO TODO fix how this breaks sp_lr_coeff to tune in one
+                        // step calc below though (if we converge before 2nd set of
+                        // sim_KC_layer calls, should use input sp_lr_coeff, not
+                        // whatever updated value below)
+                        // TODO TODO TODO and is that related to why current outputs are
+                        // not matching (wAPLKC/wKCAPL), or is that some other issue?
+                        // i.e. test_hemibrain_paper_repro failure
+                        // following keys had mismatched values:
+                        // ['wAPLKC', 'wKCAPL']
+                        // k='wAPLKC': v=4.622950819672131 not equals v2=5.026279186562787
+                        // k='wKCAPL': v=0.0025165763852325156 not equals v2=0.0027361345599144185
                     }
                     scale_APL_weights(p, rv, sp);
                 }
@@ -2300,6 +2345,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     }
                 }
 
+                // TODO also only do this if !p.kc.hardcode_initial_sp? or on first
+                // iteration? seems i currently needed to add an unconditional ++ of
+                // this value above for that case
                 if (sparsity_not_converged) {
                     rv.kc.tuning_iters++;
                 }
