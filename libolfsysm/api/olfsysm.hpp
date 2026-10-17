@@ -676,7 +676,10 @@ struct RunVars {
          * (only relevant for `n_spikes_for_response > 1` case) */
         unsigned thr_tuning_iters;
 
-        /* The number of iterations done during APL tuning. */
+        /* The number of iterations done during APL tuning (each an update of the APL
+         * weights, followed by a simulation to check sparsity). At least 1 if
+         * tune_apl_weights=true, even if initial weights were already within
+         * tolerance. */
         unsigned tuning_iters;
 
         /* Initialize matrices with the correct sizes and quantities. */
@@ -706,9 +709,6 @@ struct RunVars {
         // to access in python, to shortcut tuning on future calls
         double thr_sp_lr_coeff_to_tune_in_one_iter;
         double sp_lr_coeff_to_tune_in_one_iter;
-
-        double too_low_wAPLKC_scale;
-        double too_high_wAPLKC_scale;
     } kc;
 
     /* Logger for this run. */

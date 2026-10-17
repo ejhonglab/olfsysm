@@ -532,12 +532,7 @@ RunVars::KC::KC(ModelParams const& p) :
     tuning_successful(false),
 
     thr_sp_lr_coeff_to_tune_in_one_iter(0.0),
-    sp_lr_coeff_to_tune_in_one_iter(0.0),
-
-    // TODO TODO if both of these are nonzero, that means we oscillated, and then can
-    // begin binary searching between them
-    too_low_wAPLKC_scale(0.0),
-    too_high_wAPLKC_scale(0.0)
+    sp_lr_coeff_to_tune_in_one_iter(0.0)
 {
     if (p.kc.wPNKC_one_row_per_claw) {
         const auto& raw = p.kc.kc_ids;  // One body ID per claw
@@ -977,46 +972,31 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
     // this as one of the dimension sizes?
     row_dim = get_ngloms(p);
 
+    // only odors in sim_only have had their PN activity simulated (others may be
+    // uninitialized, e.g. extra_orn_deltas odors not in sim_only)
+    std::vector<unsigned> simlist = get_simlist(p);
+    Column pn_spont;
+    pn_spont = rv.pn.sims[simlist[0]].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean();
+
     // TODO delete eventually?
     //
-    // TODO may have issues if not all odors are in sim_only? check! don't often test
-    // that
-    //
-    // checking that it doesn't matter which odor index we use (loop over all odors
-    // and check all against first?)
-    for (unsigned i=0; i < rv.pn.sims.size(); i++) {
-        if (i == 0) {
-            continue;
-        }
+    // checking that it doesn't matter which odor index we use (check all simulated
+    // odors against first)
+    for (unsigned i : simlist) {
         // TODO TODO TODO (still?) why was this failing in test_apl_weights_osm (in
         // first run_KC_sims call in this test itself, w/ regen=True [+
         // tune_apl_weights=false], w/ wAPLKC all set to 0)?
-        // TODO TODO TODO also why now failing in scripts/repro_remy_paper_modeling.py,
-        // on first call (why is last odor index uninitialized, but not in hemibrain
-        // repro test? seems like it also would be called from al-analysis? that true?)
-        // (b/c it's 18th odor, first of extra_orn_deltas, not last megamat odor.
-        // pn_sims uninitialized there currently, it seems)
-        // TODO delete
-        bool all_eq_1st = (
-            rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array() ==
-            rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array()
-        ).all();
+        Column odor_pn_spont =
+            rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean();
+
+        bool all_eq_1st = (odor_pn_spont.array() == pn_spont.array()).all();
         if (!all_eq_1st) {
-            rv.log();
-            rv.log(cat("i=", i, " NOT all equal to 1st"));
-            rv.log(cat("pn means",
-                rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean()
+            rv.log(cat("odor ", i, " spontaneous PN activity differs from odor ",
+                simlist[0], ". pn means: ", odor_pn_spont.transpose()
             ));
         }
-        //
-        check((rv.pn.sims[i].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array() ==
-               rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean().array()
-              ).all() );
+        check(all_eq_1st);
     }
-    //
-
-    Column pn_spont;
-    pn_spont = rv.pn.sims[0].block(0, sp_t1, row_dim, sp_t2-sp_t1).rowwise().mean();
 
     if (p.pn.n_total_boutons > 0) {
         // TODO assert min/max unchanged after (mainly to check for uninitialized
@@ -1116,11 +1096,10 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             // (had i really not tested this combo before tho? happens on first tuning
             // iteration)
             // this should guarantee that bouton_inh are all positive
-            // TODO delete
-            if (t <= 3005 && last_inh < 0) {
+            if (last_inh < 0) {
+                // check below will abort (inside parallel region), so log values first
                 rv.log(cat("t: ", t, " last_inh: ", last_inh));
             }
-            //
             check(last_inh >= 0);
             // TODO TODO TODO test this indexing is correct
             // TODO TODO maybe save into separate variable just for that
@@ -1275,23 +1254,51 @@ void log_apl_weights(ModelParams const& p, RunVars& rv) {
     }
 }
 
+// NOTE: will abort (rather than raise an error that can be caught in python) if called
+// within a parallel region.
 void sparsity_nonconvergence_failure(ModelParams const&p, RunVars const& rv) {
-    rv.log(cat("did not get within tolerance of p.kc.sp_target within "
-        "p.kc.max_iters=", p.kc.max_iters, " iterations! failure!"
-    ));
-    // will fail here if we did not converge
-    check(rv.kc.thr_tuning_iters <= p.kc.max_iters);
-    check(rv.kc.tuning_iters <= p.kc.max_iters);
+    std::string msg = cat("did not get within tolerance of p.kc.sp_target within "
+        "p.kc.max_iters=", p.kc.max_iters, " iterations! failure! (thr_tuning_iters=",
+        rv.kc.thr_tuning_iters, " tuning_iters=", rv.kc.tuning_iters, ")"
+    );
+    rv.log(msg);
+    throw std::invalid_argument(msg);
+}
+
+/* Most recent values of wAPLKC_scale (already simulated) that produced sparsity above
+ * (too_low) and below (too_high) target, used for binary search when
+ * p.kc.binary_search_on_overshoot=true. 0 if no such scale yet. */
+struct WAPLKCScaleBracket {
+    double too_low_wAPLKC_scale = 0.0;
+    double too_high_wAPLKC_scale = 0.0;
+
+    bool found() const {
+        return too_low_wAPLKC_scale != 0 && too_high_wAPLKC_scale != 0;
+    }
+};
+
+/* Should only be called with sparsity actually simulated at current wAPLKC_scale. */
+void update_wAPLKC_scale_bracket(ModelParams const& p, RunVars const& rv, double sp,
+    WAPLKCScaleBracket& bracket) {
+
+    if (sp < p.kc.sp_target) {
+        bracket.too_high_wAPLKC_scale = rv.kc.wAPLKC_scale;
+    } else if (sp > p.kc.sp_target) {
+        bracket.too_low_wAPLKC_scale = rv.kc.wAPLKC_scale;
+    }
 }
 
 // TODO refactor to share some of this w/ threshold tuning logic? easy to share
 // much of it? esp if i also need backoff logic in thr tuning case, would be nice to
 // share here.
-void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
+void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp,
+    WAPLKCScaleBracket const& bracket) {
+
     bool wAPLKC_scale_is_positive = false;
     double lr;
     double delta;
     double rel_sp_diff;
+    bool binary_searching = p.kc.binary_search_on_overshoot && bracket.found();
 
     // to check we don't add additional 0 entries later (which would not be able
     // to be updated on any future iterations).
@@ -1314,60 +1321,19 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
     do {
         rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
 
-        if (p.kc.binary_search_on_overshoot && sp > 0) {
-            // TODO TODO actually need `sp > 0` to set *both* of these? is there one of
-            // them we can set regardless (and is it worth starting search as soon as
-            // other one is set?)? surely scale can not be negative, so could have 0 be
-            // one side of search...
-            if (rel_sp_diff < 0 && rv.kc.too_high_wAPLKC_scale != 0) {
-                rv.kc.too_high_wAPLKC_scale = rv.kc.wAPLKC_scale;
-                // TODO delete
-                rv.log(cat("INITIAL too_high_wAPLKC_scale: ", rv.kc.too_high_wAPLKC_scale));
-            } else if (rel_sp_diff > 0 && rv.kc.too_low_wAPLKC_scale != 0) {
-                rv.kc.too_low_wAPLKC_scale = rv.kc.wAPLKC_scale;
-                // TODO delete
-                rv.log(cat("INITIAL too_low_wAPLKC_scale: ", rv.kc.too_low_wAPLKC_scale));
-            }
-            // TODO actually need to handle == 0 case? assert not encountered?
-
-            // TODO TODO only start the binary search if a certain flag is set?
-            if (rv.kc.too_high_wAPLKC_scale != 0 && rv.kc.too_low_wAPLKC_scale != 0) {
-                // TODO TODO reword? will it actually start on *this* iteration?
-                // TODO delete
-                rv.log("will start binary search on any future APL tuning iterations");
-            }
-        }
-
-        if (rv.kc.too_high_wAPLKC_scale != 0 && rv.kc.too_low_wAPLKC_scale != 0) {
-            // TODO assert ordering of too_[high|low]...?
-            // TODO delete
-            rv.log(cat("too_high_wAPLKC_scale: ", rv.kc.too_high_wAPLKC_scale));
-            rv.log(cat("too_low_wAPLKC_scale: ", rv.kc.too_low_wAPLKC_scale));
-            //
+        if (binary_searching) {
+            // bracket bounds are only updated (in fit_sparseness) after the sparsity
+            // at this midpoint is simulated
             double midpoint = (
-                (rv.kc.too_high_wAPLKC_scale + rv.kc.too_low_wAPLKC_scale) / 2
+                (bracket.too_low_wAPLKC_scale + bracket.too_high_wAPLKC_scale) / 2
             );
-            // TODO delete
-            rv.log(cat("midpoint: ", midpoint));
-            if (rel_sp_diff < 0) {
-                // TODO TODO TODO test + make sure this line is correct
-                delta = rv.kc.too_high_wAPLKC_scale - midpoint;
-                // TODO TODO TODO set either high/low to middle of range depending on
-                // this if/else (-> implement rest of search surrounding that)
-                rv.kc.too_high_wAPLKC_scale = midpoint;
-            } else {
-                // TODO TODO TODO test + make sure this line is correct
-                delta = midpoint - rv.kc.too_low_wAPLKC_scale;
-                rv.kc.too_low_wAPLKC_scale = midpoint;
+            delta = midpoint - rv.kc.wAPLKC_scale;
+            if (rv.verbose) {
+                rv.log(cat("binary searching between too_low_wAPLKC_scale=",
+                    bracket.too_low_wAPLKC_scale, " and too_high_wAPLKC_scale=",
+                    bracket.too_high_wAPLKC_scale
+                ));
             }
-            // TODO delete
-            rv.log(cat("delta (binary search): ", delta));
-            // just to be clear this is no longer meaningful when logged below
-            // (should just remove from logging in this case...)
-            lr = 0.0;
-            // TODO TODO need to handle case rel_sp_diff == 0? check it's not?
-            // TODO TODO TODO skip all (/ how much of) rest of loop? just change delta
-            // def here, but otherwise do rest of loop?
         } else {
             /* Modify the APL<->KC weights in order to move in the
              * direction of the target sparsity. */
@@ -1386,13 +1352,7 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
 
         // TODO need .array() if not preset? can i always do it?
         Column prev_wAPLKC = rv.kc.wAPLKC;
-        double prev_wAPLKC_scale = 0;
-        if (p.kc.preset_wAPLKC) {
-            prev_wAPLKC_scale = rv.kc.wAPLKC_scale;
-        } else {
-            // this `else` def only used for logging
-            prev_wAPLKC_scale = rv.kc.wAPLKC.mean();
-        }
+        double prev_wAPLKC_scale = rv.kc.wAPLKC_scale;
 
         rv.kc.wAPLKC_scale += delta;
         if (!p.kc.preset_wAPLKC) {
@@ -1440,9 +1400,13 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         // TODO store whether we ever overshot? how many times?
 
         if (!wAPLKC_scale_is_positive) {
+            // midpoint between two (positive) scales already used should be positive,
+            // and decreasing step size via tuning_iters would not change it anyway
+            check(!binary_searching);
+
             rv.kc.tuning_iters++;
-            // TODO TODO change check to include equality now?
-            if (rv.kc.tuning_iters > p.kc.max_iters) {
+            // >= because tuning_iters will also be incremented once this step is done
+            if (rv.kc.tuning_iters >= p.kc.max_iters) {
                 // TODO TODO is it an abort here and a ValueError somewhere else?
                 // (or vice versa). fix if so.
                 //
@@ -1475,12 +1439,13 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp) {
         } else {
             // TODO still log at least some of this unconditionally? go back to having
             // it all unconditional?
-            // TODO TODO only log this LR if not binary searching (lr definition no
-            // longer meaningful there. could just set it to NaN/0/delta, if i didn't
-            // want to special case here?
             rv.log(cat("i=", rv.kc.tuning_iters, " sp=", sp, " target=", p.kc.sp_target,
                 " rel_sp_diff=", rel_sp_diff, " acc=", p.kc.sp_acc,
-                " wAPLKC_scale=", prev_wAPLKC_scale, " delta(wAPLKC)=", delta, " lr=", lr
+                // (logging mean wAPLKC in !preset_wAPLKC case, as before)
+                " wAPLKC_scale=",
+                p.kc.preset_wAPLKC ? prev_wAPLKC_scale : prev_wAPLKC.mean(),
+                " delta(wAPLKC)=", delta,
+                binary_searching ? std::string(" (binary search)") : cat(" lr=", lr)
             ));
         }
 
@@ -1884,6 +1849,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // scale, would need to expand on handling this provides
     double initial_wAPLKC_scale = 0;
 
+    // local to this call, so bounds from any previous tuning (e.g. with different
+    // thresholds) are not reused
+    WAPLKCScaleBracket bracket;
+
     /* Used to count number of times looped; the 'learning rate' is decreased
      * as 1/sqrt(count) with each iteration. */
     rv.kc.tuning_iters = 0;
@@ -2268,44 +2237,19 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             check_weights(p, rv);
         }
 
+        // instead of simulating initial weights, take first step from hardcoded sp
+        if (p.kc.hardcode_initial_sp) {
+#pragma omp single
+            {
+                initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
+                initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
+                scale_APL_weights(p, rv, sp, bracket);
+            }
+        }
+
         /* Continue tuning until we reach the desired sparsity. */
         do {
 #pragma omp barrier
-
-#pragma omp single
-            {
-                // always want this step to be at this point in the loop for the
-                // hardcode_initial_sp=true case, so we don't double up at the end of
-                // first pass.
-                if (p.kc.hardcode_initial_sp) {
-                    if (rv.kc.tuning_iters == 0) {
-                        initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
-                        initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
-                    }
-                    scale_APL_weights(p, rv, sp);
-                    // TODO delete? moving update to scale_APL_weights fix things?
-                    /*
-                    // TODO TODO TODO handle differently? in cases that don't converge
-                    // in one iteration, this is still broken, b/c between this and code
-                    // below, we jump from i=0 to i=2 (which breaks
-                    // test_uniform_paper_repro)
-                    // TODO even possible for tuning_iters to be 0 here? (yes)
-                    // maybe i should move all increment of tuning iters into
-                    // scale_APL_weights fn tho?
-                    if (rv.kc.tuning_iters == 0) {
-                        // TODO keep? need (in addition to?) a more general fix?
-                        // (well, it has fixed test_hemibrain_paper_repro, for lack of
-                        // potentially some more general fix, and probably do need
-                        // this)
-                        // TODO TODO TODO how to repro final tuning_iters==0 bug in
-                        // cases other than hardcode_intial_sp=true? (see some of the
-                        // parameter sweep in model_yang_mixtures.py? e.g. some of the
-                        // n_spikes_for_response>1 cases?)
-                        rv.kc.tuning_iters++;
-                    }
-                    */
-                }
-            }
 
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
@@ -2336,39 +2280,39 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 sparsity_not_converged = (
                     abs(sp - p.kc.sp_target) > (p.kc.sp_acc * p.kc.sp_target)
                 );
-                // TODO check that hardcode_initial_sp=true case also exits at same max
-                // # of iterations? hopefully none of cases for paper required that
-                // anyway tho... and wouldn't matter then
-                under_max_iters = rv.kc.tuning_iters <= p.kc.max_iters;
-                // also don't want to duplicate calls in the hardcode=true case (so
-                // always doing above sim_KC_layer calls there)
-                if (!p.kc.hardcode_initial_sp) {
-                    // TODO should i now be doing this regardless of hardcode_intial_sp?
-                    if (rv.kc.tuning_iters == 0) {
-                        initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
-                        initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
-                    }
-                    if (sparsity_not_converged) {
-                        scale_APL_weights(p, rv, sp);
-                    }
+                // only reached w/ tuning_iters == 0 if hardcode_initial_sp=false
+                if (rv.kc.tuning_iters == 0) {
+                    initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
+                    initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                 }
-
-                // TODO delete? still need conditional on convergence?
-                // or ok to always do at end of scale_APL_weights now?
-                /*
-                // TODO also only do this if !p.kc.hardcode_initial_sp? or on first
-                // iteration? seems i currently needed to add an unconditional ++ of
-                // this value above for that case
-                if (sparsity_not_converged) {
-                    rv.kc.tuning_iters++;
+                if (p.kc.binary_search_on_overshoot) {
+                    update_wAPLKC_scale_bracket(p, rv, sp, bracket);
                 }
-                */
+                // scale_APL_weights increments tuning_iters, so this allows at most
+                // max_iters steps, each followed by a simulation to check sparsity
+                under_max_iters = rv.kc.tuning_iters < p.kc.max_iters;
+                if (sparsity_not_converged && under_max_iters) {
+                    scale_APL_weights(p, rv, sp, bracket);
+                }
             }
         } while (sparsity_not_converged && under_max_iters);
 #pragma omp barrier
     }}
     // TODO not an issue that (all) below is not in a `#pragma omp single`? might be...
     if (p.kc.tune_apl_weights) {
+        // raising here rather than in loop above, as errors raised inside the parallel
+        // region abort, rather than propagating to python
+        if (sparsity_not_converged) {
+            sparsity_nonconvergence_failure(p, rv);
+        }
+
+        // initial weights (hardcode_initial_sp=false) may already be within tolerance,
+        // but still counting that as one iteration, so that tuning_iters >= 1 whenever
+        // tuning happens (and still == 1 if tuning took one step)
+        if (rv.kc.tuning_iters == 0) {
+            rv.kc.tuning_iters = 1;
+        }
+
         check(initial_rel_sp_diff != 0);
         check(initial_wAPLKC_scale != 0);
 
