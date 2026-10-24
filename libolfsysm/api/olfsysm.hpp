@@ -7,6 +7,7 @@
 #include <mutex>
 #include <fstream>
 #include "Eigen/Dense"
+#include "Eigen/Sparse"
 
 /* Used for thread-safe logging. */
 class Logger {
@@ -76,6 +77,7 @@ using Row    = Matrix;
 // have shape 1 in right place anywhere? how could i enforce that?
 using Column = Matrix;
 using Vector = Matrix;
+using SparseMatrix = Eigen::SparseMatrix<double>;
 
 /* Contain all model parameters; never contains data generated during
  * modeling! */
@@ -187,12 +189,16 @@ struct ModelParams {
         // TODO rename, either this or nclaws_total (that even used?), to be consistent?
         unsigned n_total_boutons;
 
-        // TODO TODO add parameter to control strength of APL<>PN stuff relative to
-        // strength of KC<>APL stuff (or just handle via scale factor between these
-        // weights in python? at least make sure python tries a sweep that includes
-        // varying PN>APL separately from APL>PN?)
+        /* Set to true if using pre-loaded APL->bouton / bouton->APL weight vectors (as
+         * kc.preset_wAPLKC). Requires n_total_boutons > 0 and
+         * kc.wPNKC_one_row_per_claw=true. */
         bool preset_wAPLPN;
         bool preset_wPNAPL;
+
+        /* Multiplied into the normalized wAPLPN / wPNAPL vectors (as
+         * kc.wAPLKC_pretune_scale). Default 1. */
+        double wAPLPN_pretune_scale;
+        double wPNAPL_pretune_scale;
 
         // TODO delete (/use)
         //double apl_taum;
@@ -237,11 +243,33 @@ struct ModelParams {
         /* Whether to simulate the APL at all.*/
         bool tune_apl_weights;
 
-        // TODO TODO doc how these will interact w/ tune_apl_weights
-        /* Set to true if using a pre-loaded APL->KC weight vector. */
+        /* Set to true if using a pre-loaded APL->KC weight vector (e.g. connectome
+         * synapse counts), set into rv.kc.wAPLKC before fit_sparseness. Its relative
+         * values are kept, and its overall scale (rv.kc.wAPLKC_scale) is tuned (or
+         * fixed, if tune_apl_weights=false). If false, APL->KC weights are uniform if
+         * tuned, or used as set in rv.kc.wAPLKC otherwise. See `init_apl_weights` in
+         * olfsysm.cpp for how vectors are normalized. */
         bool preset_wAPLKC;
-        /* Set to true if using a pre-loaded KC->APL weight vector. */
+        /* As preset_wAPLKC, but for the KC->APL weight vector. */
         bool preset_wKCAPL;
+
+        /* If true (default), preset APL weight vectors are normalized when
+         * fit_sparseness starts (see `init_apl_weights` in olfsysm.cpp). Set false to
+         * use them as-is (e.g. if already normalized). */
+        bool normalize_apl_weights;
+
+        /* Only relevant for normalizing preset KC<>APL weights when
+         * wPNKC_one_row_per_claw=true. If false (default), per-claw weights are scaled
+         * to have a mean of 1 across claws. If true, they are scaled so that each KC's
+         * total (summed over its claws) has a mean of 1 across KCs, as for
+         * one-row-per-KC weights. */
+        bool apl_weights_kc_mean;
+
+        /* Multiplied into the normalized wAPLKC / wKCAPL vectors (preset or uniform)
+         * before tuning. Since tuning scales all APL weights together, these set the
+         * strength of each set of weights relative to the others. Default 1. */
+        double wAPLKC_pretune_scale;
+        double wKCAPL_pretune_scale;
 
         /* If false, APL activity will depend on KC spiking, and then a KC spiking will
          * cause all of its claws to provide input to the APL (just multiplied by
@@ -257,11 +285,13 @@ struct ModelParams {
         bool claw_dynamics;
         double claw_tau;
 
-        // TODO implement/delete
-        /* Will treat each microglomerulus as a separate (uncoupled with other
-         * microglomeruli, for now) APL, if true. If false, there will be one global
-         * scalar set of APL dynamics. */
-        bool microglomeruli_apl_units;
+        /* Number of APL compartments ("units", e.g. spatial regions of the APL arbor in
+         * the calyx). If 1 (default), the APL is a single compartment. If >1, each unit
+         * has its own potential, gets input from and inhibits claws (and boutons)
+         * according to rv.kc.w[APLKC|KCAPL]_units (and rv.pn.w[APLPN|PNAPL]_units), and
+         * is electrotonically coupled to other units via rv.kc.apl_unit_coupling (see
+         * sim_KC_layer). Requires wPNKC_one_row_per_claw=true. */
+        unsigned n_apl_units;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
@@ -275,7 +305,6 @@ struct ModelParams {
          * this is positive, then that all threshold parameters define per-claw
          * thresholds instead, and this many claws will need to exceed threshold to
          * cause their KC to spike. Only relevant if wPNKC_one_row_per_claw=true.
-         * Not yet implemented for `apl_coup_const != -1` case.
          *
          * NOTE: automated threshold picking not currently implemented when this is >0.
          * Had manually hardcoded particular threshold until response rate was within
@@ -449,6 +478,9 @@ struct ModelParams {
         bool save_inh_sims;
         bool save_Is_sims;
         bool save_claw_sims;
+        /* Saves the potential of each APL unit (to rv.kc.apl_unit_inh_sims). Only
+         * relevant if n_apl_units > 1. */
+        bool save_apl_unit_sims;
 
         // TODO delete kc_ids, and replace w/ setting N appropriately (or new N-like var
         // just for total_n_claws)
@@ -552,11 +584,18 @@ struct RunVars {
         /* bouton to APL weights*/
         Row wPNAPL;
 
+        /* As the corresponding variables in rv.kc (only used if
+         * p.pn.preset_w[APLPN|PNAPL]=true). */
         double wAPLPN_scale;
         double wPNAPL_scale;
 
         Column wAPLPN_unscaled;
         Row wPNAPL_unscaled;
+
+        /* As rv.kc.w[APLKC|KCAPL]_units, but for boutons: shapes (#-boutons,
+         * p.kc.n_apl_units) and (p.kc.n_apl_units, #-boutons). */
+        SparseMatrix wAPLPN_units;
+        SparseMatrix wPNAPL_units;
 
         std::vector<Matrix> sims;
 
@@ -596,20 +635,33 @@ struct RunVars {
         Column wAPLKC;
         Row    wKCAPL;
 
-        /* Only used if respective flag preset_w[APLKC|KCAPL] is true, where then these
-         * scalars are tuned rather than wAPLKC/wKCAPL themselves.
-         *
-         * In these preset cases, wAPLKC/wKCAPL are vectors, whose relative
-         * relationships we don't want to accidentally change by clipping some entries
-         * to 0.
-         *
-         * Also want to keep 0 entries as 0 at output of scaling, rather than adding
-         * constant across all elements of these vectors. */
+        /* wAPLKC / wKCAPL are set to these scalars times the w[APLKC|KCAPL]_unscaled
+         * vectors. Tuning changes the scalars, keeping the relative values within each
+         * vector (and any 0 entries) the same. If not tuning (tune_apl_weights=false),
+         * these can be set before fit_sparseness, to fix preset weights at that
+         * scale. */
         double wAPLKC_scale;
         double wKCAPL_scale;
 
+        /* Normalized (or uniform) weight vectors, set at the start of fit_sparseness
+         * (see `init_apl_weights` in olfsysm.cpp). */
         Column wAPLKC_unscaled;
         Row wKCAPL_unscaled;
+
+        /* Only used if p.kc.n_apl_units > 1. Fraction of each claw's APL>claw synapses
+         * from each APL unit (shape (#-claws, p.kc.n_apl_units). each row sums to 1, or
+         * 0 for claws without any). wAPLKC is total weight onto each claw, so APL unit u
+         * inhibits claw c with weight wAPLKC(c) * wAPLKC_units(c, u). */
+        SparseMatrix wAPLKC_units;
+        /* As wAPLKC_units, but fraction of each claw's claw>APL synapses onto each APL
+         * unit, and transposed (shape (p.kc.n_apl_units, #-claws). columns sum to 1). */
+        SparseMatrix wKCAPL_units;
+
+        /* Only used if p.kc.n_apl_units > 1. Symmetric (and 0 on the diagonal) matrix of
+         * shape (p.kc.n_apl_units, p.kc.n_apl_units), with the coupling conductance
+         * between each pair of APL units, relative to the leak conductance of each
+         * unit. */
+        SparseMatrix apl_unit_coupling;
 
         /* Spontaneous input each KC receives. Threshold typically added to this. */
         Column spont_in;
@@ -637,29 +689,29 @@ struct RunVars {
         /* Timeseries of the vesicle depletion factor for each odor. */
         std::vector<Matrix> nves_sims;
 
-        /* Timeseries of APL potential for each odor.
-         *
-         * If kc.microglomeruli_apl_units=false, each element will be a Row of length
-         * #-timepoints [shape=(1, #-timepoints)].
-         *
-         * If kc.microglomeruli_apl_units=true, each element will be of shape
-         * (p.pn.n_total_boutons, #-timepoints). */
+        /* Timeseries of APL potential for each odor. Each element is a Row of length
+         * #-timepoints [shape=(1, #-timepoints)]. If p.kc.n_apl_units > 1, this is the
+         * mean potential across units (see apl_unit_inh_sims for each unit's). */
         std::vector<Matrix> inh_sims;
 
-        // TODO clarify in doc that it is always just a single number (sum? mean?)
-        // across all KCs (it is, right?)
-        /* Timeseries of KC->APL synapse current for each odor.
-         *
-         * See inh_sims comment for what shape elements of this will be. */
+        /* Timeseries of APL potential of each unit, for each odor (each element of
+         * shape (p.kc.n_apl_units, #-timepoints)). Only saved if
+         * p.kc.save_apl_unit_sims=true and p.kc.n_apl_units > 1. */
+        std::vector<Matrix> apl_unit_inh_sims;
+
+        /* Timeseries of KC->APL synapse current for each odor (summed across all KCs,
+         * and across APL units, if p.kc.n_apl_units > 1). Same shape as inh_sims
+         * elements. */
         std::vector<Matrix> Is_sims;
 
-        /* Timeseries of KC>APL & PN>APL "current" inputs to APL for each odor.
+        /* Timeseries of KC>APL & PN>APL "current" inputs to APL for each odor (summed
+         * across APL units, if p.kc.n_apl_units > 1).
          *
          * Will only be used if we are using bouton PN<>APL weights
          * (via pn.preset_w[APLPN|PNAPL]=true and pn.n_total_boutons > 0), because
          * otherwise this would be the same as inh_sims below).
          *
-         * See inh_sims comment for what shape elements of this will be. */
+         * Same shape as inh_sims elements. */
         // TODO TODO rename dIsdt_*, rather than Is_* (since that's what these are!)
         std::vector<Matrix> Is_from_kcs;
         std::vector<Matrix> Is_from_pns;

@@ -67,7 +67,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("noise", &ModelParams::PN::noise)
         .def_readwrite("n_total_boutons", &ModelParams::PN::n_total_boutons)
         .def_readwrite("preset_wAPLPN", &ModelParams::PN::preset_wAPLPN)
-        .def_readwrite("preset_wPNAPL", &ModelParams::PN::preset_wPNAPL);
+        .def_readwrite("preset_wPNAPL", &ModelParams::PN::preset_wPNAPL)
+        .def_readwrite("wAPLPN_pretune_scale", &ModelParams::PN::wAPLPN_pretune_scale)
+        .def_readwrite("wPNAPL_pretune_scale", &ModelParams::PN::wPNAPL_pretune_scale);
 
     py::class_<ModelParams::PN::Noise>(m, "MPPNNoise")
         .def_readwrite("mean", &ModelParams::PN::Noise::mean)
@@ -98,12 +100,14 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("tune_apl_weights", &ModelParams::KC::tune_apl_weights)
         .def_readwrite("preset_wAPLKC", &ModelParams::KC::preset_wAPLKC)
         .def_readwrite("preset_wKCAPL", &ModelParams::KC::preset_wKCAPL)
+        .def_readwrite("normalize_apl_weights", &ModelParams::KC::normalize_apl_weights)
+        .def_readwrite("apl_weights_kc_mean", &ModelParams::KC::apl_weights_kc_mean)
+        .def_readwrite("wAPLKC_pretune_scale", &ModelParams::KC::wAPLKC_pretune_scale)
+        .def_readwrite("wKCAPL_pretune_scale", &ModelParams::KC::wKCAPL_pretune_scale)
         .def_readwrite("pn_claw_to_apl", &ModelParams::KC::pn_claw_to_apl)
         .def_readwrite("claw_dynamics", &ModelParams::KC::claw_dynamics)
         .def_readwrite("claw_tau", &ModelParams::KC::claw_tau)
-        // TODO implement / delete
-        .def_readwrite("microglomeruli_apl_units", &ModelParams::KC::microglomeruli_apl_units)
-        //
+        .def_readwrite("n_apl_units", &ModelParams::KC::n_apl_units)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)
@@ -137,6 +141,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("save_inh_sims", &ModelParams::KC::save_inh_sims)
         .def_readwrite("save_Is_sims", &ModelParams::KC::save_Is_sims)
         .def_readwrite("save_claw_sims", &ModelParams::KC::save_claw_sims)
+        .def_readwrite("save_apl_unit_sims", &ModelParams::KC::save_apl_unit_sims)
         .def_readwrite("kc_ids", &ModelParams::KC::kc_ids)
         .def_readwrite("wPNKC_one_row_per_claw", &ModelParams::KC::wPNKC_one_row_per_claw)
         .def_readwrite("allow_net_inh_per_claw", &ModelParams::KC::allow_net_inh_per_claw)
@@ -197,6 +202,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wPNAPL_scale", &RunVars::PN::wPNAPL_scale)
         .def_readonly("wAPLPN_unscaled", &RunVars::PN::wAPLPN_unscaled)
         .def_readonly("wPNAPL_unscaled", &RunVars::PN::wPNAPL_unscaled)
+        .def_readwrite("wAPLPN_units", &RunVars::PN::wAPLPN_units)
+        .def_readwrite("wPNAPL_units", &RunVars::PN::wPNAPL_units)
         .def_readonly("pn_sims", &RunVars::PN::sims)
         .def_readonly("bouton_sims", &RunVars::PN::bouton_sims);
 
@@ -212,6 +219,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wKCAPL_scale", &RunVars::KC::wKCAPL_scale)
         .def_readonly("wAPLKC_unscaled", &RunVars::KC::wAPLKC_unscaled)
         .def_readonly("wKCAPL_unscaled", &RunVars::KC::wKCAPL_unscaled)
+        .def_readwrite("wAPLKC_units", &RunVars::KC::wAPLKC_units)
+        .def_readwrite("wKCAPL_units", &RunVars::KC::wKCAPL_units)
+        .def_readwrite("apl_unit_coupling", &RunVars::KC::apl_unit_coupling)
         .def_readonly("pks", &RunVars::KC::pks)
         .def_readwrite("spont_in", &RunVars::KC::spont_in)
         .def_readwrite("thr", &RunVars::KC::thr)
@@ -221,6 +231,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readonly("spike_recordings", &RunVars::KC::spike_recordings)
         .def_readonly("nves_sims", &RunVars::KC::nves_sims)
         .def_readonly("inh_sims", &RunVars::KC::inh_sims)
+        .def_readonly("apl_unit_inh_sims", &RunVars::KC::apl_unit_inh_sims)
         .def_readonly("Is_sims", &RunVars::KC::Is_sims)
         .def_readonly("Is_from_kcs", &RunVars::KC::Is_from_kcs)
         .def_readonly("Is_from_pns", &RunVars::KC::Is_from_pns)

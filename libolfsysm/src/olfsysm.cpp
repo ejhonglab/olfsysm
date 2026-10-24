@@ -179,6 +179,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     /* bouton related model param initialization*/
     p.pn.preset_wAPLPN   = false;
     p.pn.preset_wPNAPL   = false;
+    p.pn.wAPLPN_pretune_scale = 1.0;
+    p.pn.wPNAPL_pretune_scale = 1.0;
 
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
@@ -189,6 +191,10 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.tune_apl_weights      = true;
     p.kc.preset_wAPLKC         = false;
     p.kc.preset_wKCAPL         = false;
+    p.kc.normalize_apl_weights = true;
+    p.kc.apl_weights_kc_mean   = false;
+    p.kc.wAPLKC_pretune_scale  = 1.0;
+    p.kc.wKCAPL_pretune_scale  = 1.0;
 
     // TODO TODO is there actually a refractory period at all (no)? add one, if not?
     // if unclear, add test driving w/ arbitrarily strong ORN input? (+ check that gets
@@ -211,8 +217,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     // doing more? confirm this is having effect i expect?
     p.kc.claw_tau                 = 0.05;
 
-    // TODO TODO implement (/delete)
-    p.kc.microglomeruli_apl_units = false;
+    p.kc.n_apl_units              = 1;
 
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
@@ -288,6 +293,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.save_inh_sims         = false;
     p.kc.save_Is_sims          = false;
     p.kc.save_claw_sims        = false;
+    p.kc.save_apl_unit_sims    = false;
 
     p.ffapl.taum         = p.kc.apl_taum;
     p.ffapl.w            = 1.0;             // appropriate for LTS
@@ -488,6 +494,10 @@ RunVars::KC::KC(ModelParams const& p) :
             Matrix(p.kc.N, p.time.steps_all())),
     inh_sims(p.kc.save_inh_sims ? get_nodors(p) : 0,
              Matrix(1, p.time.steps_all() )),
+    apl_unit_inh_sims(
+        p.kc.save_apl_unit_sims && p.kc.n_apl_units > 1 ? get_nodors(p) : 0,
+        Matrix(p.kc.n_apl_units, p.time.steps_all())
+    ),
     Is_sims(p.kc.save_Is_sims ? get_nodors(p) : 0, Matrix(1, p.time.steps_all() )),
 
     // TODO ever want these w/o #-boutons > 0? check preset_wAPLPN/etc instead?
@@ -499,18 +509,10 @@ RunVars::KC::KC(ModelParams const& p) :
     // first, followed by # KCs/claws?)
     // TODO TODO did ann also have only one scalar across all KCs, at least?
     Is_from_kcs(p.kc.save_Is_sims ? get_nodors(p) : 0,
-        Matrix(
-            p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
-            p.time.steps_all()
-        )
+        Matrix(1, p.time.steps_all())
     ),
     Is_from_pns(p.kc.save_Is_sims ? get_nodors(p) : 0,
-        Matrix(
-            // TODO refactor to share shape def w/ above? (and elsewhere?)
-            // (+ do same for stuff that is either len claws or kcs?)
-            p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
-            p.time.steps_all()
-        )
+        Matrix(1, p.time.steps_all())
     ),
 
     // TODO TODO need this up here (in order for resize below to work? resize below even
@@ -727,6 +729,71 @@ void check_weights(ModelParams const& p, RunVars& rv) {
     } else {
         check(!p.pn.preset_wAPLPN);
         check(!p.pn.preset_wPNAPL);
+    }
+}
+
+/* Checks variables for APL units (only relevant if p.kc.n_apl_units > 1). */
+void check_apl_units(ModelParams const& p, RunVars const& rv) {
+    unsigned const n_units = p.kc.n_apl_units;
+    check(n_units > 1);
+    check(p.kc.wPNKC_one_row_per_claw);
+
+    Column const unit_ones = Column::Ones(n_units, 1);
+    // fractions (of each claw/bouton's synapses w/ each unit) should be non-negative,
+    // and sum to 1 for each claw/bouton (or 0, for those w/o any synapses)
+    auto check_fracs = [](Matrix const& frac_sums) {
+        check(((frac_sums.array() - 1.0).abs() < 1e-9 || frac_sums.array() == 0).all());
+    };
+    auto check_nonneg = [](SparseMatrix const& x) {
+        check(x.nonZeros() == 0 || x.coeffs().minCoeff() >= 0);
+    };
+
+    unsigned const n_claws = rv.kc.claw_to_kc.size();
+    check(rv.kc.wAPLKC_units.rows() == n_claws);
+    check(rv.kc.wAPLKC_units.cols() == n_units);
+    check_nonneg(rv.kc.wAPLKC_units);
+    check_fracs(rv.kc.wAPLKC_units * unit_ones);
+
+    check(rv.kc.wKCAPL_units.rows() == n_units);
+    check(rv.kc.wKCAPL_units.cols() == n_claws);
+    check_nonneg(rv.kc.wKCAPL_units);
+    check_fracs(unit_ones.transpose() * rv.kc.wKCAPL_units);
+
+    if (p.pn.preset_wAPLPN) {
+        check(rv.pn.wAPLPN_units.rows() == p.pn.n_total_boutons);
+        check(rv.pn.wAPLPN_units.cols() == n_units);
+        check_nonneg(rv.pn.wAPLPN_units);
+        check_fracs(rv.pn.wAPLPN_units * unit_ones);
+    }
+    if (p.pn.preset_wPNAPL) {
+        check(rv.pn.wPNAPL_units.rows() == n_units);
+        check(rv.pn.wPNAPL_units.cols() == p.pn.n_total_boutons);
+        check_nonneg(rv.pn.wPNAPL_units);
+        check_fracs(unit_ones.transpose() * rv.pn.wPNAPL_units);
+    }
+
+    SparseMatrix const& coupling = rv.kc.apl_unit_coupling;
+    check(coupling.rows() == n_units);
+    check(coupling.cols() == n_units);
+    check_nonneg(coupling);
+    check(Matrix(coupling.diagonal()).isZero());
+    SparseMatrix const asymmetry = coupling - SparseMatrix(coupling.transpose());
+    check(asymmetry.norm() <= 1e-9 * (1 + coupling.norm()));
+
+    // APL unit potentials are integrated w/ forward Euler. as long as each unit's next
+    // potential is a non-negative combination of current potentials (and inputs),
+    // potentials stay non-negative (as inhibition should be), and the integration is
+    // stable.
+    double const max_coupling_sum = (coupling * unit_ones).maxCoeff();
+    double const step = p.time.dt / p.kc.apl_taum * (1 + max_coupling_sum);
+    if (step > 1) {
+        std::string msg = cat("APL unit coupling too strong to simulate (max total "
+            "coupling of one unit=", max_coupling_sum, ", p.time.dt=", p.time.dt,
+            ", p.kc.apl_taum=", p.kc.apl_taum, "). need p.time.dt / p.kc.apl_taum * "
+            "(1 + max total coupling of one unit) <= 1"
+        );
+        rv.log(msg);
+        throw std::invalid_argument(msg);
     }
 }
 
@@ -1021,8 +1088,9 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
 
 // TODO can i also specify shape of output type here? just assert within? or take ref to
 // claw_drive, and set into that, rather than returning?
+/* `bouton_inh` is APL inhibition onto each bouton (only used if p.pn.preset_wAPLPN). */
 Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
-    Matrix const& pn_t, unsigned t, Matrix& bouton_sims, double last_inh) {
+    Matrix const& pn_t, unsigned t, Matrix& bouton_sims, Column const& bouton_inh) {
     // TODO what happens if we initialize to one size, and then set with rvalue
     // that is another size? (or e.g. a matrix) err hopefully? or need to add
     // checks that size is as expected, even if predefining size?
@@ -1095,15 +1163,11 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             // ...when tuned on megamat from model_yang_mixtures.py
             // (had i really not tested this combo before tho? happens on first tuning
             // iteration)
-            // this should guarantee that bouton_inh are all positive
-            if (last_inh < 0) {
+            if (bouton_inh.minCoeff() < 0) {
                 // check below will abort (inside parallel region), so log values first
-                rv.log(cat("t: ", t, " last_inh: ", last_inh));
+                rv.log(cat("t: ", t, " min bouton_inh: ", bouton_inh.minCoeff()));
             }
-            check(last_inh >= 0);
-            // TODO TODO TODO test this indexing is correct
-            // TODO TODO maybe save into separate variable just for that
-            Column bouton_inh = rv.pn.wAPLPN * last_inh;
+            check(bouton_inh.minCoeff() >= 0);
 
             // TODO TODO also experiment w/ subtracting spont from bouton_sims?
             // or maybe doing something like that in claws instead?
@@ -1254,6 +1318,128 @@ void log_apl_weights(ModelParams const& p, RunVars& rv) {
     }
 }
 
+/* Returns `w` multiplied by one factor, such that its entries sum to `target_sum`
+ * (or `w` unchanged, if it sums to 0). */
+Matrix normalized_apl_weights(Matrix const& w, double target_sum) {
+    double sum = w.sum();
+    if (sum == 0) {
+        return w;
+    }
+    check(sum > 0);
+    return w * (target_sum / sum);
+}
+
+/* Returns KC<>APL weight vector (shape of `w`) with each KC's total weight equal to 1
+ * (split evenly across its claws, if wPNKC_one_row_per_claw=true). */
+Matrix uniform_kc_apl_weights(ModelParams const& p, RunVars const& rv, Matrix const& w) {
+    Matrix uniform = Matrix::Ones(w.rows(), w.cols());
+    if (p.kc.wPNKC_one_row_per_claw) {
+        for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
+            unsigned kc = rv.kc.claw_to_kc[claw];
+            uniform(claw) = 1.0 / double(rv.kc.kc_to_claws[kc].size());
+        }
+    }
+    return uniform;
+}
+
+/* Sets the w*_unscaled APL weight vectors. Called at the start of fit_sparseness.
+ * APL weights are always these vectors times the corresponding scalar (e.g. wAPLKC =
+ * wAPLKC_scale * wAPLKC_unscaled), and tuning only changes the scalars (see
+ * add_to_apl_weight_scales), so this (along with those scalars) defines all APL
+ * weight normalization.
+ *
+ * Preset vectors (p.kc.preset_w[APLKC|KCAPL] / p.pn.preset_w[APLPN|PNAPL]) are each
+ * multiplied by one positive factor (if p.kc.normalize_apl_weights=true), so that:
+ * - one-row-per-KC wAPLKC / wKCAPL have a mean of 1 across KCs.
+ * - one-row-per-claw wAPLKC / wKCAPL have a mean of 1 across claws (so each KC's total,
+ *   summed over its claws, has a mean of #claws/#KCs across KCs). If
+ *   p.kc.apl_weights_kc_mean=true, they are instead scaled so these per-KC totals have
+ *   a mean of 1.
+ * - wAPLPN / wPNAPL (one entry per bouton) have a mean of 1 across boutons.
+ * Entries that are 0 (e.g. claws without any APL synapses) count towards these means,
+ * and stay 0. Nothing is normalized within each KC (or glomerulus/PN), so a KC with more
+ * (or stronger) claws, or a glomerulus with more boutons, keeps proportionally more
+ * total weight.
+ *
+ * Non-preset KC<>APL weights are uniform if tuned (each KC's total weight is 1, split
+ * evenly across its claws), or used as set in rv.kc.w[APLKC|KCAPL] if not tuned (with
+ * their scales set to 1).
+ *
+ * Each vector is then multiplied by its p.[kc|pn].w*_pretune_scale. */
+void init_apl_weights(ModelParams const& p, RunVars& rv) {
+    auto init_kc_apl_weights = [&](Matrix const& w, bool preset, double& scale) {
+        if (preset) {
+            if (!p.kc.normalize_apl_weights) {
+                return w;
+            }
+            // same as w.size() if not wPNKC_one_row_per_claw
+            double target_sum = p.kc.apl_weights_kc_mean ? double(p.kc.N) : w.size();
+            return normalized_apl_weights(w, target_sum);
+        }
+        if (p.kc.tune_apl_weights) {
+            return uniform_kc_apl_weights(p, rv, w);
+        }
+        scale = 1.0;
+        return w;
+    };
+    rv.kc.wAPLKC_unscaled = p.kc.wAPLKC_pretune_scale * init_kc_apl_weights(
+        rv.kc.wAPLKC, p.kc.preset_wAPLKC, rv.kc.wAPLKC_scale
+    );
+    rv.kc.wKCAPL_unscaled = p.kc.wKCAPL_pretune_scale * init_kc_apl_weights(
+        rv.kc.wKCAPL, p.kc.preset_wKCAPL, rv.kc.wKCAPL_scale
+    );
+
+    auto init_pn_apl_weights = [&](Matrix const& w) {
+        if (!p.kc.normalize_apl_weights) {
+            return w;
+        }
+        return normalized_apl_weights(w, w.size());
+    };
+    if (p.pn.preset_wAPLPN) {
+        rv.pn.wAPLPN_unscaled = p.pn.wAPLPN_pretune_scale * init_pn_apl_weights(
+            rv.pn.wAPLPN
+        );
+    }
+    if (p.pn.preset_wPNAPL) {
+        rv.pn.wPNAPL_unscaled = p.pn.wPNAPL_pretune_scale * init_pn_apl_weights(
+            rv.pn.wPNAPL
+        );
+    }
+}
+
+/* Adds `delta` to wAPLKC_scale and wAPLPN_scale, and `delta` divided by #KCs (even if
+ * wPNKC_one_row_per_claw=true) and #boutons to wKCAPL_scale and wPNAPL_scale,
+ * respectively. Tuning starts all scales at 0, and only changes them through this, so
+ * they are effectively one tuned parameter, with:
+ *   wAPLPN_scale = wAPLKC_scale
+ *   wKCAPL_scale = wAPLKC_scale / #KCs
+ *   wPNAPL_scale = wAPLKC_scale / #boutons
+ * With the normalization in init_apl_weights, the KC->APL input is then wAPLKC_scale
+ * times the mean (across KCs) of each KC's activity times its total weight (and
+ * similarly for bouton->APL input, with the mean across boutons). */
+void add_to_apl_weight_scales(ModelParams const& p, RunVars& rv, double delta) {
+    rv.kc.wAPLKC_scale += delta;
+    rv.kc.wKCAPL_scale += delta / double(p.kc.N);
+    if (p.pn.preset_wAPLPN) {
+        rv.pn.wAPLPN_scale += delta;
+    }
+    if (p.pn.preset_wPNAPL) {
+        rv.pn.wPNAPL_scale += delta / double(p.pn.n_total_boutons);
+    }
+}
+
+/* Sets each APL weight vector to its scale times its w*_unscaled vector. */
+void apply_apl_weight_scales(ModelParams const& p, RunVars& rv) {
+    rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
+    rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
+    if (p.pn.preset_wAPLPN) {
+        rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
+    }
+    if (p.pn.preset_wPNAPL) {
+        rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
+    }
+}
+
 // NOTE: will abort (rather than raise an error that can be caught in python) if called
 // within a parallel region.
 void sparsity_nonconvergence_failure(ModelParams const&p, RunVars const& rv) {
@@ -1294,33 +1480,12 @@ void update_wAPLKC_scale_bracket(ModelParams const& p, RunVars const& rv, double
 void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp,
     WAPLKCScaleBracket const& bracket) {
 
-    bool wAPLKC_scale_is_positive = false;
     double lr;
     double delta;
-    double rel_sp_diff;
+    double rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
     bool binary_searching = p.kc.binary_search_on_overshoot && bracket.found();
 
-    // to check we don't add additional 0 entries later (which would not be able
-    // to be updated on any future iterations).
-    // code below will currently fail if count of either changes (don't want to
-    // add 0s). no current implementation of backtracking or any other way to
-    // rectify the situation without failing.
-    // TODO delete (/ replace w/ lte0)
-    int n_wAPLKC_eq0_initial = (rv.kc.wAPLKC.array() == 0.0).count();
-    int n_wKCAPL_eq0_initial = (rv.kc.wKCAPL.array() == 0.0).count();
-
-    int n_wAPLPN_eq0_initial;
-    if (p.pn.preset_wAPLPN) {
-        n_wAPLPN_eq0_initial = (rv.pn.wAPLPN.array() == 0.0).count();
-    }
-    int n_wPNAPL_eq0_initial;
-    if (p.pn.preset_wPNAPL) {
-        n_wPNAPL_eq0_initial = (rv.pn.wPNAPL.array() == 0.0).count();
-    }
-
-    do {
-        rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
-
+    while (true) {
         if (binary_searching) {
             // bracket bounds are only updated (in fit_sparseness) after the sparsity
             // at this midpoint is simulated
@@ -1350,236 +1515,60 @@ void scale_APL_weights(ModelParams const& p, RunVars& rv, double sp,
             delta = (sp - p.kc.sp_target) * lr / p.kc.sp_target;
         }
 
-        // TODO need .array() if not preset? can i always do it?
-        Column prev_wAPLKC = rv.kc.wAPLKC;
-        double prev_wAPLKC_scale = rv.kc.wAPLKC_scale;
-
-        rv.kc.wAPLKC_scale += delta;
-        if (!p.kc.preset_wAPLKC) {
-            if (p.kc.wPNKC_one_row_per_claw) {
-                // TODO refactor to share w/ elsewhere
-                double change = delta;
-                for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
-                    // TODO TODO is it something fucky in this loop that's causing
-                    // convergence issues? (didn't change tho so idk...)
-                    unsigned kc = rv.kc.claw_to_kc[claw];
-                    const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
-                    const double val = change / static_cast<double>(cnt ? cnt : 1);
-                    // TODO do i actually want the update to be different for
-                    // different claws (in diff KCs)? necessary for some of the
-                    // tests (and care enough to keep?)? change this path to
-                    // somehow also use w[APLKC|KCAPL]_scale (maybe initializing
-                    // the corresponding w[APLKC|KCAPL] vectors in here? maybe
-                    // in python?)
-                    rv.kc.wAPLKC(claw, 0) += val;
-                }
-            } else {
-                // TODO why using .array() for +=, but not for direct assignment
-                // operations? is .array() actually necessary in this case?
-                // what does .array() do?
-                rv.kc.wAPLKC.array() += delta;
-            }
-            //rv.log(cat("rv.kc.wAPLKC mean: ", rv.kc.wAPLKC.mean()));
-
-            // TODO need .array() here?
-            if ((rv.kc.wAPLKC.array() > 0).all()) {
-                wAPLKC_scale_is_positive = true;
-            }
-        } else {
-            if (rv.kc.wAPLKC_scale > 0) {
-                wAPLKC_scale_is_positive = true;
-            }
-            rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
-        }
-        // TODO warn (or do something to prevent) delta from being too large
-        // of a percentage of the value? that seems to be main reason we have to redo
-        // the scales (or tweak the learning rates), b/c of the oscillations and long
-        // time to get back to right range after almost setting a param to 0
-        // TODO store biggest percentage of value we subtracted? store how many times we
-        // had to back off?
-        // TODO store whether we ever overshot? how many times?
-
-        if (!wAPLKC_scale_is_positive) {
-            // midpoint between two (positive) scales already used should be positive,
-            // and decreasing step size via tuning_iters would not change it anyway
-            check(!binary_searching);
-
-            rv.kc.tuning_iters++;
-            // >= because tuning_iters will also be incremented once this step is done
-            if (rv.kc.tuning_iters >= p.kc.max_iters) {
-                // TODO TODO is it an abort here and a ValueError somewhere else?
-                // (or vice versa). fix if so.
-                //
-                // will exit with err
-                sparsity_nonconvergence_failure(p, rv);
-            }
-            // TODO just immediately start at what we need? or change calc to
-            // not have the issue where it can give a delta that would bring wAPLKC
-            // [/whatever] below 0?
-            rv.log(cat("incrementing tuning_iters=", rv.kc.tuning_iters,
-                " to get lower step size (to keep all scaled wAPLKC values "
-                "positive)"
-            ));
-            // TODO (delete? prob doesn't) test this doesn't cause shape issues in
-            // non-preset cases (seemed that similar expr was causing shape of (0, 0) in
-            // some other cases, when trying to restore unscaled after setZero?)
-            // TODO delete
-            //rv.log("before rollback:");
-            //rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
-            //rv.log(cat("rv.kc.wAPLKC.rows(): ", rv.kc.wAPLKC.rows()));
-            //
-            // rollback to previous values before picking new (smaller) step size
-            rv.kc.wAPLKC = prev_wAPLKC;
-            // TODO delete
-            //rv.log("after rollback:");
-            //rv.log(cat("rv.kc.wAPLKC.cols(): ", rv.kc.wAPLKC.cols()));
-            //rv.log(cat("rv.kc.wAPLKC.rows(): ", rv.kc.wAPLKC.rows()));
-            //
-            rv.kc.wAPLKC_scale = prev_wAPLKC_scale;
-        } else {
-            // TODO still log at least some of this unconditionally? go back to having
-            // it all unconditional?
-            rv.log(cat("i=", rv.kc.tuning_iters, " sp=", sp, " target=", p.kc.sp_target,
-                " rel_sp_diff=", rel_sp_diff, " acc=", p.kc.sp_acc,
-                // (logging mean wAPLKC in !preset_wAPLKC case, as before)
-                " wAPLKC_scale=",
-                p.kc.preset_wAPLKC ? prev_wAPLKC_scale : prev_wAPLKC.mean(),
-                " delta(wAPLKC)=", delta,
-                binary_searching ? std::string(" (binary search)") : cat(" lr=", lr)
-            ));
+        // all scales are kept in fixed ratios (see add_to_apl_weight_scales), so all
+        // are positive if this one is
+        if (rv.kc.wAPLKC_scale + delta > 0) {
+            break;
         }
 
-        // TODO TODO warn / err if sparsity doesn't change across two iterations?
-        // (at least now, that is seemingly indicating a code error on my part)
-    } while (!wAPLKC_scale_is_positive);
+        // midpoint between two (positive) scales already used should be positive,
+        // and decreasing step size via tuning_iters would not change it anyway
+        check(!binary_searching);
 
-    // NOTE: assuming that is wAPLKC scale is positive, we won't have
-    // similar issues w/ wKCAPL scale below. may not be true?
-
-    // TODO TODO integrate all below into loop above? (not just checking whether
-    // scale is positive, but also checking whether we introduced any 0 values after
-    // subtracting delta?) (and also rolling back steps in these circumstances)
-
-    // TODO TODO possible to just define these all from wAPLKC_scale after
-    // tuning? would be simpler than dividing step size on each iteration...
-    // (and would be easier to say it's really just one parameter...)
-    if (!p.kc.preset_wKCAPL) {
-        if (p.kc.wPNKC_one_row_per_claw) {
-            // TODO refactor
-            double change = delta / double(p.kc.N);
-            for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
-                unsigned kc = rv.kc.claw_to_kc[claw];
-                const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
-                const double val = change / static_cast<double>(cnt ? cnt : 1);
-                rv.kc.wKCAPL(0, claw) += val;
-            }
-        } else {
-            rv.kc.wKCAPL.array() += delta / double(p.kc.N);
+        rv.kc.tuning_iters++;
+        // >= because tuning_iters will also be incremented once this step is done
+        if (rv.kc.tuning_iters >= p.kc.max_iters) {
+            // will exit with err
+            sparsity_nonconvergence_failure(p, rv);
         }
-    } else {
-        // TODO make sure denominator is # claws when it needs to be? matter?
-        // (and check that doesn't break any existing tests. e.g. test_spatial_wPNKC?)
-        // maybe revert to always # KCs (never # claws)? (probably need to, yea)
-        // TODO TODO was it just that the initial value was set based on kc.N instead of
-        // # claws?
-        rv.kc.wKCAPL_scale += delta / double(p.kc.N);
-        // TODO delete! this was seeming to make it much harder to find learning rate to
-        // get convergence (if not impossible). maybe it just needs to be much lower.
-        // 1.5 works fine in both pn_claw_to_apl=true/false for prat_boutons case w/ old
-        // line above (dividing by # of KCs)
-        //if (p.kc.wPNKC_one_row_per_claw) {
-        //    rv.kc.wKCAPL_scale += delta / double(rv.kc.claw_to_kc.size());
-        //} else {
-        //    rv.kc.wKCAPL_scale += delta / double(p.kc.N);
-        //}
-        // TODO delete
-        // TODO seems this was causing fixed_inh tests to fail actually? verify which
-        // calculation specifically was awry? (just this one?) (even when initial value
-        // was divided by # claws instead)
-        //if (!p.kc.wPNKC_one_row_per_claw) {
-        //    rv.kc.wKCAPL_scale += delta / double(p.kc.N);
-        //} else {
-        //    // TODO this consistent w/ tianpei's path above? (thought so, but test
-        //    // seemed to be failing as a result...)  matter?
-        //    rv.kc.wKCAPL_scale += delta / double(p.kc.kc_ids.size());
-        //}
-        check(rv.kc.wKCAPL_scale > 0.0);
-        rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
+        // TODO just immediately start at what we need? or change calc to
+        // not have the issue where it can give a delta that would bring wAPLKC
+        // [/whatever] below 0?
+        rv.log(cat("incrementing tuning_iters=", rv.kc.tuning_iters,
+            " to get lower step size (to keep wAPLKC_scale positive)"
+        ));
     }
+    // TODO warn (or do something to prevent) delta from being too large
+    // of a percentage of the value? that seems to be main reason we have to redo
+    // the scales (or tweak the learning rates), b/c of the oscillations and long
+    // time to get back to right range after almost setting a param to 0
+    // TODO store biggest percentage of value we subtracted? store how many times we
+    // had to back off?
+    // TODO store whether we ever overshot? how many times?
 
+    // TODO still log at least some of this unconditionally? go back to having
+    // it all unconditional?
+    rv.log(cat("i=", rv.kc.tuning_iters, " sp=", sp, " target=", p.kc.sp_target,
+        " rel_sp_diff=", rel_sp_diff, " acc=", p.kc.sp_acc,
+        " wAPLKC_scale=", rv.kc.wAPLKC_scale, " delta(wAPLKC)=", delta,
+        binary_searching ? std::string(" (binary search)") : cat(" lr=", lr)
+    ));
+
+    add_to_apl_weight_scales(p, rv, delta);
+    check(rv.kc.wKCAPL_scale > 0);
     if (p.pn.preset_wAPLPN) {
-        // TODO TODO actually support this being different from wAPLKC_scale (at
-        // least if hardcoded to be so?)
-        // still just updating w/ same delta as rv.kc.wAPLKC_scale, and should still
-        // be starting at same initial value
-        rv.pn.wAPLPN_scale += delta;
-        //
-        rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
+        check(rv.pn.wAPLPN_scale > 0);
     }
     if (p.pn.preset_wPNAPL) {
-        // TODO want to divide by # boutons here? i assume so?
-        rv.pn.wPNAPL_scale += delta / double(p.pn.n_total_boutons);
-        rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
+        check(rv.pn.wPNAPL_scale > 0);
     }
+    apply_apl_weight_scales(p, rv);
 
     // TODO put behind verbose flag
     rv.log("at end of scale_APL_weights:");
     log_apl_weights(p, rv);
 
     rv.kc.tuning_iters++;
-
-    // probably want to abort (so we can change tuning params and re-run)
-    // rather than clip values (which would break overall shape of vector(s)
-    // from connectome). or otherwise take steps to avoid this state (would
-    // probably be better if we didn't have to abort).
-    // TODO in meantime, give people a message to choose different step size
-    // params (that can be seen before assertion causes failure. [also?]
-    // print directly to stderr? assert failure already do that with enough
-    // info?)
-    // TODO check None of Tianpei's code paths trip any of the assertion on
-    // APL weight values <= 0 below
-    //
-    /* If we learn too fast in the negative direction we could end
-     * up with negative weights. */
-    if (delta < 0.0) {
-        // TODO (delete comment if no issues now that i removed below from
-        // conditionals checking preset_w[APLKC|KCAPL]=false) don't i want to do this in
-        // all cases? or even particularly in the preset_* = true case (which was
-        // previously excluded here?)
-        // TODO delete? (to the extent that i managed to move this into loop above)
-        int n_wAPLKC_lt0 = (rv.kc.wAPLKC.array() < 0.0).count();
-        check(n_wAPLKC_lt0 == 0);
-
-        int n_wAPLKC_eq0 = (rv.kc.wAPLKC.array() == 0.0).count();
-        check(n_wAPLKC_eq0_initial == n_wAPLKC_eq0);
-
-        // TODO delete? should currently always do nothing, given
-        // assertions above.
-        //rv.kc.wAPLKC = (rv.kc.wAPLKC.array() < 0.0).select(
-        //        0.0, rv.kc.wAPLKC);
-        //
-
-        int n_wKCAPL_lt0 = (rv.kc.wKCAPL.array() < 0.0).count();
-        check(n_wKCAPL_lt0 == 0);
-
-        int n_wKCAPL_eq0 = (rv.kc.wKCAPL.array() == 0.0).count();
-        check(n_wKCAPL_eq0_initial == n_wKCAPL_eq0);
-
-        // TODO delete? should currently always do nothing, given
-        // assertions above.
-        //rv.kc.wKCAPL = (rv.kc.wKCAPL.array() < 0.0).select(
-        //        0.0, rv.kc.wKCAPL);
-
-        // TODO refactor
-        if (p.pn.preset_wAPLPN) {
-            int n_wAPLPN_lte0 = (rv.pn.wAPLPN.array() <= 0.0).count();
-            check(n_wAPLPN_lte0 == n_wAPLPN_eq0_initial);
-        }
-        if (p.pn.preset_wPNAPL) {
-            int n_wPNAPL_lte0 = (rv.pn.wPNAPL.array() <= 0.0).count();
-            check(n_wPNAPL_lte0 == n_wPNAPL_eq0_initial);
-        }
-    }
 }
 
 
@@ -1662,37 +1651,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // (add another flag if i can't easily test if thr is set?)
     // (delete? actually currently doing those calls in any cases i don't want to be?)
 
-    // TODO (delete?) also print initial means multiplied by chosen initial scales?
-    // is that what is conserved (all 1 presumably)? change so initial scales are all 1
-    // and initial means are too? maybe enforce one/both in C++ (and even do initial
-    // "normalization" [to mean of 1] of vectors in C++?)?
     // TODO move all these log calls after we restore from setZero (and print
     // scales at same point, all using log_apl_weights(...))? (prob still want one up
     // here to debug, at least for now?)
     if (p.kc.preset_wAPLKC) {
-        // should be a deep copy
-        rv.kc.wAPLKC_unscaled = rv.kc.wAPLKC;
-
-        // TODO delete eventually? should be redundant w/ print after restoring from
-        // zeroing below?
-        // rv.kc.wAPLKC mean: 0.175535
-        // rv.kc.wKCAPL mean: 0.175535
-        // rv.pn.wAPLPN mean: 1
-        // rv.pn.wPNAPL mean: 1
-        rv.log("fit_sparseness initial APL weights (before any zeroing for threshold picking):");
+        rv.log("fit_sparseness input APL weights (before normalization):");
         log_apl_weights(p, rv);
-        //
     }
-    if (p.kc.preset_wKCAPL) {
-        rv.kc.wKCAPL_unscaled = rv.kc.wKCAPL;
-    }
-
-    if (p.pn.preset_wAPLPN) {
-        rv.pn.wAPLPN_unscaled = rv.pn.wAPLPN;
-    }
-    if (p.pn.preset_wPNAPL) {
-        rv.pn.wPNAPL_unscaled = rv.pn.wPNAPL;
-    }
+    init_apl_weights(p, rv);
 
     // TODO check weights up here too in any cases? just preset_*? checked below in
     // what should be all cases, but only after a bit of monkeying w/ weights
@@ -1890,16 +1856,11 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         Matrix Vm(p.kc.N, p.time.steps_all());
         Matrix spikes(p.kc.N, p.time.steps_all());
         Matrix nves(p.kc.N, p.time.steps_all());
-        Matrix inh(1, p.time.steps_all());
-        Matrix Is(1, p.time.steps_all());
-        Matrix Is_from_kcs(
-            p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
-            p.time.steps_all()
-        );
-        Matrix Is_from_pns(
-            p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
-            p.time.steps_all()
-        );
+        // one row per APL unit (if p.kc.n_apl_units > 1)
+        Matrix inh(p.kc.n_apl_units, p.time.steps_all());
+        Matrix Is(p.kc.n_apl_units, p.time.steps_all());
+        Matrix Is_from_kcs(1, p.time.steps_all());
+        Matrix Is_from_pns(1, p.time.steps_all());
         // NOTE: rv.kc.nclaws_total currently initialized at start of run_KC_sims, right
         // before fit_sparseness call
         Matrix claw_sims(rv.kc.nclaws_total, p.time.steps_all());
@@ -2085,20 +2046,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // TODO combine this block into below (two adjacent #pragma single blocks...)?
     {
         if (!p.kc.tune_apl_weights) {
-            // TODO TODO still need to restore from a setZero on any other code
-            // paths? (for wAPLKC/wKCAPL more likely)
-            if (p.kc.preset_wAPLKC) {
-                rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
-            }
-            if (p.kc.preset_wKCAPL) {
-                rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
-            }
-            if (p.pn.preset_wAPLPN) {
-                rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
-            }
-            if (p.pn.preset_wPNAPL) {
-                rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
-            }
+            // (also restoring weights from any zeroing for threshold picking above)
+            apply_apl_weight_scales(p, rv);
             rv.log("fit_sparseness FIXED APL weights:");
             log_apl_weights(p, rv);
             check_weights(p, rv);
@@ -2128,110 +2077,15 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
 
             rv.kc.tuning_iters = 0;
 
-            // TODO maybe require/assume input preset vectors will be normalized or
-            // scaled in a certain way? or compute appropriate w[APLKC|KCAPL]_scale
-            // constants to have mean (after multiplying by preset vectors) equal to
-            // what we would have been starting with before (maybe to average value of 1
-            // [this is what al_analysis is currently doing], so we can set *_scale
-            // factors to same as wAPLKC/wKCAPL being set below)?
-            /* Starting values for to-be-tuned APL<->KC weights. */
+            /* Starting values for to-be-tuned APL weight scales. */
+            rv.kc.wAPLKC_scale = 0;
+            rv.kc.wKCAPL_scale = 0;
+            rv.pn.wAPLPN_scale = 0;
+            rv.pn.wPNAPL_scale = 0;
+            // TODO TODO can i start at 1 instead?
+            add_to_apl_weight_scales(p, rv, 2.0 * ceil(-log(p.kc.sp_target)));
+            apply_apl_weight_scales(p, rv);
 
-            if (p.kc.preset_wAPLKC) {
-                rv.kc.wAPLKC = rv.kc.wAPLKC_unscaled;
-            }
-            if (p.kc.preset_wKCAPL) {
-                rv.kc.wKCAPL = rv.kc.wKCAPL_unscaled;
-            }
-            if (p.pn.preset_wAPLPN) {
-                rv.pn.wAPLPN = rv.pn.wAPLPN_unscaled;
-            }
-            if (p.pn.preset_wPNAPL) {
-                rv.pn.wPNAPL = rv.pn.wPNAPL_unscaled;
-            }
-
-            // TODO TODO now that i've changed normalization in mb_model, also
-            // divide by # claws here when appropriate? or nah?
-            // TODO TODO can i start at 1 instead? or at least (maybe in python)
-            // provide option to have some other scale (centered at 1) multiplied
-            // against this?
-            rv.kc.wAPLKC_scale = 2.0 * ceil(-log(p.kc.sp_target));
-            if (!p.kc.preset_wAPLKC) {
-                if (p.kc.wPNKC_one_row_per_claw) {
-                    // TODO even want this? should only be for old code, since my
-                    // current wPNKC_one_row_per_claw=true paths should have
-                    // preset_wAPLKC=true
-                    // TODO refactor to share w/ duplicated code?
-                    for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
-                        unsigned kc = rv.kc.claw_to_kc[claw];
-                        const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
-                        const double val = rv.kc.wAPLKC_scale / static_cast<double>(cnt ? cnt : 1);
-                        rv.kc.wAPLKC(claw, 0) = val;
-                    }
-                } else {
-                    rv.kc.wAPLKC.setConstant(rv.kc.wAPLKC_scale);
-                }
-            } else {
-                rv.kc.wAPLKC = rv.kc.wAPLKC_scale * rv.kc.wAPLKC_unscaled;
-            }
-            // TODO delete?
-            // TODO TODO try again, when initializing w/ numerator of # claws in
-            // scaling in connectome_APL_weights python fn too? (might help move all
-            // weight normalization in here, and make more consistent)
-            //
-            // try # claws here instead of # KCs? (when appropriate)? even w/ this
-            // initial value the delta that divides by #-claws still seems to fail
-            // fixed_inh_params tests
-            //double rv.kc.wKCAPL_scale;
-            //if (!p.kc.wPNKC_one_row_per_claw) {
-            //    rv.kc.wKCAPL_scale = rv.kc.wAPLKC_scale / double(p.kc.N);
-            //} else {
-            //    rv.kc.wKCAPL_scale = rv.kc.wAPLKC_scale / double(p.kc.kc_ids.size());
-            //}
-            rv.kc.wKCAPL_scale = rv.kc.wAPLKC_scale / double(p.kc.N);
-            if (!p.kc.preset_wKCAPL) {
-                if (p.kc.wPNKC_one_row_per_claw) {
-                    for (unsigned claw=0; claw<rv.kc.claw_to_kc.size(); ++claw) {
-                        unsigned kc = rv.kc.claw_to_kc[claw];
-                        // TODO refactor
-                        const std::size_t cnt = rv.kc.kc_to_claws[kc].size();
-                        const double val = rv.kc.wKCAPL_scale / static_cast<double>(cnt ? cnt : 1);
-                        rv.kc.wKCAPL(0, claw) = val;
-                    }
-                } else {
-                    rv.kc.wKCAPL.setConstant(rv.kc.wKCAPL_scale);
-                }
-            } else {
-                rv.kc.wKCAPL_scale = rv.kc.wKCAPL_scale;
-                rv.kc.wKCAPL = rv.kc.wKCAPL_scale * rv.kc.wKCAPL_unscaled;
-            }
-
-            if (p.pn.preset_wAPLPN) {
-                // TODO TODO something else to init this?
-                rv.pn.wAPLPN_scale = rv.kc.wAPLKC_scale;
-                //
-                rv.pn.wAPLPN = rv.pn.wAPLPN_scale * rv.pn.wAPLPN_unscaled;
-            }
-
-            if (p.pn.preset_wPNAPL) {
-                // TODO this divisor work here?
-                // TODO TODO just make sure choice is consistent between here and
-                // any python scaling, and fixed_inh_params tests pass
-                rv.pn.wPNAPL_scale = rv.kc.wAPLKC_scale / double(p.pn.n_total_boutons);
-                rv.pn.wPNAPL = rv.pn.wPNAPL_scale * rv.pn.wPNAPL_unscaled;
-            }
-
-            // what accounts for difference between when i first log these (before 0ing)
-            // and here? just the fact that we actual multiply each by the corresopnding
-            // *_scale parameter just above.
-            //
-            // rv.kc.wAPLKC mean: 1.05321
-            // rv.kc.wKCAPL mean: 0.000608088
-            // rv.pn.wAPLPN mean: 6
-            // rv.pn.wPNAPL mean: 0.0154242
-            // rv.kc.wAPLKC_scale: 6
-            // rv.kc.wKCAPL_scale: 0.0034642
-            // rv.pn.wAPLPN_scale: 6
-            // rv.pn.wPNAPL_scale: 0.0154242
             rv.log("fit_sparseness INITIAL APL weights:");
             log_apl_weights(p, rv);
             check_weights(p, rv);
@@ -2586,6 +2440,17 @@ void sim_KC_layer(
         claw_sims.setZero();
     }
 
+    // if true, inh/Is have one row per APL unit (rather than one row)
+    bool const apl_units = p.kc.n_apl_units > 1;
+    // total coupling conductance of each APL unit (for coupling currents
+    // sum_v coupling(u, v) * (inh(v) - inh(u)))
+    Column apl_unit_coupling_sums;
+    if (apl_units) {
+        apl_unit_coupling_sums = rv.kc.apl_unit_coupling * Column::Ones(
+            p.kc.n_apl_units, 1
+        );
+    }
+
     float use_ffapl = float(!p.kc.ignore_ffapl);
     for (unsigned t=p.time.start_step()+1; t < p.time.steps_all(); t++) {
         // TODO also declare size of vector here (currently done inside
@@ -2597,15 +2462,28 @@ void sim_KC_layer(
         // if appropriate
         // TODO TODO TODO TODO if this is going to be what i use to initialize
         // bouton_sims, shouldn't it also be subtracting the inhibition?
+        // APL inhibition onto each claw (or KC) and bouton (latter only used if
+        // p.pn.preset_wAPLPN)
+        Column kc_inh;
+        Column bouton_inh;
+        if (!apl_units) {
+            kc_inh = rv.kc.wAPLKC * inh(t-1);
+            if (p.pn.preset_wAPLPN) {
+                bouton_inh = rv.pn.wAPLPN * inh(t-1);
+            }
+        } else {
+            kc_inh = rv.kc.wAPLKC.cwiseProduct(rv.kc.wAPLKC_units * inh.col(t-1));
+            if (p.pn.preset_wAPLPN) {
+                bouton_inh = rv.pn.wAPLPN.cwiseProduct(
+                    rv.pn.wAPLPN_units * inh.col(t-1)
+                );
+            }
+        }
         Eigen::VectorXd pn_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t,
-            bouton_sims, inh(t-1)
+            bouton_sims, bouton_inh
         );
         // TODO check pn_drive is shape we expect (should change depending on
         // wPNKC_one_row_per_claw=true/false)? already done at end of above fn?
-        // TODO TODO add check that this is shape we expect (especially to check no bugs
-        // when adding microglomeruli_apl_units=true support, or support for this being
-        // of length equal to #-claws[/KCs])
-        Column kc_inh = rv.kc.wAPLKC * inh(t-1);
 
         // TODO (delete? replace this separate vector w/ claw_sims.col(t)?
         // (should be same, but maybe confirm w/ repro test? overkill...)
@@ -2649,143 +2527,198 @@ void sim_KC_layer(
             }
         }
 
-        double dIsdt = -Is(t-1);
-        // dIsdt_from_spiking is change in KC synaptic dynamics, which then drive APL
-        // through Is. not directly driving APL.
-        double dIsdt_from_spiking = 0.0;
-        double kc_apl_drive;
-        double bouton_apl_drive = 0.0;
-        // NOTE: pn_claw_to_apl=false if wPNKC_one_row_per_claw=false (checked at
-        // start of run_KC_sims)
-        if (!p.kc.pn_claw_to_apl) {
-            // APL activity depends on KC spiking, which filters through synaptic
-            // dynamics in Is (currently one scalar shared across all KCs)
-            kc_apl_drive = Is(t-1);
+        if (!apl_units) {
+            double dIsdt = -Is(t-1);
+            // dIsdt_from_spiking is change in KC synaptic dynamics, which then drive APL
+            // through Is. not directly driving APL.
+            double dIsdt_from_spiking = 0.0;
+            double kc_apl_drive;
+            double bouton_apl_drive = 0.0;
+            // NOTE: pn_claw_to_apl=false if wPNKC_one_row_per_claw=false (checked at
+            // start of run_KC_sims)
+            if (!p.kc.pn_claw_to_apl) {
+                // APL activity depends on KC spiking, which filters through synaptic
+                // dynamics in Is (currently one scalar shared across all KCs)
+                kc_apl_drive = Is(t-1);
 
-            // TODO is this multiplication elementwise? is that the point if
-            // .array()? (with matrices, by default, docs say it would be
-            // matrix-matrix multiplication)
-            // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
-            Eigen::VectorXd kc_activity = (
-                nves.col(t-1).array() * spikes.col(t-1).array()
-            ).matrix();
+                // TODO is this multiplication elementwise? is that the point if
+                // .array()? (with matrices, by default, docs say it would be
+                // matrix-matrix multiplication)
+                // Calculate the KC-level activity, a vector of size (p.kc.N, 1)
+                Eigen::VectorXd kc_activity = (
+                    nves.col(t-1).array() * spikes.col(t-1).array()
+                ).matrix();
 
-            if (p.kc.wPNKC_one_row_per_claw) {
-                // TODO delete assertion eventually? just def n_claws in here?
-                check(n_claws > 0);
+                if (p.kc.wPNKC_one_row_per_claw) {
+                    // TODO delete assertion eventually? just def n_claws in here?
+                    check(n_claws > 0);
 
-                // TODO replace w/ duplicate_vals_for_each_subunit_id and
-                // sum_across_claws_within_each_kc (need to support Eigen Vector in
-                // duplicate_..., if doesn't already [can indexing be same as a
-                // std::vector?]?)
-                // TODO need to pass a fn to sum_across.. to make this
-                // work, or can i precompute and pass something? how to expand
-                // kc_activity to # claws? separate fn for that?
-                for (unsigned claw=0; claw<n_claws; ++claw) {
-                    unsigned kc = rv.kc.claw_to_kc[claw];
-                    // TODO TODO test in python that we can recreate this dot
-                    // product, as part of check that indexing is working correctly
-                    // (but also separately test APL weight alignment, both for KCs
-                    // and PNs), as part of test_dynamics_indexing
-                    // (though would need to do more to compute Is_from_kcs here,
-                    // because they have their own dynamics in this case [and only these
+                    // TODO replace w/ duplicate_vals_for_each_subunit_id and
+                    // sum_across_claws_within_each_kc (need to support Eigen Vector in
+                    // duplicate_..., if doesn't already [can indexing be same as a
+                    // std::vector?]?)
+                    // TODO need to pass a fn to sum_across.. to make this
+                    // work, or can i precompute and pass something? how to expand
+                    // kc_activity to # claws? separate fn for that?
+                    for (unsigned claw=0; claw<n_claws; ++claw) {
+                        unsigned kc = rv.kc.claw_to_kc[claw];
+                        // TODO TODO test in python that we can recreate this dot
+                        // product, as part of check that indexing is working correctly
+                        // (but also separately test APL weight alignment, both for KCs
+                        // and PNs), as part of test_dynamics_indexing
+                        // (though would need to do more to compute Is_from_kcs here,
+                        // because they have their own dynamics in this case [and only these
+                        // pn_claw_to_apl=true cases])
+                        dIsdt_from_spiking += rv.kc.wKCAPL(claw) * kc_activity[kc];
+                    }
+                    // TODO delete? get to work and replace above w/ this?
+                    //dIsdt_from_spiking = sum_across_claws_within_each_kc(p, rv,
+                    //    rv.kc.wKCAPL * kc_activity[kc]
+                    //);
+                } else {
+                    // TODO TODO also test we can recreate this dot product in python
+                    // (though would need to do more to compute Is_from_kcs here, because
+                    // they have their own dynamics in this case [and only these
                     // pn_claw_to_apl=true cases])
-                    dIsdt_from_spiking += rv.kc.wKCAPL(claw) * kc_activity[kc];
+                    dIsdt_from_spiking = rv.kc.wKCAPL.col(0).dot(kc_activity);
+                    // TODO update all defs so wKCAPL is recognized as a vector at
+                    // compile time? currently this won't compile because of that.
+                    //dIsdt_from_spiking = rv.kc.wKCAPL.dot(kc_activity);
                 }
-                // TODO delete? get to work and replace above w/ this?
-                //dIsdt_from_spiking = sum_across_claws_within_each_kc(p, rv,
-                //    rv.kc.wKCAPL * kc_activity[kc]
-                //);
+                // TODO TODO some reason we shouldn't just use the same 1e4
+                // scale factor in both cases, instead of just this condition?
+                // TODO TODO maybe multiply by # of KCs[/claws, when appropriate] instead
+                // (and by # of boutons below?)?
+                // TODO use *= 1e4? matter? need to make sure we are multiplying by
+                // float type?
+                dIsdt_from_spiking = dIsdt_from_spiking * 1e4;
+
+                // TODO should i still try and see what happens when even KC spiking input
+                // to APL isn't filtered through this extra integration + decay? see if it
+                // really does become less well behaved somehow? (would prob immediately
+                // become spikier, or at least change more in discrete steps?)
+                // TODO TODO experiment w/ this being of length # claws? (each w/ their own
+                // timecourse of decay? (and w/ Is also being of that shape, and storing the
+                // dynamics of the decay)
+                dIsdt += dIsdt_from_spiking;
             } else {
-                // TODO TODO also test we can recreate this dot product in python
-                // (though would need to do more to compute Is_from_kcs here, because
-                // they have their own dynamics in this case [and only these
-                // pn_claw_to_apl=true cases])
-                dIsdt_from_spiking = rv.kc.wKCAPL.col(0).dot(kc_activity);
-                // TODO update all defs so wKCAPL is recognized as a vector at
-                // compile time? currently this won't compile because of that.
-                //dIsdt_from_spiking = rv.kc.wKCAPL.dot(kc_activity);
+                // TODO maybe there should be a flag to also run this through (separate
+                // [i.e. distinct from Is]? potentially [w/ another flag?] per-claw length)
+                // dynamics, like Is?
+                // (or doesn't matter, b/c already smooth enough? any reasons beyond that?)
+
+                // TODO TODO TODO test this dot product in python too
+                // APL activity (through KCs only even) does not depend on spiking.
+                // Can get input directly from subthreshold claw activity here.
+                kc_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
+                // TODO TODO dont want the 1e4 (or other?) scale factor, like
+                // above? compare magnitudes in the two cases? (+ compare magnitude
+                // both cases have vs bouton drive)
             }
-            // TODO TODO some reason we shouldn't just use the same 1e4
-            // scale factor in both cases, instead of just this condition?
-            // TODO TODO maybe multiply by # of KCs[/claws, when appropriate] instead
-            // (and by # of boutons below?)?
-            // TODO use *= 1e4? matter? need to make sure we are multiplying by
-            // float type?
-            dIsdt_from_spiking = dIsdt_from_spiking * 1e4;
 
-            // TODO should i still try and see what happens when even KC spiking input
-            // to APL isn't filtered through this extra integration + decay? see if it
-            // really does become less well behaved somehow? (would prob immediately
-            // become spikier, or at least change more in discrete steps?)
-            // TODO TODO experiment w/ this being of length # claws? (each w/ their own
-            // timecourse of decay? (and w/ Is also being of that shape, and storing the
-            // dynamics of the decay)
-            dIsdt += dIsdt_from_spiking;
-        } else {
-            // TODO maybe there should be a flag to also run this through (separate
-            // [i.e. distinct from Is]? potentially [w/ another flag?] per-claw length)
-            // dynamics, like Is?
-            // (or doesn't matter, b/c already smooth enough? any reasons beyond that?)
+            // NOTE: this is just going to be Is shifted by one, in pn_claw_to_apl=false
+            // case. so when plotting, probably only want to plot one of the two.
+            // (there is now some mb_model code that successfully asserts it is just shifted
+            // by one in that case)
+            Is_from_kcs(t) = kc_apl_drive;
 
-            // TODO TODO TODO test this dot product in python too
-            // APL activity (through KCs only even) does not depend on spiking.
-            // Can get input directly from subthreshold claw activity here.
-            kc_apl_drive = rv.kc.wKCAPL.col(0).dot(claw_sims.col(t));
-            // TODO TODO dont want the 1e4 (or other?) scale factor, like
-            // above? compare magnitudes in the two cases? (+ compare magnitude
-            // both cases have vs bouton drive)
-        }
+            // TODO TODO TODO add some kind of flag so that PN>APL input is only from
+            // additional PN activity beyond spontaneous?
 
-        // NOTE: this is just going to be Is shifted by one, in pn_claw_to_apl=false
-        // case. so when plotting, probably only want to plot one of the two.
-        // (there is now some mb_model code that successfully asserts it is just shifted
-        // by one in that case)
-        Is_from_kcs(t) = kc_apl_drive;
-
-        // TODO TODO TODO add some kind of flag so that PN>APL input is only from
-        // additional PN activity beyond spontaneous?
-
-        if (p.pn.preset_wPNAPL) {
-            // TODO how to scale this relative to above tho? use
-            // same scale factor from loop below? may first need to at least
-            // start by checking that produces similar tuning scale outputs to
-            // scale factor here?
-            // TODO (delete?) if i end up trying to hardcode these, also try
-            // hardcoding during thr tuning step?
-            // TODO TODO (delete? already done in test_dynamics_indexing? i think so?)
-            // test this indexing is correct (if we can recreate Is_from_pns, it should
-            // be, right?)
-            bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
-            if (!p.kc.microglomeruli_apl_units) {
+            if (p.pn.preset_wPNAPL) {
+                // TODO how to scale this relative to above tho? use
+                // same scale factor from loop below? may first need to at least
+                // start by checking that produces similar tuning scale outputs to
+                // scale factor here?
+                // TODO (delete?) if i end up trying to hardcode these, also try
+                // hardcoding during thr tuning step?
+                // TODO TODO (delete? already done in test_dynamics_indexing? i think so?)
+                // test this indexing is correct (if we can recreate Is_from_pns, it should
+                // be, right?)
+                bouton_apl_drive = rv.pn.wPNAPL.col(0).dot(bouton_sims.col(t));
                 Is_from_pns(t) = bouton_apl_drive;
-            } else {
-                // TODO how to properly index/set here?
             }
-        }
 
-        // Why is APL drive not directly providing current, instead of causing a change
-        // in current? How did ann's model work? Is this also how old matt code worked?
-        // (seems so)
-        //
-        // Ann's model also worked this way, and she labels the corresponding
-        // timeconstant [on Is] as dynamics of KC>APL synaptic transmission. it was also
-        // just one scalar shared across all KCs in her code, and the smoothing of the
-        // spiking responses may have made the model more well behaved, if nothing else.
-        // does not seem to be mentioned in either her thesis or preprint, however.
-        //
-        // My implementation previously did the same for the APL inputs from both the
-        // KCs (whether spiking or not) as well as directly from the boutons (when using
-        // PN<>APL weights) (in my initial implementation of that).
-        // Now just the component from KC spiking [and only when pn_claw_to_apl=false])
-        // gets filtered through Is and its time constant.
-        //
-        // NOTE: kc_apl_drive is either:
-        // - Is(t-1), in pn_claw_to_apl=false case, or
-        // - direct input from claws, in pn_claw_to_apl=true case
-        double dinhdt = -inh(t-1) + kc_apl_drive;
-        if (p.pn.preset_wPNAPL) {
-            dinhdt += bouton_apl_drive;
+            // Why is APL drive not directly providing current, instead of causing a change
+            // in current? How did ann's model work? Is this also how old matt code worked?
+            // (seems so)
+            //
+            // Ann's model also worked this way, and she labels the corresponding
+            // timeconstant [on Is] as dynamics of KC>APL synaptic transmission. it was also
+            // just one scalar shared across all KCs in her code, and the smoothing of the
+            // spiking responses may have made the model more well behaved, if nothing else.
+            // does not seem to be mentioned in either her thesis or preprint, however.
+            //
+            // My implementation previously did the same for the APL inputs from both the
+            // KCs (whether spiking or not) as well as directly from the boutons (when using
+            // PN<>APL weights) (in my initial implementation of that).
+            // Now just the component from KC spiking [and only when pn_claw_to_apl=false])
+            // gets filtered through Is and its time constant.
+            //
+            // NOTE: kc_apl_drive is either:
+            // - Is(t-1), in pn_claw_to_apl=false case, or
+            // - direct input from claws, in pn_claw_to_apl=true case
+            double dinhdt = -inh(t-1) + kc_apl_drive;
+            if (p.pn.preset_wPNAPL) {
+                dinhdt += bouton_apl_drive;
+            }
+
+            inh(t) = inh(t-1) + dinhdt*p.time.dt/p.kc.apl_taum;
+            Is(t)  = Is(t-1)  + dIsdt*p.time.dt/p.kc.tau_apl2kc;
+        } else {
+            // Each APL unit u has its own potential (inh row u) and KC>APL synapse
+            // current (Is row u), with dynamics like the single APL above, except:
+            // - it only gets the fraction of each claw's (and bouton's) input onto it
+            //   (rv.kc.wKCAPL_units / rv.pn.wPNAPL_units)
+            // - that input is multiplied by the # of units, treating units as
+            //   compartments of equal size (each w/ 1/#-units of the total leak), so that
+            //   in the limit of strong coupling, all units have the potential the single
+            //   APL would have
+            // - it has coupling currents sum_v coupling(u, v) * (inh(v) - inh(u)), with
+            //   conductances (relative to unit leak) in rv.kc.apl_unit_coupling
+            //
+            // weighted input from each claw, which is split across units below
+            Column claw_apl_input;
+            Column dIs_units_dt = -Is.col(t-1);
+            Column kc_apl_drive_units;
+            if (!p.kc.pn_claw_to_apl) {
+                Eigen::VectorXd kc_activity = (
+                    nves.col(t-1).array() * spikes.col(t-1).array()
+                ).matrix();
+
+                claw_apl_input.resize(n_claws, 1);
+                for (unsigned claw=0; claw<n_claws; ++claw) {
+                    claw_apl_input(claw) = rv.kc.wKCAPL(claw) *
+                        kc_activity[rv.kc.claw_to_kc[claw]];
+                }
+                dIs_units_dt += 1e4 * (rv.kc.wKCAPL_units * claw_apl_input);
+                kc_apl_drive_units = Is.col(t-1);
+            } else {
+                claw_apl_input = rv.kc.wKCAPL.transpose().cwiseProduct(
+                    claw_sims.col(t)
+                );
+                kc_apl_drive_units = rv.kc.wKCAPL_units * claw_apl_input;
+            }
+            Is_from_kcs(t) = kc_apl_drive_units.sum();
+
+            Column apl_drive_units = kc_apl_drive_units;
+            if (p.pn.preset_wPNAPL) {
+                Column bouton_apl_input = rv.pn.wPNAPL.transpose().cwiseProduct(
+                    bouton_sims.col(t)
+                );
+                Column bouton_apl_drive_units = rv.pn.wPNAPL_units * bouton_apl_input;
+                Is_from_pns(t) = bouton_apl_drive_units.sum();
+                apl_drive_units += bouton_apl_drive_units;
+            }
+
+            Column inh_prev = inh.col(t-1);
+            Column dinh_units_dt = (
+                -inh_prev + double(p.kc.n_apl_units) * apl_drive_units +
+                rv.kc.apl_unit_coupling * inh_prev -
+                apl_unit_coupling_sums.cwiseProduct(inh_prev)
+            );
+            inh.col(t) = inh_prev + dinh_units_dt * (p.time.dt / p.kc.apl_taum);
+            Is.col(t) = Is.col(t-1) + dIs_units_dt * (p.time.dt / p.kc.tau_apl2kc);
         }
 
         // TODO TODO if i implement claw dynamics, maybe allow those to go negative, but
@@ -2820,8 +2753,6 @@ void sim_KC_layer(
         // (weights and or activities)
 
         Vm.col(t) = Vm.col(t-1) + dKCdt*p.time.dt/p.kc.taum;
-        inh(t)    = inh(t-1)    + dinhdt*p.time.dt/p.kc.apl_taum;
-        Is(t)     = Is(t-1)     + dIsdt*p.time.dt/p.kc.tau_apl2kc;
 
         // TODO only even calculate this if certain conditions met? it's not
         // used typically, right? (or at least, effectively? is that just b/c
@@ -3014,6 +2945,17 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             rv.log(cat("p.pn.preset_wAPLPN=", p.pn.preset_wAPLPN));
             rv.log(cat("p.pn.preset_wPNAPL=", p.pn.preset_wPNAPL));
         }
+        rv.log(cat("p.kc.normalize_apl_weights=", p.kc.normalize_apl_weights));
+        rv.log(cat("p.kc.apl_weights_kc_mean=", p.kc.apl_weights_kc_mean));
+        rv.log(cat("p.kc.w[APLKC|KCAPL]_pretune_scale=", p.kc.wAPLKC_pretune_scale,
+            ", ", p.kc.wKCAPL_pretune_scale
+        ));
+        if (p.pn.n_total_boutons > 0) {
+            rv.log(cat("p.pn.w[APLPN|PNAPL]_pretune_scale=", p.pn.wAPLPN_pretune_scale,
+                ", ", p.pn.wPNAPL_pretune_scale
+            ));
+        }
+        rv.log(cat("p.kc.n_apl_units=", p.kc.n_apl_units));
         rv.log(cat("p.kc.wPNKC_one_row_per_claw=", p.kc.wPNKC_one_row_per_claw));
         if (p.kc.wPNKC_one_row_per_claw) {
             rv.log(cat("p.kc.allow_net_inh_per_claw=", p.kc.allow_net_inh_per_claw));
@@ -3060,8 +3002,9 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         check(p.kc.wPNKC_one_row_per_claw);
     }
 
-    // TODO also want to assert wPNKC_one_row_per_claw=true if
-    // microglomeruli_apl_units=true?
+    if (p.kc.n_apl_units > 1) {
+        check_apl_units(p, rv);
+    }
 
     if (p.kc.n_claws_active_to_spike != -1) {
         check(p.kc.n_claws_active_to_spike > 0);
@@ -3170,28 +3113,29 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             Is_here = Matrix(1, p.time.steps_all());
         }
 
-        if (p.kc.microglomeruli_apl_units) {
-            check(p.pn.n_total_boutons > 1);
-        }
         // TODO just replace w/ Is? (after removing PN component from that)
         // or rename Is->Is_from_kcs? (prob want to rename all of these some other way
         // actually, or maybe just rename Is[_sims])
         Matrix Is_from_kcs;
         if (!p.kc.save_Is_sims) {
-            Is_from_kcs = Matrix(
-                p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
-                p.time.steps_all()
-            );
+            Is_from_kcs = Matrix(1, p.time.steps_all());
         }
         // TODO TODO maybe i don't need separate dynamics for Is_from_pns (or at
         // least, not separate decay [+ not apply the Is decay for the KC>APL
         // "synapses"]. could still track for debugging
         Matrix Is_from_pns;
         if (!p.kc.save_Is_sims) {
-            Is_from_pns = Matrix(
-                p.kc.microglomeruli_apl_units ? p.pn.n_total_boutons : 1,
-                p.time.steps_all()
-            );
+            Is_from_pns = Matrix(1, p.time.steps_all());
+        }
+
+        // per-unit APL potential / KC>APL synapse current (inh_sims / Is_sims only
+        // save mean / sum across units)
+        bool const apl_units = p.kc.n_apl_units > 1;
+        Matrix inh_units;
+        Matrix Is_units;
+        if (apl_units) {
+            inh_units = Matrix(p.kc.n_apl_units, p.time.steps_all());
+            Is_units = Matrix(p.kc.n_apl_units, p.time.steps_all());
         }
 
         Matrix claw_here;
@@ -3241,9 +3185,18 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             // threads go through time points?
             sim_KC_layer(
                 p, rv, rv.pn.sims[i], rv.ffapl.vm_sims[i], Vm_link, spikes_link,
-                nves_link, inh_link, Is_link, claw_link, bouton_link,
+                nves_link, apl_units ? inh_units : inh_link,
+                apl_units ? Is_units : Is_link, claw_link, bouton_link,
                 Is_from_kcs_link, Is_from_pns_link
             );
+            if (apl_units) {
+                // these are only references to rv.kc.[inh|Is]_sims if saving those
+                inh_link = inh_units.colwise().mean();
+                Is_link = Is_units.colwise().sum();
+                if (p.kc.save_apl_unit_sims) {
+                    rv.kc.apl_unit_inh_sims.at(i) = inh_units;
+                }
+            }
             respcol = spikes_link.rowwise().sum();
             respcol_bin = n_spikes_to_responses(p, rv, respcol);
 
@@ -3328,6 +3281,9 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
     if (p.kc.save_claw_sims) {
         check(r.kc.claw_sims.size() == n_odors);
     }
+    if (p.kc.save_apl_unit_sims && p.kc.n_apl_units > 1) {
+        check(r.kc.apl_unit_inh_sims.size() == n_odors);
+    }
     //
 #pragma omp parallel
     {
@@ -3372,6 +3328,9 @@ void remove_all_pretime(ModelParams const& p, RunVars& r) {
             }
             if (p.kc.save_claw_sims) {
                 cut(r.kc.claw_sims[i]);
+            }
+            if (p.kc.save_apl_unit_sims && p.kc.n_apl_units > 1) {
+                cut(r.kc.apl_unit_inh_sims[i]);
             }
         }
     }
@@ -3526,6 +3485,9 @@ void save_odor_dynamics(ModelParams const& p, RunVars& r, std::string path, unsi
     }
     if (p.kc.save_claw_sims) {
         np::to_npy(r.kc.claw_sims[i], path + "/claw_sims");
+    }
+    if (p.kc.save_apl_unit_sims && p.kc.n_apl_units > 1) {
+        np::to_npy(r.kc.apl_unit_inh_sims[i], path + "/apl_unit_inh_sims");
     }
 }
 #endif
