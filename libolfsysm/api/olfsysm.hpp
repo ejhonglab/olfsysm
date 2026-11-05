@@ -353,6 +353,11 @@ struct ModelParams {
          * claw rather than a thresholded binary one). Same scope / requirements as
          * claw_sat. Default 0 (off; outputs unchanged). */
         double claw_thr;
+        /* Width (Hz) of a smooth version of the claw_thr knee: if > 0, each claw's drive
+         * enters as claw_thr_width * log(1 + exp((x - claw_thr) / claw_thr_width)) (softplus;
+         * tends to max(x - claw_thr, 0) as the width goes to 0) instead of the hard
+         * rectification. Only used if claw_thr > 0. Default 0 (hard knee). */
+        double claw_thr_width;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
