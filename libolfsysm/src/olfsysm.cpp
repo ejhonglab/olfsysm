@@ -277,6 +277,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.claw_thr_width           = 0.0;
     p.kc.claw_pow                 = 1.0;
     p.kc.claw_pow_ref             = 50.0;
+    p.kc.ext_inh_scale            = 1.0;
 
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
@@ -906,6 +907,38 @@ void check_kc_kc_inh(ModelParams const& p, RunVars const& rv) {
     }
 }
 
+/* Whether the odor-specific external inhibition of KCs (rv.kc.ext_inh) / boutons
+ * (rv.pn.bouton_ext_inh) is in use (i.e. the matrix is not empty). */
+bool use_kc_ext_inh(RunVars const& rv) {
+    return rv.kc.ext_inh.rows() > 0 || rv.kc.ext_inh.cols() > 0;
+}
+bool use_bouton_ext_inh(RunVars const& rv) {
+    return rv.pn.bouton_ext_inh.rows() > 0 || rv.pn.bouton_ext_inh.cols() > 0;
+}
+
+void check_ext_inh(ModelParams const& p, RunVars const& rv) {
+    // (also false for NaN)
+    check(std::isfinite(p.kc.ext_inh_scale) && p.kc.ext_inh_scale >= 0);
+    if (use_kc_ext_inh(rv)) {
+        Matrix const& w = rv.kc.ext_inh;
+        check(w.rows() == Eigen::Index(p.kc.N));
+        check(w.cols() == Eigen::Index(get_nodors(p)));
+        check(w.allFinite());
+        check(w.minCoeff() >= 0);
+        // (acts on somatic Vm, which does not determine spiking if
+        // n_claws_active_to_spike > 0)
+        check(p.kc.n_claws_active_to_spike <= 0);
+    }
+    if (use_bouton_ext_inh(rv)) {
+        Matrix const& w = rv.pn.bouton_ext_inh;
+        check(p.pn.n_total_boutons > 0);
+        check(w.rows() == Eigen::Index(p.pn.n_total_boutons));
+        check(w.cols() == Eigen::Index(get_nodors(p)));
+        check(w.allFinite());
+        check(w.minCoeff() >= 0);
+    }
+}
+
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
     int seg = 0;
     std::string growing;
@@ -1208,10 +1241,11 @@ Column bouton_pool_steady_state(ModelParams const& p, Column const& rates) {
 /* `bouton_inh` is APL inhibition onto each bouton (only used if p.pn.preset_wAPLPN).
  * `bouton_pool` / `bouton_rate_prev` are each bouton's available vesicle pool fraction
  * and release-driving (un-depleted) rate at t-1, both updated to step t here (only used
- * if p.pn.bouton_ves_p > 0). */
+ * if p.pn.bouton_ves_p > 0). `bouton_ext_inh` is the (scaled) external inhibition of
+ * each bouton at step t (see rv.pn.bouton_ext_inh), or empty if none. */
 Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, unsigned t, Matrix& bouton_sims, Column const& bouton_inh,
-    Column& bouton_pool, Column& bouton_rate_prev) {
+    Column& bouton_pool, Column& bouton_rate_prev, Column const& bouton_ext_inh) {
     // TODO what happens if we initialize to one size, and then set with rvalue
     // that is another size? (or e.g. a matrix) err hopefully? or need to add
     // checks that size is as expected, even if predefining size?
@@ -1271,6 +1305,14 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
         check(!bouton_sims.col(t).array().isNaN().any());
         // TODO delete (above should work, and matches preceeding check better)
         check(!bouton_sims.col(t).hasNaN());
+
+        // odor-specific external inhibition of bouton output (rv.pn.bouton_ext_inh),
+        // clipped at 0, before APL>bouton inhibition and vesicle depletion
+        if (bouton_ext_inh.size() > 0) {
+            bouton_sims.col(t) = (
+                bouton_sims.col(t) - bouton_ext_inh
+            ).array().max(0.0).matrix();
+        }
 
         // currently checking that wPNKC_one_row_per_claw=true, if either
         // preset_w[APLPN|PNAPL]=true (at top of run_KC_sims)
@@ -1796,6 +1838,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     if (p.kc.use_kc_kc_inh) {
         check_kc_kc_inh(p, rv);
     }
+    // (as in run_KC_sims, since fit_sparseness can also be called directly)
+    check_ext_inh(p, rv);
 
     // TODO check weights up here too in any cases? just preset_*? checked below in
     // what should be all cases, but only after a bit of monkeying w/ weights
@@ -2051,7 +2095,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 exc.run([&] {
                     sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                         Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
-                        Is_from_kcs, Is_from_pns
+                        Is_from_kcs, Is_from_pns, tlist[i]
                     );
                     // TODO (probably at end of sim_KC_layer), check all quantities are
                     // fully initialized? maybe init w/ NaN or something (instead of 0,
@@ -2126,7 +2170,8 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                         exc.run([&] {
                             sim_KC_layer(p, rv, rv.pn.sims[tlist[i]],
                                 rv.ffapl.vm_sims[tlist[i]], Vm, spikes, nves, inh, Is,
-                                claw_sims, bouton_sims, Is_from_kcs, Is_from_pns
+                                claw_sims, bouton_sims, Is_from_kcs, Is_from_pns,
+                                tlist[i]
                             );
                             KCmean_st.col(i / p.kc.apltune_subsample) =
                                 spikes.rowwise().sum();
@@ -2273,7 +2318,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 exc.run([&] {
                     sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
                         Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
-                        Is_from_kcs, Is_from_pns
+                        Is_from_kcs, Is_from_pns, tlist[i]
                     );
                     // TODO assert this is not true here? was it only because scale
                     // factor was negative here? expect above, but not here, right?
@@ -2553,10 +2598,11 @@ void sim_KC_layer(
     ModelParams const& p, RunVars const& rv,
     Matrix const& pn_t, Vector const& ffapl_t,
     Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is,
-    // TODO delete
-    //Matrix& claw_sims, Matrix& bouton_sims, unsigned odor_index) {
-    Matrix& claw_sims, Matrix& bouton_sims, Matrix& Is_from_kcs, Matrix& Is_from_pns) {
+    Matrix& claw_sims, Matrix& bouton_sims, Matrix& Is_from_kcs, Matrix& Is_from_pns,
+    unsigned odor) {
     /* Args:
+     * - odor: index of this odor's column in p.orn.data.delta (as for rv.pn.sims), to
+     *   select its column of rv.kc.ext_inh / rv.pn.bouton_ext_inh
      * - inh: APL potential timeseries
      * - Is: KC->APL synapse current (across all KCs) timeseries
      * */
@@ -2636,8 +2682,26 @@ void sim_KC_layer(
         bouton_pool = bouton_pool_steady_state(p, bouton_rate_prev);
     }
 
+    // odor-specific external inhibition of KCs (at the soma) and boutons (see
+    // rv.kc.ext_inh / rv.pn.bouton_ext_inh), as a step while the odor is on (same steps
+    // as the ORN input, in sim_ORN_layer)
+    bool const kc_ext_inh = use_kc_ext_inh(rv);
+    Column kc_ext_inh_odor;
+    if (kc_ext_inh) {
+        kc_ext_inh_odor = p.kc.ext_inh_scale * rv.kc.ext_inh.col(odor);
+    }
+    Column bouton_ext_inh_odor;
+    if (use_bouton_ext_inh(rv)) {
+        bouton_ext_inh_odor = p.kc.ext_inh_scale * rv.pn.bouton_ext_inh.col(odor);
+    }
+    // (passed to pn_to_kc_drive_at_t outside the stimulus window)
+    Column const no_bouton_ext_inh;
+    unsigned const stim_start_step = p.time.stim.start_step();
+    unsigned const stim_end_step = p.time.stim.end_step();
+
     float use_ffapl = float(!p.kc.ignore_ffapl);
     for (unsigned t=p.time.start_step()+1; t < p.time.steps_all(); t++) {
+        bool const stim_on = (t >= stim_start_step) && (t < stim_end_step);
         // TODO also declare size of vector here (currently done inside
         // pn_to_kc_drive_at_t)?
         // TODO doc if bouton_sims isn't used (except in wPNKC_one_row_per_claw=true
@@ -2665,7 +2729,8 @@ void sim_KC_layer(
             }
         }
         Eigen::VectorXd pn_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t,
-            bouton_sims, bouton_inh, bouton_pool, bouton_rate_prev
+            bouton_sims, bouton_inh, bouton_pool, bouton_rate_prev,
+            stim_on ? bouton_ext_inh_odor : no_bouton_ext_inh
         );
         // TODO check pn_drive is shape we expect (should change depending on
         // wPNKC_one_row_per_claw=true/false)? already done at end of above fn?
@@ -2930,6 +2995,12 @@ void sim_KC_layer(
                 (-Vm.col(t-1) + pn_drive_with_inh).array() - use_ffapl * ffapl_t(t-1)
             );
         }
+        // (for both branches above) external inhibition at the soma, while the odor is
+        // on (not clipped, as for APL inhibition in the branch without claws, and
+        // KC-KC inhibition below)
+        if (kc_ext_inh && stim_on) {
+            dKCdt -= kc_ext_inh_odor;
+        }
         // (for both branches above) KC-KC inhibition at the soma, from activity
         // including spikes at t-1 (so a spike affects other KCs' Vm from step t)
         if (kc_kc_inh) {
@@ -3181,6 +3252,24 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 p.kc.claw_pow_ref
             ));
         }
+        if (use_kc_ext_inh(rv) || use_bouton_ext_inh(rv)) {
+            // (shapes / values are checked below)
+            auto describe = [](Matrix const& w) {
+                return cat(w.rows(), "x", w.cols(), " (max ",
+                    w.size() > 0 ? cat(w.maxCoeff()) : std::string("-"), ")"
+                );
+            };
+            std::string ext_inh_msg = cat("p.kc.ext_inh_scale=", p.kc.ext_inh_scale);
+            if (use_kc_ext_inh(rv)) {
+                ext_inh_msg += cat(", rv.kc.ext_inh: ", describe(rv.kc.ext_inh));
+            }
+            if (use_bouton_ext_inh(rv)) {
+                ext_inh_msg += cat(", rv.pn.bouton_ext_inh: ",
+                    describe(rv.pn.bouton_ext_inh)
+                );
+            }
+            rv.log(ext_inh_msg);
+        }
         rv.log(cat("p.kc.N=", p.kc.N));
         rv.log(cat("rv.kc.wPNKC.rows()=", rv.kc.wPNKC.rows()));
         rv.log(cat("rv.kc.wPNKC.cols()=", rv.kc.wPNKC.cols()));
@@ -3247,6 +3336,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     if (p.pn.bouton_ves_p > 0) {
         check(p.pn.n_total_boutons > 0);
     }
+
+    check_ext_inh(p, rv);
 
     if (p.kc.n_claws_active_to_spike != -1) {
         check(p.kc.n_claws_active_to_spike > 0);
@@ -3452,7 +3543,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 p, rv, rv.pn.sims[i], rv.ffapl.vm_sims[i], Vm_link, spikes_link,
                 nves_link, apl_units ? inh_units : inh_link,
                 apl_units ? Is_units : Is_link, claw_link, bouton_link,
-                Is_from_kcs_link, Is_from_pns_link
+                Is_from_kcs_link, Is_from_pns_link, i
             );
             if (apl_units) {
                 // these are only references to rv.kc.[inh|Is]_sims if saving those

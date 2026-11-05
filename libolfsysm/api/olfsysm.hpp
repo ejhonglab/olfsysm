@@ -368,6 +368,13 @@ struct ModelParams {
         double claw_pow;
         double claw_pow_ref;
 
+        /* Scale of the odor-specific external inhibition of KCs and PN boutons
+         * (rv.kc.ext_inh / rv.pn.bouton_ext_inh; e.g. centrifugal input to the calyx,
+         * computed outside olfsysm), multiplying both matrices, so a gain can be swept
+         * without setting them again. Only used if either matrix is set (non-empty).
+         * Must be finite and >= 0. Default 1. */
+        double ext_inh_scale;
+
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
         bool ignore_ffapl;
@@ -676,6 +683,19 @@ struct RunVars {
 
         std::vector<Matrix> bouton_sims;
 
+        /* Odor-specific external inhibition of each PN bouton's output, of shape
+         * (p.pn.n_total_boutons, # odors), one column per odor (as rv.kc.ext_inh).
+         * Empty (the default) disables it (outputs unchanged). For the simulation of
+         * odor i, p.kc.ext_inh_scale * bouton_ext_inh.col(i) is subtracted from each
+         * bouton's rate (its glomerulus's PN rate), clipped at 0, while the odor is on
+         * (the same steps as rv.kc.ext_inh). This comes before any APL>bouton inhibition
+         * (preset_wAPLPN) and bouton vesicle depletion (bouton_ves_p), so the claw drive,
+         * the bouton>APL drive and the saved bouton_sims all see it, and before any
+         * per-claw transfer. It does not enter the spontaneous input (rv.kc.spont_in),
+         * but is active in every odor simulation (including those in fit_sparseness).
+         * Must be finite and >= 0. Requires p.pn.n_total_boutons > 0. */
+        Matrix bouton_ext_inh;
+
         // TODO TODO so do i not need a pn_ids (/ bouton_ids), like the kc_ids he uses
         // for that other case?
         // TODO convert type of either this (or claw_to_kc, which is currently
@@ -743,6 +763,21 @@ struct RunVars {
          * `post` from KC `pre` (including any overall scale). Must be non-negative.
          * See p.kc.use_kc_kc_inh for how it enters the KC dynamics. */
         SparseMatrix wKCKC;
+
+        /* Odor-specific external inhibition of each KC, of shape (p.kc.N, # odors),
+         * one column per odor (columns of p.orn.data.delta, as rv.pn.sims). Empty (the
+         * default) disables it (outputs unchanged). For the simulation of odor i,
+         * p.kc.ext_inh_scale * ext_inh.col(i) is subtracted from each KC's dVm/dt at
+         * the soma (after the sum across claws and any per-claw transfer [claw_thr /
+         * claw_pow / claw_sat], if wPNKC_one_row_per_claw=true; in the same units as
+         * the PN>KC drive, without clipping, as for KC-KC inhibition), only while the
+         * odor is on (steps p.time.stim.start_step() to p.time.stim.end_step(), as the
+         * ORN input step), as a step. It does not enter the spontaneous input
+         * (rv.kc.spont_in), but is active in every odor simulation, including those
+         * fit_sparseness uses to pick thresholds and tune APL weights, so tuned
+         * thresholds account for it. Must be finite and >= 0. Not supported with
+         * n_claws_active_to_spike > 0 (spiking would not depend on Vm). */
+        Matrix ext_inh;
 
         /* Spontaneous input each KC receives. Threshold typically added to this. */
         Column spont_in;
@@ -896,14 +931,16 @@ void sim_FFAPL_layer(
         Matrix const& pn_t,
         Vector& coef_t, Vector& ffapl_t);
 
-/* Model KC response to one odor. */
+/* Model KC response to one odor (`odor`: index of its column in p.orn.data.delta, as
+ * for rv.pn.sims, used to select its rv.kc.ext_inh / rv.pn.bouton_ext_inh column). */
 void sim_KC_layer(
         ModelParams const& p, RunVars const& rv,
         Matrix const& pn_t, Vector const& ffapl_t,
-        Matrix& Vm, Matrix& spikes, Matrix& nves, Row& inh, Row& Is, Matrix& claw_sims,
+        Matrix& Vm, Matrix& spikes, Matrix& nves, Matrix& inh, Matrix& Is,
+        Matrix& claw_sims, Matrix& bouton_sims,
         Matrix& Is_from_kcs,
         Matrix& Is_from_pns,
-        Matrix& bouton_sims);
+        unsigned odor);
 
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);

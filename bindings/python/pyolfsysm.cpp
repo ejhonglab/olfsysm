@@ -131,6 +131,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("claw_thr_width", &ModelParams::KC::claw_thr_width)
         .def_readwrite("claw_pow", &ModelParams::KC::claw_pow)
         .def_readwrite("claw_pow_ref", &ModelParams::KC::claw_pow_ref)
+        .def_readwrite("ext_inh_scale", &ModelParams::KC::ext_inh_scale)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)
@@ -228,7 +229,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wAPLPN_units", &RunVars::PN::wAPLPN_units)
         .def_readwrite("wPNAPL_units", &RunVars::PN::wPNAPL_units)
         .def_readonly("pn_sims", &RunVars::PN::sims)
-        .def_readonly("bouton_sims", &RunVars::PN::bouton_sims);
+        .def_readonly("bouton_sims", &RunVars::PN::bouton_sims)
+        .def_readwrite("bouton_ext_inh", &RunVars::PN::bouton_ext_inh);
 
     py::class_<RunVars::FFAPL>(m, "RVFFAPL")
         .def_readonly("vm_sims", &RunVars::FFAPL::vm_sims)
@@ -246,6 +248,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wKCAPL_units", &RunVars::KC::wKCAPL_units)
         .def_readwrite("apl_unit_coupling", &RunVars::KC::apl_unit_coupling)
         .def_readwrite("wKCKC", &RunVars::KC::wKCKC)
+        .def_readwrite("ext_inh", &RunVars::KC::ext_inh)
         .def_readonly("pks", &RunVars::KC::pks)
         .def_readwrite("spont_in", &RunVars::KC::spont_in)
         .def_readwrite("thr", &RunVars::KC::thr)
