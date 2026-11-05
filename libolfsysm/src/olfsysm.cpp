@@ -229,6 +229,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.preset_wPNAPL   = false;
     p.pn.wAPLPN_pretune_scale = 1.0;
     p.pn.wPNAPL_pretune_scale = 1.0;
+    p.pn.bouton_ves_p    = 0.0;
+    p.pn.bouton_tau_r    = 0.2;
 
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
@@ -1176,11 +1178,23 @@ Column sample_PN_spont(ModelParams const& p, RunVars const& rv) {
     return pn_spont;
 }
 
+/* Steady-state available fraction of each bouton's vesicle pool (see p.pn.bouton_ves_p),
+ * for constant release-driving rates `rates` (one per bouton; clipped at 0). */
+Column bouton_pool_steady_state(ModelParams const& p, Column const& rates) {
+    return (1.0 / (
+        1.0 + p.pn.bouton_ves_p * p.pn.bouton_tau_r * rates.array().max(0.0)
+    )).matrix();
+}
+
 // TODO can i also specify shape of output type here? just assert within? or take ref to
 // claw_drive, and set into that, rather than returning?
-/* `bouton_inh` is APL inhibition onto each bouton (only used if p.pn.preset_wAPLPN). */
+/* `bouton_inh` is APL inhibition onto each bouton (only used if p.pn.preset_wAPLPN).
+ * `bouton_pool` / `bouton_rate_prev` are each bouton's available vesicle pool fraction
+ * and release-driving (un-depleted) rate at t-1, both updated to step t here (only used
+ * if p.pn.bouton_ves_p > 0). */
 Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
-    Matrix const& pn_t, unsigned t, Matrix& bouton_sims, Column const& bouton_inh) {
+    Matrix const& pn_t, unsigned t, Matrix& bouton_sims, Column const& bouton_inh,
+    Column& bouton_pool, Column& bouton_rate_prev) {
     // TODO what happens if we initialize to one size, and then set with rvalue
     // that is another size? (or e.g. a matrix) err hopefully? or need to add
     // checks that size is as expected, even if predefining size?
@@ -1275,6 +1289,18 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             // TODO make conditional (/delete)
             check(bouton_sims.col(t).minCoeff() >= 0);
             //
+        }
+
+        if (p.pn.bouton_ves_p > 0) {
+            // pool at t, from pool and release-driving rate at t-1 (forward Euler)
+            bouton_pool += p.time.dt * (
+                (1.0 - bouton_pool.array()) / p.pn.bouton_tau_r -
+                p.pn.bouton_ves_p * bouton_rate_prev.array() * bouton_pool.array()
+            ).matrix();
+            bouton_pool = bouton_pool.array().max(0.0).min(1.0).matrix();
+
+            bouton_rate_prev = bouton_sims.col(t).array().max(0.0).matrix();
+            bouton_sims.col(t) = bouton_sims.col(t).cwiseProduct(bouton_pool);
         }
 
         // TODO what happens if RHS (of assignment) is ever not same shape as claw_drive
@@ -1774,7 +1800,19 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     // boutons for cols, and pn_spont was a vector (col/row?) of length # gloms
     // (gave output that was a vector of length # KCs still, i believe? just not all
     // initialized correctly?)
-    Column spont_in_ini = rv.kc.wPNKC * pn_spont;
+    Column spont_in_ini;
+    if (p.pn.bouton_ves_p > 0) {
+        // (as in run_KC_sims, since fit_sparseness can also be called directly)
+        check(p.pn.n_total_boutons > 0);
+        check(p.pn.bouton_tau_r > 0);
+        // same transfer as in sim_KC_layer, with each bouton's pool at its steady state
+        // for its spontaneous rate (as each odor simulation starts with)
+        spont_in_ini = rv.kc.wPNKC * pn_spont.cwiseProduct(
+            bouton_pool_steady_state(p, pn_spont)
+        );
+    } else {
+        spont_in_ini = rv.kc.wPNKC * pn_spont;
+    }
     // TODO delete after debugging?
     check(!spont_in_ini.hasNaN());
     Column spont_in;
@@ -2570,6 +2608,17 @@ void sim_KC_layer(
     }
     double const kc_kc_decay = 1.0 - p.time.dt / p.kc.kc_kc_tau;
 
+    // vesicle depletion at PN boutons (see p.pn.bouton_ves_p): available pool fraction
+    // and un-depleted (release-driving) rate of each bouton at the previous step, both
+    // starting at the steady state for spontaneous activity
+    Column bouton_pool;
+    Column bouton_rate_prev;
+    if (p.pn.bouton_ves_p > 0) {
+        // (of length # boutons, as checked in run_KC_sims / fit_sparseness)
+        bouton_rate_prev = sample_PN_spont(p, rv).array().max(0.0).matrix();
+        bouton_pool = bouton_pool_steady_state(p, bouton_rate_prev);
+    }
+
     float use_ffapl = float(!p.kc.ignore_ffapl);
     for (unsigned t=p.time.start_step()+1; t < p.time.steps_all(); t++) {
         // TODO also declare size of vector here (currently done inside
@@ -2599,7 +2648,7 @@ void sim_KC_layer(
             }
         }
         Eigen::VectorXd pn_drive = pn_to_kc_drive_at_t(p, rv, pn_t, t,
-            bouton_sims, bouton_inh
+            bouton_sims, bouton_inh, bouton_pool, bouton_rate_prev
         );
         // TODO check pn_drive is shape we expect (should change depending on
         // wPNKC_one_row_per_claw=true/false)? already done at end of above fn?
@@ -3093,6 +3142,9 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             rv.log(cat("p.pn.w[APLPN|PNAPL]_pretune_scale=", p.pn.wAPLPN_pretune_scale,
                 ", ", p.pn.wPNAPL_pretune_scale
             ));
+            rv.log(cat("p.pn.bouton_ves_p=", p.pn.bouton_ves_p, ", p.pn.bouton_tau_r=",
+                p.pn.bouton_tau_r
+            ));
         }
         rv.log(cat("p.kc.n_apl_units=", p.kc.n_apl_units));
         if (p.kc.use_kc_kc_inh) {
@@ -3164,6 +3216,13 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         check(p.kc.wPNKC_one_row_per_claw);
         // (spiking would not depend on the summed, transformed, drive)
         check(p.kc.n_claws_active_to_spike <= 0);
+    }
+
+    // (also false for NaN)
+    check(p.pn.bouton_ves_p >= 0);
+    check(p.pn.bouton_tau_r > 0);
+    if (p.pn.bouton_ves_p > 0) {
+        check(p.pn.n_total_boutons > 0);
     }
 
     if (p.kc.n_claws_active_to_spike != -1) {

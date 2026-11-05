@@ -69,7 +69,9 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("preset_wAPLPN", &ModelParams::PN::preset_wAPLPN)
         .def_readwrite("preset_wPNAPL", &ModelParams::PN::preset_wPNAPL)
         .def_readwrite("wAPLPN_pretune_scale", &ModelParams::PN::wAPLPN_pretune_scale)
-        .def_readwrite("wPNAPL_pretune_scale", &ModelParams::PN::wPNAPL_pretune_scale);
+        .def_readwrite("wPNAPL_pretune_scale", &ModelParams::PN::wPNAPL_pretune_scale)
+        .def_readwrite("bouton_ves_p", &ModelParams::PN::bouton_ves_p)
+        .def_readwrite("bouton_tau_r", &ModelParams::PN::bouton_tau_r);
 
     py::class_<ModelParams::PN::Noise>(m, "MPPNNoise")
         .def_readwrite("mean", &ModelParams::PN::Noise::mean)

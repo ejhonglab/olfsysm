@@ -200,6 +200,28 @@ struct ModelParams {
         double wAPLPN_pretune_scale;
         double wPNAPL_pretune_scale;
 
+        /* Rate-based (Tsodyks-Markram mean-field) vesicle depletion at each PN bouton.
+         * If bouton_ves_p > 0, each bouton b has an available-pool fraction n_b in
+         * [0, 1], with forward Euler steps of
+         *   dn_b/dt = (1 - n_b) / bouton_tau_r - bouton_ves_p * r_b(t-1) * n_b,
+         * where r_b is the bouton's release-driving rate: its rate after any APL>bouton
+         * inhibition (preset_wAPLPN) and clipping at 0, before depletion. Each odor
+         * starts from the steady state for the bouton's spontaneous rate r_spont_b
+         * (sampled as for rv.kc.spont_in):
+         *   n_b(0) = 1 / (1 + bouton_ves_p * bouton_tau_r * r_spont_b).
+         * Each bouton's output is n_b(t) * r_b(t): rv.pn.bouton_sims hold this depleted
+         * output, so the claw drive (wPNKC * bouton_sims), the bouton>APL drive
+         * (preset_wPNAPL) and saved bouton_sims all see it. The spontaneous input to
+         * KCs (rv.kc.spont_in, which thresholds are relative to) uses the same
+         * transfer, wPNKC * (n_b(0) .* r_spont). n_b is clamped to [0, 1] after each
+         * step (only binding if dt * (1 / bouton_tau_r + bouton_ves_p * r) > 1, where
+         * forward Euler is unstable anyway). Requires n_total_boutons > 0.
+         * bouton_ves_p (release fraction per spike, as rates are in Hz): default 0 (off;
+         * outputs unchanged). bouton_tau_r (pool recovery time constant, in seconds):
+         * default 0.2. */
+        double bouton_ves_p;
+        double bouton_tau_r;
+
         // TODO delete (/use)
         //double apl_taum;
         //double tau_apl2pn;
