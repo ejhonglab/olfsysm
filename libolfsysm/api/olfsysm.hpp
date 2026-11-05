@@ -358,6 +358,15 @@ struct ModelParams {
          * tends to max(x - claw_thr, 0) as the width goes to 0) instead of the hard
          * rectification. Only used if claw_thr > 0. Default 0 (hard knee). */
         double claw_thr_width;
+        /* Supralinear (or sublinear) per-claw power transfer, applied after claw_thr (if
+         * > 0) and before claw_sat (if > 0): if claw_pow != 1, each claw's drive y
+         * (rectified, y = max(x, 0)) enters as claw_pow_ref * (y / claw_pow_ref)^claw_pow,
+         * so a claw driven at claw_pow_ref (Hz) keeps its value, and stronger claws are
+         * amplified (weaker ones shrunk) for claw_pow > 1. Same scope / requirements as
+         * claw_sat. Both must be finite and > 0. Defaults claw_pow=1 (off; outputs
+         * unchanged) and claw_pow_ref=50. */
+        double claw_pow;
+        double claw_pow_ref;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
