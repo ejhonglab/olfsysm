@@ -16,6 +16,9 @@
 #include <map>
 #include <cmath>
 #include <stdexcept>
+#include <exception>
+#include <atomic>
+#include <mutex>
 
 /* So code can be compiled single threaded, to support debugging.
  * Only other OMP references should be in the preprocessor directives, which I think can
@@ -125,7 +128,8 @@ thread_local std::mt19937 g_randgen{g_randdev()};
 // (would need to pull in more code, and may want to do it a diff way...)
 // TODO add (sep version?) w/ optional message
 //
-// NOTE: will still just abort if any of these fails within multithreaded sections!!!
+// NOTE: inside OpenMP parallel regions, the throwing code must be wrapped with
+// `OmpExceptionCapture::run` (see below), or the exception terminates the process.
 //
 // NOTE: could potentially use __FUNCTION__ instead of __func__, if later is ever
 // unavailable (may be the case on some compilers?). see:
@@ -139,6 +143,50 @@ thread_local std::mt19937 g_randgen{g_randdev()};
         ));                                                                            \
     }                                                                                  \
 } while(0)
+
+/* Captures the first exception thrown by work inside an OpenMP parallel region, so it
+ * can be rethrown after the region (and so reach Python). An exception escaping a
+ * parallel region calls std::terminate, which aborts the whole process without a
+ * message.
+ *
+ * Wrap the body of each `omp for` iteration and each `omp single` block in `run`. Once
+ * something has failed, later bodies are skipped, but every thread still reaches every
+ * barrier and worksharing construct in the same order, so the region ends normally.
+ * Loops whose condition is set inside a wrapped block must also stop on `failed()`.
+ * Call `rethrow` right after the region. */
+class OmpExceptionCapture {
+public:
+    template <typename F>
+    void run(F&& body) {
+        if (failed()) {
+            return;
+        }
+        try {
+            body();
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!exception_) {
+                exception_ = std::current_exception();
+            }
+            failed_.store(true, std::memory_order_release);
+        }
+    }
+
+    bool failed() const {
+        return failed_.load(std::memory_order_acquire);
+    }
+
+    void rethrow() const {
+        if (exception_) {
+            std::rethrow_exception(exception_);
+        }
+    }
+
+private:
+    std::exception_ptr exception_;
+    std::mutex mutex_;
+    std::atomic<bool> failed_{false};
+};
 
 ModelParams const DEFAULT_PARAMS = []() {
     ModelParams p;
@@ -1440,8 +1488,8 @@ void apply_apl_weight_scales(ModelParams const& p, RunVars& rv) {
     }
 }
 
-// NOTE: will abort (rather than raise an error that can be caught in python) if called
-// within a parallel region.
+// NOTE: if called within a parallel region, must be inside an `OmpExceptionCapture::run`
+// body, or the process aborts.
 void sparsity_nonconvergence_failure(ModelParams const&p, RunVars const& rv) {
     std::string msg = cat("did not get within tolerance of p.kc.sp_target within "
         "p.kc.max_iters=", p.kc.max_iters, " iterations! failure! (thr_tuning_iters=",
@@ -1841,9 +1889,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             tt == "hstatic" ? TTHSTATIC :
             tt == "mixed" ? TTMIXED :
             tt == "fixed" ? TTFIXED :
-        // TODO what is purpose of abort + nullptr here? explain?
-        // raise an error (that can be converted by pybind11) instead?
-        (abort(), TTINVALID);
+            TTINVALID;
+    if (thrtype == TTINVALID) {
+        throw std::invalid_argument(cat("invalid p.kc.thr_type: ", tt));
+    }
+
+    // exceptions thrown inside the parallel region are rethrown after it
+    OmpExceptionCapture exc;
 
     /* Break up into threads. */
 #pragma omp parallel
@@ -1870,7 +1922,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // TODO did adding use_fixed_thr here break anything?
         if (thrtype != TTFIXED && !(p.kc.use_vector_thr || p.kc.use_fixed_thr)) {
 #pragma omp single
-            {
+            exc.run([&] {
                 rv.log(cat("choosing thresholds from spontaneous input (thrtype=",
                    thrtype, " [=", p.kc.thr_type, "])"
                 ));
@@ -1884,7 +1936,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 if (p.pn.preset_wPNAPL) {
                     check(rv.pn.wPNAPL.isZero());
                 }
-            }
+            });
 
             // TODO maybe i still want to sim_KC_layer in use_vector_thr case
             // (just not use it to pick a thr)?
@@ -1893,25 +1945,27 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
              * based on that. */
 #pragma omp for
             for (unsigned i=0; i<tlist.size(); i++) {
-                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                    Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
-                    Is_from_kcs, Is_from_pns
-                );
-                // TODO (probably at end of sim_KC_layer), check all quantities are
-                // fully initialized? maybe init w/ NaN or something (instead of 0,
-                // where easily possible), to make that check easier?
-                check(inh.isZero());
-                check(Is.isZero());
-                // TODO also do on Is_from_[kcs|pns]?
+                exc.run([&] {
+                    sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
+                        Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
+                        Is_from_kcs, Is_from_pns
+                    );
+                    // TODO (probably at end of sim_KC_layer), check all quantities are
+                    // fully initialized? maybe init w/ NaN or something (instead of 0,
+                    // where easily possible), to make that check easier?
+                    check(inh.isZero());
+                    check(Is.isZero());
+                    // TODO also do on Is_from_[kcs|pns]?
 #pragma omp critical
-                // TODO TODO why subtracting 2x spont_in first? just cancel out what
-                // similar offset in threshold choosing fns? doc (+ make sure per-claw
-                // threshold case handled correctly too)
-                KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
+                    // TODO TODO why subtracting 2x spont_in first? just cancel out what
+                    // similar offset in threshold choosing fns? doc (+ make sure
+                    // per-claw threshold case handled correctly too)
+                    KCpks.col(i) = Vm.rowwise().maxCoeff() - spont_in*2.0;
+                });
             }
 
 #pragma omp single
-            {
+            exc.run([&] {
                 rv.kc.pks = KCpks;
 
                 /* Finish picking thresholds. */
@@ -1942,18 +1996,18 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 } else {
                     check(p.kc.n_spikes_for_response == 1);
                 }
-            }
+            });
 
             if (p.kc.n_spikes_for_response > 1) {
 #pragma omp single
-                {
+                exc.run([&] {
                     // redundant w/ check in `else` above, but just to be clear
                     check(!p.kc.use_homeostatic_thrs);
 
                     rv.log(cat("tuning threshold to get (pre-APL) target sparsity ",
                         "where n_spikes_for_response=", p.kc.n_spikes_for_response
                     ));
-                }
+                });
                 /* Continue tuning until we reach the threshold that provides the
                  * desired (no-APL) sparsity, for a given number of spikes required to
                  * be considered a response. */
@@ -1966,14 +2020,17 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     // define another, or always use all odors (here and in all cases?
                     // probably don't always want that on hallem...)
                     for (unsigned i=0; i<tlist.size(); i+=p.kc.apltune_subsample) {
-                        sim_KC_layer(p, rv, rv.pn.sims[tlist[i]],
-                            rv.ffapl.vm_sims[tlist[i]], Vm, spikes, nves, inh, Is,
-                            claw_sims, bouton_sims, Is_from_kcs, Is_from_pns
-                        );
-                        KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
+                        exc.run([&] {
+                            sim_KC_layer(p, rv, rv.pn.sims[tlist[i]],
+                                rv.ffapl.vm_sims[tlist[i]], Vm, spikes, nves, inh, Is,
+                                claw_sims, bouton_sims, Is_from_kcs, Is_from_pns
+                            );
+                            KCmean_st.col(i / p.kc.apltune_subsample) =
+                                spikes.rowwise().sum();
+                        });
                     }
 #pragma omp single
-                    {
+                    exc.run([&] {
                         KCmean_st = n_spikes_to_responses(p, rv, KCmean_st);
                         sp = KCmean_st.mean();
                         sparsity_not_converged = (
@@ -1991,12 +2048,14 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                             update_thr_offset(p, rv, sp);
                             rv.kc.thr_tuning_iters++;
                         }
-                    }
+                    });
                 // TODO define separate max_iters for this?
-                } while (sparsity_not_converged && under_max_iters);
+                // (the `omp single` above ends with a barrier, so all threads see the
+                // same `exc.failed()`)
+                } while (sparsity_not_converged && under_max_iters && !exc.failed());
 #pragma omp barrier
 #pragma omp single
-                {
+                exc.run([&] {
                     rv.kc.thr_tuning_iters--;
                     rv.log(cat("done tuning threshold for n_spikes_for_response=",
                         p.kc.n_spikes_for_response
@@ -2029,7 +2088,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                     rv.log(cat("thr_sp_lr_coeff to tune in one step: ",
                         lr_to_tune_in_one_iter
                     ));
-                }
+                });
             // TODO TODO err here if thr_tuning_iters == [thr_]max_iters! doesn't
             // currently! (need to test that is still true, not that my one test is
             // currently converging before max iters)
@@ -2044,7 +2103,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // wAPLKC/etc)
 #pragma omp single
     // TODO combine this block into below (two adjacent #pragma single blocks...)?
-    {
+    exc.run([&] {
         if (!p.kc.tune_apl_weights) {
             // (also restoring weights from any zeroing for threshold picking above)
             apply_apl_weight_scales(p, rv);
@@ -2052,7 +2111,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             log_apl_weights(p, rv);
             check_weights(p, rv);
         }
-    }
+    });
         // TODO any point having the two separate (adjacent) `#pragma omp single` blocks
         // here? combine all code into one? maybe if i actually want to return earlier
         // w/ fixed APL weight scales, do that between them? work?
@@ -2066,7 +2125,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
          * (at this point APL->KC weights are set to 0). */
         if (p.kc.tune_apl_weights) {
 #pragma omp single
-        {
+        exc.run([&] {
             // TODO delete? prints in scale_APL_weights replace this now?
             rv.log(cat("tuning APL<->KC weights; tuning begin (",
                         "target=", p.kc.sp_target,
@@ -2089,16 +2148,16 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             rv.log("fit_sparseness INITIAL APL weights:");
             log_apl_weights(p, rv);
             check_weights(p, rv);
-        }
+        });
 
         // instead of simulating initial weights, take first step from hardcoded sp
         if (p.kc.hardcode_initial_sp) {
 #pragma omp single
-            {
+            exc.run([&] {
                 initial_rel_sp_diff = (sp - p.kc.sp_target) / p.kc.sp_target;
                 initial_wAPLKC_scale = rv.kc.wAPLKC_scale;
                 scale_APL_weights(p, rv, sp, bracket);
-            }
+            });
         }
 
         /* Continue tuning until we reach the desired sparsity. */
@@ -2108,24 +2167,26 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
             /* Run through a bunch of odors to test sparsity. */
 #pragma omp for
             for (unsigned i=0; i<tlist.size(); i+=p.kc.apltune_subsample) {
-                sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
-                    Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
-                    Is_from_kcs, Is_from_pns
-                );
-                // TODO assert this is not true here? was it only because scale
-                // factor was negative here? expect above, but not here, right?
-                // (may still be some odors with no response at some point though...)
-                if (inh.isZero()) {
-                    rv.log(cat(
-                        "odor ", i, " had all 0 inh (presumably no response either)!"
-                    ));
-                }
-                //
-                KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
+                exc.run([&] {
+                    sim_KC_layer(p, rv, rv.pn.sims[tlist[i]], rv.ffapl.vm_sims[tlist[i]],
+                        Vm, spikes, nves, inh, Is, claw_sims, bouton_sims,
+                        Is_from_kcs, Is_from_pns
+                    );
+                    // TODO assert this is not true here? was it only because scale
+                    // factor was negative here? expect above, but not here, right?
+                    // (may still be some odors with no response at some point though...)
+                    if (inh.isZero()) {
+                        rv.log(cat(
+                            "odor ", i, " had all 0 inh (presumably no response either)!"
+                        ));
+                    }
+                    //
+                    KCmean_st.col(i / p.kc.apltune_subsample) = spikes.rowwise().sum();
+                });
             }
 
 #pragma omp single
-            {
+            exc.run([&] {
                 KCmean_st = n_spikes_to_responses(p, rv, KCmean_st);
                 sp = KCmean_st.mean();
                 // TODO also log this relative diff, if actually any sign there is a
@@ -2148,14 +2209,13 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
                 if (sparsity_not_converged && under_max_iters) {
                     scale_APL_weights(p, rv, sp, bracket);
                 }
-            }
-        } while (sparsity_not_converged && under_max_iters);
+            });
+        } while (sparsity_not_converged && under_max_iters && !exc.failed());
 #pragma omp barrier
     }}
+    exc.rethrow();
     // TODO not an issue that (all) below is not in a `#pragma omp single`? might be...
     if (p.kc.tune_apl_weights) {
-        // raising here rather than in loop above, as errors raised inside the parallel
-        // region abort, rather than propagating to python
         if (sparsity_not_converged) {
             sparsity_nonconvergence_failure(p, rv);
         }
@@ -2850,6 +2910,7 @@ void sim_KC_layer(
 
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
     std::vector<unsigned> simlist = get_simlist(p);
+    OmpExceptionCapture exc;
 #pragma omp parallel
     {
         Matrix orn_t(get_ngloms(p), p.time.steps_all());
@@ -2857,41 +2918,52 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
         Row inhB(1, p.time.steps_all());
 #pragma omp for
         for (unsigned j = 0; j < simlist.size(); j++) {
-            unsigned i = simlist[j];
-            sim_ORN_layer(p, rv, i, orn_t);
-            sim_LN_layer(p, orn_t, inhA, inhB);
+            exc.run([&] {
+                unsigned i = simlist[j];
+                sim_ORN_layer(p, rv, i, orn_t);
+                sim_LN_layer(p, orn_t, inhA, inhB);
 #pragma omp critical
-            {
-                rv.orn.sims[i] = orn_t;
-                rv.ln.inhA.sims[i] = inhA;
-                rv.ln.inhB.sims[i] = inhB;
-            }
+                {
+                    rv.orn.sims[i] = orn_t;
+                    rv.ln.inhA.sims[i] = inhA;
+                    rv.ln.inhB.sims[i] = inhB;
+                }
+            });
         }
     }
+    exc.rethrow();
 }
 
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
     std::vector<unsigned> simlist = get_simlist(p);
+    OmpExceptionCapture exc;
 #pragma omp parallel for
     for (unsigned j = 0; j < simlist.size(); j++) {
-        unsigned i = simlist[j];
-        sim_PN_layer(
-                p, rv,
-                rv.orn.sims[i], rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
-                rv.pn.sims[i]);
+        exc.run([&] {
+            unsigned i = simlist[j];
+            sim_PN_layer(
+                    p, rv,
+                    rv.orn.sims[i], rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
+                    rv.pn.sims[i]);
+        });
     }
+    exc.rethrow();
 }
 
 void run_FFAPL_sims(ModelParams const& p, RunVars& rv) {
     std::vector simlist = get_simlist(p);
+    OmpExceptionCapture exc;
 #pragma omp parallel for
     for (unsigned j = 0; j < simlist.size(); j++) {
-        unsigned i = simlist[j];
-        sim_FFAPL_layer(
-                p, rv,
-                rv.pn.sims[i],
-                rv.ffapl.vm_sims[i], rv.ffapl.coef_sims[i]);
+        exc.run([&] {
+            unsigned i = simlist[j];
+            sim_FFAPL_layer(
+                    p, rv,
+                    rv.pn.sims[i],
+                    rv.ffapl.vm_sims[i], rv.ffapl.coef_sims[i]);
+        });
     }
+    exc.rethrow();
 }
 
 void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
@@ -3069,6 +3141,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     std::vector<unsigned> simlist = get_simlist(p);
 
+    OmpExceptionCapture exc;
 #pragma omp parallel
     {
         // TODO print this before tuning starts? must do in fit_sparseness #parallel
@@ -3081,7 +3154,9 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         // currently using 12 threads, so makes sense i'm getting same one twice for 17
         // odors.
         #pragma omp single
-        rv.log(cat("using ", omp_get_num_threads(), " threads"));
+        exc.run([&] {
+            rv.log(cat("using ", omp_get_num_threads(), " threads"));
+        });
         #endif
         //
 
@@ -3152,6 +3227,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         Matrix respcol_bin;
 #pragma omp for
         for (unsigned j = 0; j < simlist.size(); j++) {
+          exc.run([&] {
             unsigned i = simlist[j];
             Matrix& Vm_link = p.kc.save_vm_sims
                 ? rv.kc.vm_sims.at(i)
@@ -3201,10 +3277,14 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             respcol_bin = n_spikes_to_responses(p, rv, respcol);
 
 #pragma omp critical
-            rv.kc.responses.col(i) = respcol_bin;
-            rv.kc.spike_counts.col(i) = respcol;
+            {
+                rv.kc.responses.col(i) = respcol_bin;
+                rv.kc.spike_counts.col(i) = respcol;
+            }
+          });
         }
     } // The parallel region ends here.
+    exc.rethrow();
 
     // **ALL of the following code has been moved here, outside the parallel region,
     // to ensure it runs only after all threads have completed.**
