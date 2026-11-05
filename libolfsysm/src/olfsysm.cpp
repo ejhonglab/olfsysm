@@ -271,6 +271,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.kc_kc_tau                = 0.05;
     p.kc.claw_sat                 = 0.0;
     p.kc.claw_sat_hard            = false;
+    p.kc.claw_thr                 = 0.0;
 
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
@@ -681,9 +682,13 @@ Eigen::VectorXd duplicate_vals_for_each_subunit_id(Eigen::VectorXd unit_vec,
 // template<typename T> if needed) don't think so tho
 // TODO any reason i can't use const for rv here? (seems ok so far...)
 // TODO expose to python bindings, to test? or unit test in new C++ unit tests?
-/* Per-claw saturation of the claw>soma transfer (see p.kc.claw_sat). Returns `claws`
- * unchanged if p.kc.claw_sat <= 0. */
-Eigen::VectorXd saturate_claws(ModelParams const& p, Eigen::VectorXd const& claws) {
+/* Per-claw transfer of the claw>soma input: the offset p.kc.claw_thr (rectified) and then
+ * the saturation p.kc.claw_sat. Returns `claws` unchanged if both are off (<= 0). */
+Eigen::VectorXd saturate_claws(ModelParams const& p, Eigen::VectorXd const& claws_in) {
+    Eigen::VectorXd claws = claws_in;
+    if (p.kc.claw_thr > 0) {
+        claws = (claws.array() - p.kc.claw_thr).max(0.0).matrix();
+    }
     if (p.kc.claw_sat <= 0) {
         return claws;
     }
@@ -3102,7 +3107,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             rv.log(cat("p.kc.pn_claw_to_apl=", p.kc.pn_claw_to_apl));
             rv.log(cat("p.kc.claw_dynamics=", p.kc.claw_dynamics));
             rv.log(cat("p.kc.claw_sat=", p.kc.claw_sat, ", p.kc.claw_sat_hard=",
-                p.kc.claw_sat_hard
+                p.kc.claw_sat_hard, ", p.kc.claw_thr=", p.kc.claw_thr
             ));
         }
         rv.log(cat("p.kc.N=", p.kc.N));
@@ -3153,10 +3158,11 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         check_kc_kc_inh(p, rv);
     }
 
-    if (p.kc.claw_sat != 0) {
-        check(p.kc.claw_sat > 0);
+    if (p.kc.claw_sat != 0 || p.kc.claw_thr != 0) {
+        check(p.kc.claw_sat >= 0);
+        check(p.kc.claw_thr >= 0);
         check(p.kc.wPNKC_one_row_per_claw);
-        // (spiking would not depend on the summed, saturated, drive)
+        // (spiking would not depend on the summed, transformed, drive)
         check(p.kc.n_claws_active_to_spike <= 0);
     }
 

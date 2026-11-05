@@ -323,6 +323,14 @@ struct ModelParams {
          * summed drive). Default 0 (off; outputs unchanged). */
         double claw_sat;
         bool claw_sat_hard;
+        /* Per-claw threshold (offset) of the claw>soma transfer, applied before claw_sat:
+         * each claw's drive x enters as max(x - claw_thr, 0) (then saturated, if
+         * claw_sat > 0). With claw_thr at the per-claw threshold of a
+         * n_claws_active_to_spike model and a claw_sat of the same order, the summed
+         * drive approximates that rule's count of active claws (a rectified, bounded
+         * claw rather than a thresholded binary one). Same scope / requirements as
+         * claw_sat. Default 0 (off; outputs unchanged). */
+        double claw_thr;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */

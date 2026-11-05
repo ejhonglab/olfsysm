@@ -112,6 +112,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("kc_kc_tau", &ModelParams::KC::kc_kc_tau)
         .def_readwrite("claw_sat", &ModelParams::KC::claw_sat)
         .def_readwrite("claw_sat_hard", &ModelParams::KC::claw_sat_hard)
+        .def_readwrite("claw_thr", &ModelParams::KC::claw_thr)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)
