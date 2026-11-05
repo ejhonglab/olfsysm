@@ -3158,6 +3158,25 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     // previously called remove_all_pretime)
     check(rv.ready);
 
+    // Per-odor recording buffers are sized at RunVars construction from the save_* flags.
+    // If a flag was turned on afterwards (e.g. to record spikes from an already-tuned
+    // model without re-fitting it), allocate them here rather than indexing empty
+    // vectors inside the parallel loop below.
+    {
+        unsigned const n_odors_rec = get_nodors(p);
+        auto ensure_rec = [&](std::vector<Matrix>& v, bool save, int rows) {
+            if (save && v.size() != n_odors_rec) {
+                Matrix zeros = Matrix::Zero(rows, p.time.steps_all());
+                v.assign(n_odors_rec, zeros);
+            }
+        };
+        ensure_rec(rv.kc.vm_sims, p.kc.save_vm_sims, p.kc.N);
+        ensure_rec(rv.kc.spike_recordings, p.kc.save_spike_recordings, p.kc.N);
+        ensure_rec(rv.kc.nves_sims, p.kc.save_nves_sims, p.kc.N);
+        ensure_rec(rv.kc.inh_sims, p.kc.save_inh_sims, 1);
+        ensure_rec(rv.kc.Is_sims, p.kc.save_Is_sims, 1);
+    }
+
     std::vector<unsigned> simlist = get_simlist(p);
 
     OmpExceptionCapture exc;
