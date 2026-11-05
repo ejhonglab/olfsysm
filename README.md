@@ -29,6 +29,24 @@ To see compilation errors, which can be helpful when modify the library code / b
 pip install -v .
 ```
 
+Every `pip install` recompiles the whole extension (no reuse of cached objects, so a
+header-only edit or a changed flag can never leave stale code in the build) and bakes the
+build's provenance into the module:
+```python
+import olfsysm
+olfsysm.build_info()     # dict: git_hash, git_dirty (1 = built with uncommitted changes to
+                         # tracked files, 0 = clean, -1 = not built from a git checkout),
+                         # git_untracked, git_diff (of a dirty build), source_sha256 (over the
+                         # compiled sources and headers), build_time, build_flags, compiler,
+                         # build_host
+olfsysm.__git_hash__     # the same values are also module attributes (__git_dirty__, ...)
+```
+`al_analysis.mb_model` refuses to run the model unless the installed olfsysm is a clean
+build of a known commit that matches its checkout; during development, set
+`AL_ANALYSIS_ALLOW_DIRTY_OLFSYSM=1` to run anyway (the dirty diff is then recorded in the
+output's `model_provenance.json`). Commit, then `pip install -e .`, before producing
+outputs that need to be reproducible.
+
 Most recently tested using:
 - pip `22.3.1`
 - `pybind11==2.10.4`

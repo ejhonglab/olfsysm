@@ -8,6 +8,19 @@
 
 namespace py = pybind11;
 
+// defined in the generated bindings/python/olfsysm_build_info.cpp (see setup.py)
+namespace olfsysm_build_info {
+extern const char* const git_hash;
+extern const int git_dirty;
+extern const int git_untracked;
+extern const char* const git_diff;
+extern const char* const source_sha256;
+extern const char* const build_time;
+extern const char* const build_flags;
+extern const char* const compiler;
+extern const char* const build_host;
+}
+
 PYBIND11_MODULE(olfsysm, m) {
 	/* TODO fill this in from his other docs */
     m.doc() = R"pbdoc(
@@ -306,9 +319,43 @@ PYBIND11_MODULE(olfsysm, m) {
     )pbdoc");
 
 #ifdef VERSION_INFO
-    m.attr("__version__") = VERSION_INFO;
+    const char* version = VERSION_INFO;
 #else
-    m.attr("__version__") = "dev";
+    const char* version = "dev";
 #endif
+    m.attr("__version__") = version;
+
+    // build provenance (see setup.py): which commit / sources this extension was compiled
+    // from, and whether the checkout had uncommitted changes to tracked files
+    m.attr("__git_hash__") = olfsysm_build_info::git_hash;
+    m.attr("__git_dirty__") = olfsysm_build_info::git_dirty;
+    m.attr("__git_untracked__") = olfsysm_build_info::git_untracked;
+    m.attr("__git_diff__") = olfsysm_build_info::git_diff;
+    m.attr("__source_sha256__") = olfsysm_build_info::source_sha256;
+    m.attr("__build_time__") = olfsysm_build_info::build_time;
+    m.attr("__build_flags__") = olfsysm_build_info::build_flags;
+    m.attr("__compiler__") = olfsysm_build_info::compiler;
+    m.attr("__build_host__") = olfsysm_build_info::build_host;
+    m.def("build_info", [version]() {
+        py::dict d;
+        d["version"] = version;
+        d["git_hash"] = olfsysm_build_info::git_hash;
+        // -1: not built from a git checkout (unknown); 0: clean; 1: tracked files modified
+        d["git_dirty"] = olfsysm_build_info::git_dirty;
+        d["git_untracked"] = olfsysm_build_info::git_untracked;
+        d["git_diff"] = olfsysm_build_info::git_diff;
+        d["source_sha256"] = olfsysm_build_info::source_sha256;
+        d["build_time"] = olfsysm_build_info::build_time;
+        d["build_flags"] = olfsysm_build_info::build_flags;
+        d["compiler"] = olfsysm_build_info::compiler;
+        d["build_host"] = olfsysm_build_info::build_host;
+        return d;
+    }, R"pbdoc(
+        Build provenance baked in at compile time (setup.py): the git commit the extension
+        was built from, whether tracked files were modified then (git_dirty: 1 = dirty,
+        0 = clean, -1 = not built from a git checkout), the number of untracked files, the
+        diff of a dirty build, a SHA-256 over the compiled sources and headers, and the
+        build time, flags, compiler and host.
+    )pbdoc");
 }
 
