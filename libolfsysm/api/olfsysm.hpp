@@ -309,6 +309,21 @@ struct ModelParams {
          * Only relevant if use_kc_kc_inh=true. Default 0.05. */
         double kc_kc_tau;
 
+        /* Per-claw saturation of the claw>soma transfer: the linear-summation form of
+         * the n_claws_active_to_spike coincidence rule (bounds how much any one claw can
+         * contribute to its KC). If > 0, each claw's drive x (claw_sims: after APL
+         * inhibition and the clipping at 0) enters the sum across claws as
+         *   claw_sat * tanh(x / claw_sat)   (claw_sat_hard=false, default), or
+         *   min(x, claw_sat)                (claw_sat_hard=true),
+         * both for the spontaneous input (rv.kc.spont_in, so thresholds are relative to
+         * the saturated resting drive) and in sim_KC_layer. claw_sims themselves (and
+         * the claw>APL drive, if pn_claw_to_apl=true) are left unsaturated, as under
+         * n_claws_active_to_spike > 0. Requires wPNKC_one_row_per_claw=true; not
+         * supported with n_claws_active_to_spike > 0 (spiking would not depend on the
+         * summed drive). Default 0 (off; outputs unchanged). */
+        double claw_sat;
+        bool claw_sat_hard;
+
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
         bool ignore_ffapl;

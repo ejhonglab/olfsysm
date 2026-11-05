@@ -269,6 +269,8 @@ ModelParams const DEFAULT_PARAMS = []() {
 
     p.kc.use_kc_kc_inh            = false;
     p.kc.kc_kc_tau                = 0.05;
+    p.kc.claw_sat                 = 0.0;
+    p.kc.claw_sat_hard            = false;
 
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
@@ -679,6 +681,18 @@ Eigen::VectorXd duplicate_vals_for_each_subunit_id(Eigen::VectorXd unit_vec,
 // template<typename T> if needed) don't think so tho
 // TODO any reason i can't use const for rv here? (seems ok so far...)
 // TODO expose to python bindings, to test? or unit test in new C++ unit tests?
+/* Per-claw saturation of the claw>soma transfer (see p.kc.claw_sat). Returns `claws`
+ * unchanged if p.kc.claw_sat <= 0. */
+Eigen::VectorXd saturate_claws(ModelParams const& p, Eigen::VectorXd const& claws) {
+    if (p.kc.claw_sat <= 0) {
+        return claws;
+    }
+    if (p.kc.claw_sat_hard) {
+        return claws.array().min(p.kc.claw_sat).matrix();
+    }
+    return (p.kc.claw_sat * (claws.array() / p.kc.claw_sat).tanh()).matrix();
+}
+
 Eigen::VectorXd sum_across_claws_within_each_kc(ModelParams const& p, RunVars const& rv,
     Eigen::VectorXd claw_vec) {
     // TODO check wPNKC_one_row_per_claw=true (should only be called then anyway...)?
@@ -1771,7 +1785,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         // (if anything) the other use of this causing issues (in sim_KC_layer)? only in
         // bouton case too maybe? (bouton + claw case seems OK actually. that's covered
         // in python test_dynamics_indexing now)
-        spont_in = sum_across_claws_within_each_kc(p, rv, spont_in_ini);
+        spont_in = sum_across_claws_within_each_kc(p, rv,
+            saturate_claws(p, spont_in_ini)
+        );
     } else {
         // TODO delete
         rv.log("setting spont_in to spont_in_ini...");
@@ -2835,7 +2851,7 @@ void sim_KC_layer(
             // NOTE: kc_drive includes inh (effect of wAPLKC) here, since calculated
             // per-claw, where claw_sims.col(t) is set above
             Eigen::VectorXd kc_drive = sum_across_claws_within_each_kc(p, rv,
-                claw_sims.col(t)
+                saturate_claws(p, claw_sims.col(t))
             );
             dKCdt = (-Vm.col(t-1) + kc_drive).array() - use_ffapl * ffapl_t(t-1);
         } else {
@@ -3085,6 +3101,9 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             rv.log(cat("p.kc.allow_net_inh_per_claw=", p.kc.allow_net_inh_per_claw));
             rv.log(cat("p.kc.pn_claw_to_apl=", p.kc.pn_claw_to_apl));
             rv.log(cat("p.kc.claw_dynamics=", p.kc.claw_dynamics));
+            rv.log(cat("p.kc.claw_sat=", p.kc.claw_sat, ", p.kc.claw_sat_hard=",
+                p.kc.claw_sat_hard
+            ));
         }
         rv.log(cat("p.kc.N=", p.kc.N));
         rv.log(cat("rv.kc.wPNKC.rows()=", rv.kc.wPNKC.rows()));
@@ -3132,6 +3151,13 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     if (p.kc.use_kc_kc_inh) {
         check_kc_kc_inh(p, rv);
+    }
+
+    if (p.kc.claw_sat != 0) {
+        check(p.kc.claw_sat > 0);
+        check(p.kc.wPNKC_one_row_per_claw);
+        // (spiking would not depend on the summed, saturated, drive)
+        check(p.kc.n_claws_active_to_spike <= 0);
     }
 
     if (p.kc.n_claws_active_to_spike != -1) {
