@@ -852,8 +852,20 @@ void check_apl_units(ModelParams const& p, RunVars const& rv) {
  * p.kc.use_kc_kc_inh=true). */
 void check_kc_kc_inh(ModelParams const& p, RunVars const& rv) {
     check(p.kc.use_kc_kc_inh);
-    // TODO implement
-    throw std::logic_error("p.kc.use_kc_kc_inh=true not yet implemented");
+    // KC-KC inhibition acts on (somatic) Vm, which does not determine spiking if
+    // n_claws_active_to_spike > 0
+    check(p.kc.n_claws_active_to_spike <= 0);
+    check(p.kc.kc_kc_tau > 0);
+    // so the forward Euler filter (in sim_KC_layer) is stable and stays non-negative
+    check(p.time.dt <= p.kc.kc_kc_tau);
+
+    SparseMatrix const& w = rv.kc.wKCKC;
+    check(w.rows() == Eigen::Index(p.kc.N));
+    check(w.cols() == Eigen::Index(p.kc.N));
+    if (w.nonZeros() > 0) {
+        check(w.coeffs().allFinite());
+        check(w.coeffs().minCoeff() >= 0);
+    }
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -2526,6 +2538,17 @@ void sim_KC_layer(
         );
     }
 
+    // KC-KC inhibition (see p.kc.use_kc_kc_inh): each KC's synaptic output
+    // (nves * spikes) low-pass filtered into kc_kc_activity (in Hz), with forward Euler
+    // steps of da/dt = (-a + nves(t-1) * spikes(t-1) / dt) / tau, i.e.
+    // a(t) = (1 - dt/tau) * a(t-1) + nves(t-1) * spikes(t-1) / tau
+    bool const kc_kc_inh = p.kc.use_kc_kc_inh;
+    Column kc_kc_activity;
+    if (kc_kc_inh) {
+        kc_kc_activity = Column::Zero(p.kc.N, 1);
+    }
+    double const kc_kc_decay = 1.0 - p.time.dt / p.kc.kc_kc_tau;
+
     float use_ffapl = float(!p.kc.ignore_ffapl);
     for (unsigned t=p.time.start_step()+1; t < p.time.steps_all(); t++) {
         // TODO also declare size of vector here (currently done inside
@@ -2820,6 +2843,14 @@ void sim_KC_layer(
                 (-Vm.col(t-1) + pn_drive_with_inh).array() - use_ffapl * ffapl_t(t-1)
             );
         }
+        // (for both branches above) KC-KC inhibition at the soma, from activity
+        // including spikes at t-1 (so a spike affects other KCs' Vm from step t)
+        if (kc_kc_inh) {
+            kc_kc_activity = kc_kc_decay * kc_kc_activity + (
+                nves.col(t-1).array() * spikes.col(t-1).array()
+            ).matrix() / p.kc.kc_kc_tau;
+            dKCdt -= rv.kc.wKCKC * kc_kc_activity;
+        }
 
         // TODO TODO TODO add one save* flag that enables saving of mean kc/claw and
         // bouton (if boutons enabled) activity pre/post apl inhibition. include those
@@ -3043,6 +3074,12 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             ));
         }
         rv.log(cat("p.kc.n_apl_units=", p.kc.n_apl_units));
+        if (p.kc.use_kc_kc_inh) {
+            rv.log(cat("p.kc.use_kc_kc_inh=", p.kc.use_kc_kc_inh, ", p.kc.kc_kc_tau=",
+                p.kc.kc_kc_tau, ", rv.kc.wKCKC.nonZeros()=", rv.kc.wKCKC.nonZeros(),
+                ", rv.kc.wKCKC.sum()=", rv.kc.wKCKC.sum()
+            ));
+        }
         rv.log(cat("p.kc.wPNKC_one_row_per_claw=", p.kc.wPNKC_one_row_per_claw));
         if (p.kc.wPNKC_one_row_per_claw) {
             rv.log(cat("p.kc.allow_net_inh_per_claw=", p.kc.allow_net_inh_per_claw));
