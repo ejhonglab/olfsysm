@@ -293,6 +293,22 @@ struct ModelParams {
          * sim_KC_layer). Requires wPNKC_one_row_per_claw=true. */
         unsigned n_apl_units;
 
+        /* If true, KCs also inhibit each other directly (APL-independent lateral
+         * inhibition), with weights rv.kc.wKCKC. Each KC's synaptic output (its spikes,
+         * times its vesicle depletion factor nves, as for KC>APL synapses) is low-pass
+         * filtered into an activity `a` (in Hz), with time constant kc_kc_tau:
+         *   da/dt = (-a + nves(t-1) * spikes(t-1) / p.time.dt) / kc_kc_tau
+         * (so each spike adds 1/kc_kc_tau to `a`, then decays, and `a` integrates to
+         * the number of spikes; for constant firing at r Hz, `a` -> r). rv.kc.wKCKC * a
+         * is then subtracted from each KC's dVm/dt (at the soma, i.e. after summing
+         * claw inputs, if wPNKC_one_row_per_claw=true), in the same units as the
+         * PN>KC drive. Not supported with n_claws_active_to_spike > 0 (spiking would
+         * not depend on Vm). Default false (outputs unchanged). */
+        bool use_kc_kc_inh;
+        /* Time constant (seconds) of the filtered KC activity driving KC-KC inhibition.
+         * Only relevant if use_kc_kc_inh=true. Default 0.05. */
+        double kc_kc_tau;
+
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
         bool ignore_ffapl;
@@ -662,6 +678,12 @@ struct RunVars {
          * between each pair of APL units, relative to the leak conductance of each
          * unit. */
         SparseMatrix apl_unit_coupling;
+
+        /* Only used if p.kc.use_kc_kc_inh=true. KC->KC inhibitory weights, of shape
+         * (p.kc.N, p.kc.N), with element (post, pre) the weight of inhibition onto KC
+         * `post` from KC `pre` (including any overall scale). Must be non-negative.
+         * See p.kc.use_kc_kc_inh for how it enters the KC dynamics. */
+        SparseMatrix wKCKC;
 
         /* Spontaneous input each KC receives. Threshold typically added to this. */
         Column spont_in;

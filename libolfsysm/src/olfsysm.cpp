@@ -267,6 +267,9 @@ ModelParams const DEFAULT_PARAMS = []() {
 
     p.kc.n_apl_units              = 1;
 
+    p.kc.use_kc_kc_inh            = false;
+    p.kc.kc_kc_tau                = 0.05;
+
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
     p.kc.n_claws_active_to_spike  = -1;
@@ -843,6 +846,14 @@ void check_apl_units(ModelParams const& p, RunVars const& rv) {
         rv.log(msg);
         throw std::invalid_argument(msg);
     }
+}
+
+/* Checks parameters / weights for KC-KC inhibition (only relevant if
+ * p.kc.use_kc_kc_inh=true). */
+void check_kc_kc_inh(ModelParams const& p, RunVars const& rv) {
+    check(p.kc.use_kc_kc_inh);
+    // TODO implement
+    throw std::logic_error("p.kc.use_kc_kc_inh=true not yet implemented");
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -1707,6 +1718,10 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
         log_apl_weights(p, rv);
     }
     init_apl_weights(p, rv);
+
+    if (p.kc.use_kc_kc_inh) {
+        check_kc_kc_inh(p, rv);
+    }
 
     // TODO check weights up here too in any cases? just preset_*? checked below in
     // what should be all cases, but only after a bit of monkeying w/ weights
@@ -3076,6 +3091,10 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     if (p.kc.n_apl_units > 1) {
         check_apl_units(p, rv);
+    }
+
+    if (p.kc.use_kc_kc_inh) {
+        check_kc_kc_inh(p, rv);
     }
 
     if (p.kc.n_claws_active_to_spike != -1) {
