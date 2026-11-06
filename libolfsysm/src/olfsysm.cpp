@@ -1337,9 +1337,16 @@ Eigen::VectorXd pn_to_kc_drive_at_t(ModelParams const& p, RunVars const& rv,
             // TODO TODO also experiment w/ subtracting spont from bouton_sims?
             // or maybe doing something like that in claws instead?
 
-            // TODO refactor to share w/ wAPLKC?
-            // TODO replace w/ -= syntax?
-            bouton_sims.col(t) = bouton_sims.col(t) - bouton_inh;
+            if (!p.pn.bouton_inh_divisive) {
+                // TODO refactor to share w/ wAPLKC?
+                // TODO replace w/ -= syntax?
+                bouton_sims.col(t) = bouton_sims.col(t) - bouton_inh;
+            } else {
+                // divisive (presynaptic gain reduction): r / (1 + max(i, 0))
+                bouton_sims.col(t) = (bouton_sims.col(t).array() /
+                    (1.0 + bouton_inh.array().max(0.0))
+                ).matrix();
+            }
             //
             // TODO refactor to share w/ wAPLKC below
             // TODO see other comment about `auto const` issue
@@ -2747,7 +2754,16 @@ void sim_KC_layer(
         // TODO TODO TODO check indexing of both sides of this
         // (maybe it's pn_drive that is wrong? if either. can't be, since we can
         // recreate claw_sims in python, at least when inhibition is disabled)
-        Eigen::VectorXd pn_drive_with_inh = pn_drive - kc_inh;
+        Eigen::VectorXd pn_drive_with_inh;
+        if (!p.kc.apl_inh_divisive) {
+            pn_drive_with_inh = pn_drive - kc_inh;
+        } else {
+            // divisive (shunting): x / (1 + max(i, 0))
+            check(kc_inh.size() == pn_drive.size());
+            pn_drive_with_inh = (
+                pn_drive.array() / (1.0 + kc_inh.array().max(0.0))
+            ).matrix();
+        }
 
         if (p.kc.wPNKC_one_row_per_claw) {
             if (!p.kc.claw_dynamics) {
