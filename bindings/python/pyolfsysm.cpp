@@ -84,7 +84,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wAPLPN_pretune_scale", &ModelParams::PN::wAPLPN_pretune_scale)
         .def_readwrite("wPNAPL_pretune_scale", &ModelParams::PN::wPNAPL_pretune_scale)
         .def_readwrite("bouton_ves_p", &ModelParams::PN::bouton_ves_p)
-        .def_readwrite("bouton_tau_r", &ModelParams::PN::bouton_tau_r);
+        .def_readwrite("bouton_tau_r", &ModelParams::PN::bouton_tau_r)
+        .def_readwrite("bouton_inh_divisive", &ModelParams::PN::bouton_inh_divisive);
 
     py::class_<ModelParams::PN::Noise>(m, "MPPNNoise")
         .def_readwrite("mean", &ModelParams::PN::Noise::mean)
@@ -132,6 +133,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("claw_pow", &ModelParams::KC::claw_pow)
         .def_readwrite("claw_pow_ref", &ModelParams::KC::claw_pow_ref)
         .def_readwrite("ext_inh_scale", &ModelParams::KC::ext_inh_scale)
+        .def_readwrite("apl_inh_divisive", &ModelParams::KC::apl_inh_divisive)
         .def_readwrite("ignore_ffapl", &ModelParams::KC::ignore_ffapl)
         .def_readwrite("fixed_thr", &ModelParams::KC::fixed_thr)
         .def_readwrite("n_claws_active_to_spike", &ModelParams::KC::n_claws_active_to_spike)

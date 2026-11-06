@@ -222,6 +222,16 @@ struct ModelParams {
         double bouton_ves_p;
         double bouton_tau_r;
 
+        /* Whether APL>bouton inhibition (preset_wAPLPN) is divisive (presynaptic gain
+         * reduction) rather than subtractive. If true, each bouton's rate r becomes
+         * r / (1 + max(i, 0)), where i is its APL inhibition (rv.pn.wAPLPN times APL
+         * activity at t-1, as in the subtractive form), instead of max(r - i, 0). It
+         * comes at the same point (after any bouton_ext_inh, before vesicle depletion
+         * and the bouton>claw transfer), and is active in every odor simulation,
+         * including those fit_sparseness tunes APL weights from. Only used if
+         * preset_wAPLPN. Default false (subtractive; outputs unchanged). */
+        bool bouton_inh_divisive;
+
         // TODO delete (/use)
         //double apl_taum;
         //double tau_apl2pn;
@@ -374,6 +384,17 @@ struct ModelParams {
          * without setting them again. Only used if either matrix is set (non-empty).
          * Must be finite and >= 0. Default 1. */
         double ext_inh_scale;
+
+        /* Whether APL>KC inhibition is divisive (shunting) rather than subtractive. If
+         * true, the PN>KC drive x of each claw (if wPNKC_one_row_per_claw=true) or KC
+         * becomes x / (1 + max(i, 0)), where i is its APL inhibition (rv.kc.wAPLKC times
+         * APL activity at t-1, or the per-unit form if n_apl_units > 1, as in the
+         * subtractive form), instead of x - i. It comes at the same point (before claw
+         * dynamics, the clipping of claws at 0 and any per-claw transfer), and is active
+         * in every odor simulation, including those fit_sparseness tunes APL weights
+         * from. Does not affect APL>bouton inhibition (see p.pn.bouton_inh_divisive).
+         * Default false (subtractive; outputs unchanged). */
+        bool apl_inh_divisive;
 
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */

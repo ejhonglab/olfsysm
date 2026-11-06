@@ -231,6 +231,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.pn.wPNAPL_pretune_scale = 1.0;
     p.pn.bouton_ves_p    = 0.0;
     p.pn.bouton_tau_r    = 0.2;
+    p.pn.bouton_inh_divisive = false;
 
     p.kc.N                     = 2000;
     p.kc.nclaws                = 6;
@@ -278,6 +279,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.claw_pow                 = 1.0;
     p.kc.claw_pow_ref             = 50.0;
     p.kc.ext_inh_scale            = 1.0;
+    p.kc.apl_inh_divisive         = false;
 
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
@@ -3232,6 +3234,11 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             ));
             rv.log(cat("p.pn.bouton_ves_p=", p.pn.bouton_ves_p, ", p.pn.bouton_tau_r=",
                 p.pn.bouton_tau_r
+            ));
+        }
+        if (p.kc.apl_inh_divisive || p.pn.bouton_inh_divisive) {
+            rv.log(cat("p.kc.apl_inh_divisive=", p.kc.apl_inh_divisive,
+                ", p.pn.bouton_inh_divisive=", p.pn.bouton_inh_divisive
             ));
         }
         rv.log(cat("p.kc.n_apl_units=", p.kc.n_apl_units));
