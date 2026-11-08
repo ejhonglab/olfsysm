@@ -130,6 +130,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("claw_sat_hard", &ModelParams::KC::claw_sat_hard)
         .def_readwrite("claw_thr", &ModelParams::KC::claw_thr)
         .def_readwrite("claw_thr_width", &ModelParams::KC::claw_thr_width)
+        .def_readwrite("claw_thr_subgain", &ModelParams::KC::claw_thr_subgain)
         .def_readwrite("claw_pow", &ModelParams::KC::claw_pow)
         .def_readwrite("claw_pow_ref", &ModelParams::KC::claw_pow_ref)
         .def_readwrite("ext_inh_scale", &ModelParams::KC::ext_inh_scale)

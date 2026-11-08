@@ -276,6 +276,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.claw_sat_hard            = false;
     p.kc.claw_thr                 = 0.0;
     p.kc.claw_thr_width           = 0.0;
+    p.kc.claw_thr_subgain         = 0.0;
     p.kc.claw_pow                 = 1.0;
     p.kc.claw_pow_ref             = 50.0;
     p.kc.ext_inh_scale            = 1.0;
@@ -691,17 +692,31 @@ Eigen::VectorXd duplicate_vals_for_each_subunit_id(Eigen::VectorXd unit_vec,
 // TODO any reason i can't use const for rv here? (seems ok so far...)
 // TODO expose to python bindings, to test? or unit test in new C++ unit tests?
 /* Per-claw transfer of the claw>soma input: the offset p.kc.claw_thr (rectified, or a
- * softplus knee if p.kc.claw_thr_width > 0), then the power transfer p.kc.claw_pow (about
+ * softplus knee if p.kc.claw_thr_width > 0), plus p.kc.claw_thr_subgain * min(max(x, 0),
+ * claw_thr) (the sub-threshold gain, if > 0), then the power transfer p.kc.claw_pow (about
  * p.kc.claw_pow_ref), and then the saturation p.kc.claw_sat. Returns `claws` unchanged if
  * all are off (claw_thr <= 0, claw_pow == 1, claw_sat <= 0). */
 Eigen::VectorXd saturate_claws(ModelParams const& p, Eigen::VectorXd const& claws_in) {
     Eigen::VectorXd claws = claws_in;
     if (p.kc.claw_thr > 0) {
+        double const g = p.kc.claw_thr_subgain;
         if (p.kc.claw_thr_width > 0) {
             // softplus knee of width w: w * log(1 + exp((x - thr) / w)); computed stably
             double const w = p.kc.claw_thr_width;
             Eigen::ArrayXd z = (claws.array() - p.kc.claw_thr) / w;
+            Eigen::ArrayXd sub;
+            if (g > 0) {
+                sub = g * claws.array().max(0.0).min(p.kc.claw_thr);
+            }
             claws = (w * (z.max(0.0) + (1.0 + (-z.abs()).exp()).log())).matrix();
+            if (g > 0) {
+                claws += sub.matrix();
+            }
+        } else if (g > 0) {
+            // max(x - thr, 0) + g * min(y, thr), w/ y = max(x, 0), written as
+            // y - (1 - g) * min(y, thr), so g = 1 gives y exactly (no rounding)
+            Eigen::ArrayXd y = claws.array().max(0.0);
+            claws = (y - (1.0 - g) * y.min(p.kc.claw_thr)).matrix();
         } else {
             claws = (claws.array() - p.kc.claw_thr).max(0.0).matrix();
         }
@@ -3271,8 +3286,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
             rv.log(cat("p.kc.claw_dynamics=", p.kc.claw_dynamics));
             rv.log(cat("p.kc.claw_sat=", p.kc.claw_sat, ", p.kc.claw_sat_hard=",
                 p.kc.claw_sat_hard, ", p.kc.claw_thr=", p.kc.claw_thr, ", p.kc.claw_thr_width=",
-                p.kc.claw_thr_width, ", p.kc.claw_pow=", p.kc.claw_pow, ", p.kc.claw_pow_ref=",
-                p.kc.claw_pow_ref
+                p.kc.claw_thr_width, ", p.kc.claw_thr_subgain=", p.kc.claw_thr_subgain,
+                ", p.kc.claw_pow=", p.kc.claw_pow, ", p.kc.claw_pow_ref=", p.kc.claw_pow_ref
             ));
         }
         if (use_kc_ext_inh(rv) || use_bouton_ext_inh(rv)) {
@@ -3341,11 +3356,13 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         check_kc_kc_inh(p, rv);
     }
 
-    // (claw_pow != 1 is also true for NaN)
-    if (p.kc.claw_sat != 0 || p.kc.claw_thr != 0 || p.kc.claw_pow != 1.0) {
+    // (claw_pow != 1 and claw_thr_subgain != 0 are also true for NaN)
+    if (p.kc.claw_sat != 0 || p.kc.claw_thr != 0 || p.kc.claw_pow != 1.0 ||
+            p.kc.claw_thr_subgain != 0) {
         check(p.kc.claw_sat >= 0);
         check(p.kc.claw_thr >= 0);
         check(p.kc.claw_thr_width >= 0);
+        check(std::isfinite(p.kc.claw_thr_subgain) && p.kc.claw_thr_subgain >= 0);
         check(std::isfinite(p.kc.claw_pow) && p.kc.claw_pow > 0);
         check(std::isfinite(p.kc.claw_pow_ref) && p.kc.claw_pow_ref > 0);
         check(p.kc.wPNKC_one_row_per_claw);

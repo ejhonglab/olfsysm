@@ -368,6 +368,16 @@ struct ModelParams {
          * tends to max(x - claw_thr, 0) as the width goes to 0) instead of the hard
          * rectification. Only used if claw_thr > 0. Default 0 (hard knee). */
         double claw_thr_width;
+        /* Sub-threshold gain g of the claw_thr knee: if > 0, g * min(max(x, 0), claw_thr)
+         * is added to the knee's output (hard or soft), before claw_pow / claw_sat. With
+         * the hard knee each claw's drive x then enters as g * max(x, 0) below claw_thr
+         * and g * claw_thr + (x - claw_thr) above it (continuous at the knee): g = 0 is
+         * the dead zone of max(x - claw_thr, 0), and g = 1 gives max(x, 0) (exactly; the
+         * same as claw_thr = 0 for the default non-negative claw drives). Applied wherever
+         * claw_thr is (spontaneous input and sim_KC_layer). Only used if claw_thr > 0 (the
+         * term is 0 for claw_thr = 0). Same scope / requirements as claw_sat. Must be
+         * finite and >= 0. Default 0 (outputs unchanged). */
+        double claw_thr_subgain;
         /* Supralinear (or sublinear) per-claw power transfer, applied after claw_thr (if
          * > 0) and before claw_sat (if > 0): if claw_pow != 1, each claw's drive y
          * (rectified, y = max(x, 0)) enters as claw_pow_ref * (y / claw_pow_ref)^claw_pow,
