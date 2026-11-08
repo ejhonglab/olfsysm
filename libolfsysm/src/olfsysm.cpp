@@ -341,6 +341,8 @@ ModelParams const DEFAULT_PARAMS = []() {
     // probably?)
     p.kc.apl_taum              = 0.05;
     p.kc.tau_apl2kc            = 0.01;
+    // the step at which a KC spike's drive to APL is as before (see olfsysm.hpp)
+    p.kc.apl_spike_ref_dt      = 0.5e-3;
 
     // TODO what's tau_r? for vesicle release?
     p.kc.tau_r                 = 1.0;
@@ -2875,6 +2877,11 @@ void sim_KC_layer(
                 // TODO use *= 1e4? matter? need to make sure we are multiplying by
                 // float type?
                 dIsdt_from_spiking = dIsdt_from_spiking * 1e4;
+                // a spike lasts one step: scale its drive so its effect on Is does not
+                // depend on the step (exactly 1 at p.time.dt == apl_spike_ref_dt)
+                if (p.kc.apl_spike_ref_dt > 0) {
+                    dIsdt_from_spiking *= p.kc.apl_spike_ref_dt / p.time.dt;
+                }
 
                 // TODO should i still try and see what happens when even KC spiking input
                 // to APL isn't filtered through this extra integration + decay? see if it
@@ -2974,7 +2981,10 @@ void sim_KC_layer(
                     claw_apl_input(claw) = rv.kc.wKCAPL(claw) *
                         kc_activity[rv.kc.claw_to_kc[claw]];
                 }
-                dIs_units_dt += 1e4 * (rv.kc.wKCAPL_units * claw_apl_input);
+                // as in the single-APL case, the spike drive does not depend on the step
+                double const spike_drive = p.kc.apl_spike_ref_dt > 0 ?
+                    1e4 * (p.kc.apl_spike_ref_dt / p.time.dt) : 1e4;
+                dIs_units_dt += spike_drive * (rv.kc.wKCAPL_units * claw_apl_input);
                 kc_apl_drive_units = Is.col(t-1);
             } else {
                 claw_apl_input = rv.kc.wKCAPL.transpose().cwiseProduct(
@@ -3355,6 +3365,8 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     if (p.kc.use_kc_kc_inh) {
         check_kc_kc_inh(p, rv);
     }
+
+    check(p.kc.apl_spike_ref_dt >= 0);
 
     // (claw_pow != 1 and claw_thr_subgain != 0 are also true for NaN)
     if (p.kc.claw_sat != 0 || p.kc.claw_thr != 0 || p.kc.claw_pow != 1.0 ||

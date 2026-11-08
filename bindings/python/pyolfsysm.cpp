@@ -159,6 +159,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("taum", &ModelParams::KC::taum)
         .def_readwrite("apl_taum", &ModelParams::KC::apl_taum)
         .def_readwrite("tau_apl2kc", &ModelParams::KC::tau_apl2kc)
+        .def_readwrite("apl_spike_ref_dt", &ModelParams::KC::apl_spike_ref_dt)
         .def_readwrite("tau_r", &ModelParams::KC::tau_r)
         .def_readwrite("ves_p", &ModelParams::KC::ves_p)
         // TODO add one for save_bouton_sims?

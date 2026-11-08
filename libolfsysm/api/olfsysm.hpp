@@ -500,6 +500,16 @@ struct ModelParams {
         double apl_taum;
         double tau_apl2kc;
 
+        /* Only used when APL is driven by KC spikes (pn_claw_to_apl=false). A KC spike
+         * lasts one time step and drives the KC>APL current Is with wKCAPL * 1e4 for that
+         * step, so each spike's total increment of Is would be proportional to
+         * p.time.dt. With apl_spike_ref_dt > 0, the per-spike drive is multiplied by
+         * apl_spike_ref_dt / p.time.dt, which makes each spike's increment of Is
+         * (wKCAPL * 1e4 * apl_spike_ref_dt / tau_apl2kc) the same for every step, and
+         * leaves the outputs bit-identical at p.time.dt == apl_spike_ref_dt. Default 0.5e-3
+         * (the default step); 0 restores the old, step-dependent drive. */
+        double apl_spike_ref_dt;
+
         /* Synaptic depression params; see Hennig 2013 equation 3. Synaptic
          * depression can be disabled by setting ves_p = 0. */
         // TODO TODO say for which synapse this applies to (PN>KC? KC>APL?)
