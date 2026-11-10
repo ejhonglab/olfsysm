@@ -247,9 +247,6 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.wAPLKC_pretune_scale  = 1.0;
     p.kc.wKCAPL_pretune_scale  = 1.0;
 
-    // TODO TODO is there actually a refractory period at all (no)? add one, if not?
-    // if unclear, add test driving w/ arbitrarily strong ORN input? (+ check that gets
-    // preserved thru PNs -> check min spike-to-spike time)
     // TODO is Vm resetting also typically done in integrate-and-fire models (should be,
     // right?), or was that a hack to add something like a refractory period here?
     // change anything about how the resetting is done?
@@ -281,6 +278,11 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.claw_pow_ref             = 50.0;
     p.kc.ext_inh_scale            = 1.0;
     p.kc.apl_inh_divisive         = false;
+    // no refractory period and no adaptation: after a spike Vm is reset to 0 and
+    // integration resumes at the next step
+    p.kc.refractory_period        = 0.0;
+    p.kc.adapt_inc                = 0.0;
+    p.kc.adapt_tau                = 0.2;
 
     p.kc.ignore_ffapl             = false;
     p.kc.fixed_thr                = 0;
@@ -956,6 +958,32 @@ void check_ext_inh(ModelParams const& p, RunVars const& rv) {
         check(w.allFinite());
         check(w.minCoeff() >= 0);
     }
+}
+
+/* Checks the KC refractory period and spike-frequency adaptation parameters
+ * (p.kc.refractory_period, p.kc.adapt_inc, p.kc.adapt_tau). */
+void check_kc_spiking(ModelParams const& p) {
+    // (also false for NaN)
+    check(std::isfinite(p.kc.refractory_period) && p.kc.refractory_period >= 0);
+    check(std::isfinite(p.kc.adapt_inc) && p.kc.adapt_inc >= 0);
+    if (p.kc.adapt_inc > 0) {
+        check(std::isfinite(p.kc.adapt_tau) && p.kc.adapt_tau > 0);
+        // (adaptation raises the somatic threshold, which does not determine spiking if
+        // n_claws_active_to_spike > 0)
+        check(p.kc.n_claws_active_to_spike <= 0);
+    }
+}
+
+/* Number of steps after a KC spike during which the KC is refractory (Vm held at 0, no
+ * spike possible): ceil(refractory_period / dt) - 1, so the next spike is at least
+ * refractory_period after the last one; 0 (no change) for refractory_period <= dt. */
+unsigned kc_refractory_steps(ModelParams const& p) {
+    if (!(p.kc.refractory_period > 0)) {
+        return 0;
+    }
+    // (the small tolerance keeps e.g. 3e-3 / 0.5e-3 at 6 steps despite rounding)
+    double const n = std::ceil(p.kc.refractory_period / p.time.dt - 1e-9);
+    return n > 1 ? unsigned(n) - 1 : 0;
 }
 
 void split_regular_csv(std::string const& str, std::vector<std::string>& vec) {
@@ -1866,6 +1894,7 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     }
     // (as in run_KC_sims, since fit_sparseness can also be called directly)
     check_ext_inh(p, rv);
+    check_kc_spiking(p);
 
     // TODO check weights up here too in any cases? just preset_*? checked below in
     // what should be all cases, but only after a bit of monkeying w/ weights
@@ -2697,6 +2726,23 @@ void sim_KC_layer(
     }
     double const kc_kc_decay = 1.0 - p.time.dt / p.kc.kc_kc_tau;
 
+    // refractory period and spike-frequency adaptation (see p.kc.refractory_period,
+    // p.kc.adapt_inc): the steps each KC is still refractory for, and each KC's
+    // adaptation variable (its threshold is thr + adapt * |thr|)
+    unsigned const refr_steps = kc_refractory_steps(p);
+    bool const kc_refractory = refr_steps > 0;
+    bool const kc_adapt = p.kc.adapt_inc > 0;
+    std::vector<unsigned> refr_left;
+    if (kc_refractory) {
+        refr_left.assign(p.kc.N, 0);
+    }
+    Column kc_adaptation;
+    double kc_adapt_decay = 1.0;
+    if (kc_adapt) {
+        kc_adaptation = Column::Zero(p.kc.N, 1);
+        kc_adapt_decay = std::exp(-p.time.dt / p.kc.adapt_tau);
+    }
+
     // vesicle depletion at PN boutons (see p.pn.bouton_ves_p): available pool fraction
     // and un-depleted (release-driving) rate of each bouton at the previous step, both
     // starting at the steady state for spontaneous activity
@@ -3080,8 +3126,35 @@ void sim_KC_layer(
              nves.col(t-1).array()).matrix()
         );
 
+        if (kc_adapt) {
+            // (a spike at t-1 raises the KC's threshold from step t on)
+            kc_adaptation = kc_adapt_decay * kc_adaptation +
+                p.kc.adapt_inc * spikes.col(t-1);
+        }
+
         // TODO <= 0 for consistency?
-        if (p.kc.n_claws_active_to_spike < 0) {
+        if (p.kc.n_claws_active_to_spike < 0 && (kc_refractory || kc_adapt)) {
+            // (as the branch below, KC by KC: a refractory KC is held at 0 and cannot
+            // spike, and an adapted KC's threshold is raised in units of itself)
+            for (unsigned i = 0; i < p.kc.N; i++) {
+                if (kc_refractory && refr_left[i] > 0) {
+                    Vm(i, t) = 0.0;
+                    refr_left[i]--;
+                    continue;
+                }
+                double thr_i = rv.kc.thr(i);
+                if (kc_adapt) {
+                    thr_i += kc_adaptation(i) * std::abs(thr_i);
+                }
+                if (Vm(i, t) > thr_i) {
+                    spikes(i, t) = 1.0;
+                    Vm(i, t) = 0.0;
+                    if (kc_refractory) {
+                        refr_left[i] = refr_steps;
+                    }
+                }
+            }
+        } else if (p.kc.n_claws_active_to_spike < 0) {
             //auto const thr_comp = Vm.col(t).array() > rv.kc.thr.array();
             // TODO fix: (same issue if Row instead of Column)
             // libolfsysm/include/Eigen/src/Core/util/XprHelper.h:816:96: error:
@@ -3099,13 +3172,8 @@ void sim_KC_layer(
             // TODO de-dupe after fixing
             // either go to 1 or _stay_ at 0.
             spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-            // TODO TODO actually implement a refractory period (3ms in Ann's
-            // model, i believe)? at least check we aren't getting spikes at shorter
-            // intervals than that parameter (add mp.kc.refactory_period_ms for this?),
-            // even if not implemented?
-            // TODO need to store separate vector (length KCs) of last spike time,
-            // in order to implement?
-            //
+            // (no refractory period here: see p.kc.refractory_period and the branch
+            // above)
             // very abrupt repolarization!
             Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
             //
@@ -3126,21 +3194,37 @@ void sim_KC_layer(
                 rv, claw_thr_comp.cast<double>()
             );
 
-            // TODO see other comment about `auto const` issue
-            auto const thr_comp = n_claws_active.array() >= p.kc.n_claws_active_to_spike;
-            //auto const thr_comp = (n_claws_active.array() >= p.kc.n_claws_active_to_spike).eval();
+            if (kc_refractory) {
+                // (only blocks spikes of refractory KCs, holding their Vm at 0, as in
+                // the per-KC branch above)
+                for (unsigned i = 0; i < p.kc.N; i++) {
+                    if (refr_left[i] > 0) {
+                        Vm(i, t) = 0.0;
+                        refr_left[i]--;
+                    } else if (n_claws_active(i) >= p.kc.n_claws_active_to_spike) {
+                        spikes(i, t) = 1.0;
+                        Vm(i, t) = 0.0;
+                        refr_left[i] = refr_steps;
+                    }
+                }
+            } else {
+                // TODO see other comment about `auto const` issue
+                auto const thr_comp =
+                    n_claws_active.array() >= p.kc.n_claws_active_to_spike;
+                //auto const thr_comp = (n_claws_active.array() >= p.kc.n_claws_active_to_spike).eval();
 
-            // TODO TODO de-dupe after fixing (these last two lines are same as in
-            // above. any issue w/ moving below conditional? was it just thr_comp def
-            // that had an issue?)
-            // either go to 1 or _stay_ at 0.
-            spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
-            // TODO TODO just have Vm entirely undefined in this case (all NaN/0 or
-            // something)? still used for anything (would prob be incorrect if
-            // so...)?
-            // very abrupt repolarization!
-            Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
-            //
+                // TODO TODO de-dupe after fixing (these last two lines are same as in
+                // above. any issue w/ moving below conditional? was it just thr_comp def
+                // that had an issue?)
+                // either go to 1 or _stay_ at 0.
+                spikes.col(t) = thr_comp.select(1.0, spikes.col(t));
+                // TODO TODO just have Vm entirely undefined in this case (all NaN/0 or
+                // something)? still used for anything (would prob be incorrect if
+                // so...)?
+                // very abrupt repolarization!
+                Vm.col(t) = thr_comp.select(0.0, Vm.col(t));
+                //
+            }
 
             // TODO also want to de/re-polarize claws? make sense (w/ and w/o?)?
         }
@@ -3289,6 +3373,13 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 ", rv.kc.wKCKC.sum()=", rv.kc.wKCKC.sum()
             ));
         }
+        // (only if not the defaults, so the logs of other models do not change)
+        if (p.kc.refractory_period != 0 || p.kc.adapt_inc != 0) {
+            rv.log(cat("p.kc.refractory_period=", p.kc.refractory_period,
+                " (", kc_refractory_steps(p), " steps), p.kc.adapt_inc=", p.kc.adapt_inc,
+                ", p.kc.adapt_tau=", p.kc.adapt_tau
+            ));
+        }
         rv.log(cat("p.kc.wPNKC_one_row_per_claw=", p.kc.wPNKC_one_row_per_claw));
         if (p.kc.wPNKC_one_row_per_claw) {
             rv.log(cat("p.kc.allow_net_inh_per_claw=", p.kc.allow_net_inh_per_claw));
@@ -3390,6 +3481,7 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
     }
 
     check_ext_inh(p, rv);
+    check_kc_spiking(p);
 
     if (p.kc.n_claws_active_to_spike != -1) {
         check(p.kc.n_claws_active_to_spike > 0);

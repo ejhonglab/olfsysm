@@ -406,6 +406,29 @@ struct ModelParams {
          * Default false (subtractive; outputs unchanged). */
         bool apl_inh_divisive;
 
+        /* Absolute refractory period (seconds) of each KC: after a spike at step t0 the
+         * KC's potential Vm is held at its reset value (0) and no spike can occur at steps
+         * t0+1 .. t0+n-1, where n = ceil(refractory_period / p.time.dt) (so no two spikes
+         * of one KC are closer than refractory_period, rounded up to whole steps; values
+         * <= p.time.dt change nothing). Acts in every KC simulation (sim_KC_layer: the
+         * odor simulations and every tuning loop of fit_sparseness). With
+         * n_claws_active_to_spike > 0 (spiking not set by Vm) it only blocks spikes. Must
+         * be finite and >= 0. Default 0 (off; outputs unchanged). */
+        double refractory_period;
+        /* Spike-frequency adaptation of each KC: a per-KC variable a (dimensionless, 0 at
+         * the start of every odor simulation) that each of the KC's spikes raises by
+         * adapt_inc and that decays with time constant adapt_tau (seconds), stepped as
+         *   a(t) = exp(-p.time.dt / adapt_tau) * a(t-1) + adapt_inc * spike(t-1)
+         * (exact decay between steps, so a spike raises the threshold from the next step
+         * on). The KC spikes when Vm > thr + a * |thr|, i.e. its threshold rv.kc.thr is
+         * raised in units of itself (thr * (1 + a) for the usual positive thresholds), so
+         * adapt_inc keeps its meaning when thresholds are re-tuned. Acts wherever
+         * refractory_period does. Requires n_claws_active_to_spike <= 0. adapt_inc must be
+         * finite and >= 0, and, if > 0, adapt_tau finite and > 0. Defaults adapt_inc 0
+         * (off; outputs unchanged) and adapt_tau 0.2. */
+        double adapt_inc;
+        double adapt_tau;
+
         /* Ignore the FFAPL during KC simulation, even if run_FFAPL_sims has
          * been called. */
         bool ignore_ffapl;
