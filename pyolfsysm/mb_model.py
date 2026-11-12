@@ -135,8 +135,8 @@ from hong2p.pandas import stack_keep_na, stack_drop_na
 from hong2p.viz import (diverging_cmap, diverging_cmap_kwargs, plot_corr,
     plot_responses_and_corr, rotate_xticklabels, cluster_rois
 )
-# only used by this module (to move with it, out of al_analysis)
-from al_analysis.al_util import (odor_is_megamat, megamat_odor_names, remy_data_dir,
+# (formerly in al_analysis's al_util)
+from pyolfsysm.util import (odor_is_megamat, megamat_odor_names, remy_data_dir,
     remy_binary_response_dir, remy_megamat_sparsity, remy_date_col, remy_fly_cols,
     remy_fly_id, remy_fly_binary_response_fname, load_remy_fly_binary_responses,
     load_remy_megamat_kc_binary_responses, data_root, sent_to_remy, _have_fly_cols,
@@ -19716,13 +19716,16 @@ def model_provenance(**inputs) -> Dict[str, Any]:
 
     Returns a JSON-serializable dict: 'timestamp', 'host', 'platform', 'cpu', 'python',
     'packages' (versions), 'olfsysm' ('build' = `olfsysm_build_info()`, 'checkout' =
-    `olfsysm_checkout_info()`, 'clean', 'problems', 'allowed_dirty_by_env'),
-    'al_analysis' and 'hong2p' (`repo_info`), and 'inputs'.
+    `olfsysm_checkout_info()`, 'clean', 'problems', 'allowed_dirty_by_env'), 'pyolfsysm'
+    (`repo_info` of this package's checkout: the olfsysm repository, at the commit whose
+    Python code ran, with the diff of uncommitted changes), 'hong2p' (`repo_info`),
+    'al_analysis' (`repo_info`, only when al_analysis has been imported, e.g. when it runs
+    the model) and 'inputs'.
     """
     import platform
-    import al_analysis
     import hong2p
     import olfsysm
+    import pyolfsysm
     import scipy
     problems = olfsysm_clean_problems()
     hashed = {}
@@ -19741,7 +19744,11 @@ def model_provenance(**inputs) -> Dict[str, Any]:
             clean=len(problems) == 0, problems=problems,
             allowed_dirty_by_env=os.environ.get(ALLOW_DIRTY_OLFSYSM_ENV_VAR) or None,
         ),
-        al_analysis=repo_info(al_analysis), hong2p=repo_info(hong2p), inputs=hashed,
+        pyolfsysm=repo_info(pyolfsysm), hong2p=repo_info(hong2p),
+        # (not imported here: this package does not depend on al_analysis)
+        **({'al_analysis': repo_info(sys.modules['al_analysis'])}
+            if 'al_analysis' in sys.modules else {}),
+        inputs=hashed,
     )
 
 

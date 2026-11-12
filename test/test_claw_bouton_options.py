@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from al_analysis.mb_model import (connectome_wPNKC, claw2bouton_from_wPNKC, KC_ID, CLAW_ID,
+from pyolfsysm.mb_model import (connectome_wPNKC, claw2bouton_from_wPNKC, KC_ID, CLAW_ID,
     PN_ID, BOUTON_ID
 )
 
@@ -188,7 +188,7 @@ def test_fit_mb_model_runs_with_options(kws):
     returns has the option's properties. Guards the one-row-per-claw weight checks inside
     `fit_mb_model`, which the `connectome_wPNKC` tests above do not reach.
     """
-    from al_analysis.mb_model import fit_mb_model, megamat_orn_deltas
+    from pyolfsysm.mb_model import fit_mb_model, megamat_orn_deltas
 
     orn = megamat_orn_deltas().iloc[:, :4]
     responses, spike_counts, wPNKC, params = fit_mb_model(orn, fixed_thr=100.0, wAPLKC=0.1,

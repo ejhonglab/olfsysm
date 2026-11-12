@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from al_analysis.mb_model import (KC_ID, KC_TYPE, CLAW_ID, connectome_wPNKC,
+from pyolfsysm.mb_model import (KC_ID, KC_TYPE, CLAW_ID, connectome_wPNKC,
     get_connectome_wPNKC_params
 )
 

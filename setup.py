@@ -273,6 +273,29 @@ setup(
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
 
+    # the model's Python side (moved from al_analysis, 2026-11), with the data it reads
+    packages=['pyolfsysm'],
+    package_data={'pyolfsysm': ['data/**/*']},
+    python_requires='>=3.8',
+    # Only pyolfsysm needs these (the extension itself needs nothing). hong2p and natmix are
+    # not on PyPI: install them from GitHub first (al_analysis's requirements, or
+    # `pip install 'hong2p[all] @ git+https://github.com/ejhonglab/hong2p'` and
+    # `pip install 'natmix @ git+https://github.com/ejhonglab/natmix'`). They are named
+    # without a URL here, so installing this package never replaces an existing (e.g.
+    # editable) install of them.
+    install_requires=[
+        'numpy', 'pandas', 'scipy', 'xarray', 'netCDF4', 'matplotlib', 'seaborn',
+        'scikit-learn', 'statsmodels', 'rastermap', 'colorcet', 'tqdm', 'termcolor',
+        'pyarrow', 'openpyxl', 'drosolf', 'hong2p', 'natmix',
+        # importlib.resources.files was added in Python 3.9
+        "importlib_resources; python_version < '3.9'",
+    ],
+    extras_require={'dev': ['pytest >= 8.3.5']},
+    entry_points={'console_scripts': [
+        'plot-dynamics = pyolfsysm.mb_model:load_and_plot_dynamics_cli',
+        'step_model_pn_apl = pyolfsysm.step_model_pn_apl:main',
+    ]},
+
     # so that hc_data.csv, which is also referenced in MANIFEST.csv (in order for this
     # to work), is installed too
     # TODO TODO how to make sure we can actually reference hc_data.csv in C++ code?

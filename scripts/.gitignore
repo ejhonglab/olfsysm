@@ -1,0 +1,11 @@
+# outputs of the scripts here, when run from this directory
+# - model_private_odors_for_kai_grant.py, model_george_valence_panel.py
+*_outputs/
+# sim_hh_kcs.py
+*_output/
+# benchmark_xarray_io.py
+xarray_netcdf_io_bench.csv
+# boost_apl_megamat_model_multiresponders.py
+megamat_multiresponder_apl_boost/
+# step_model_pn_apl
+PNAPL_stepping/

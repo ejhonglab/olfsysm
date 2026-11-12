@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for shuffled PN->KC connectivity (`al_analysis.wpnkc_shuffles`).
+"""Tests for shuffled PN->KC connectivity (`pyolfsysm.wpnkc_shuffles`).
 """
 
 from itertools import product
@@ -9,10 +9,10 @@ import pandas as pd
 import pytest
 from scipy.stats import chisquare
 
-from al_analysis.mb_model import (connectome_wPNKC, fit_mb_model, megamat_orn_deltas,
+from pyolfsysm.mb_model import (connectome_wPNKC, fit_mb_model, megamat_orn_deltas,
     KC_ID, KC_TYPE, CLAW_ID
 )
-from al_analysis.wpnkc_shuffles import (shuffle_wPNKC, curveball, wPNKC_shuffle_summary,
+from pyolfsysm.wpnkc_shuffles import (shuffle_wPNKC, curveball, wPNKC_shuffle_summary,
     shuffled_wPNKC, SHUFFLE_METHODS, NAMED_SHUFFLES
 )
 
@@ -368,7 +368,7 @@ def _small_claw_wPNKC(multi_columns: bool) -> pd.DataFrame:
 
 @pytest.mark.parametrize('multi_columns', [False, True])
 def test_coinput_counts_small(multi_columns):
-    from al_analysis.wpnkc_shuffles import coinput_counts
+    from pyolfsysm.wpnkc_shuffles import coinput_counts
 
     co = coinput_counts(_small_claw_wPNKC(multi_columns))
     expected = pd.DataFrame([[2, 2, 0], [2, 3, 1], [0, 1, 1]], index=['A', 'B', 'C'],
@@ -379,7 +379,7 @@ def test_coinput_counts_small(multi_columns):
 
 
 def test_coinput_counts_hemibrain(wPNKCs):
-    from al_analysis.wpnkc_shuffles import coinput_counts
+    from pyolfsysm.wpnkc_shuffles import coinput_counts
 
     wPNKC = wPNKCs['claw']
     co = coinput_counts(wPNKC)
@@ -395,7 +395,7 @@ def test_coinput_counts_hemibrain(wPNKCs):
 
 @pytest.mark.parametrize('within_kc_type', [True, False])
 def test_lesion_coinput(wPNKCs, within_kc_type):
-    from al_analysis.wpnkc_shuffles import coinput_counts, lesion_coinput
+    from pyolfsysm.wpnkc_shuffles import coinput_counts, lesion_coinput
 
     wPNKC = wPNKCs['claw']
     co = coinput_counts(wPNKC)
@@ -444,7 +444,7 @@ def test_lesion_coinput(wPNKCs, within_kc_type):
 
 
 def test_lesion_coinput_errors(wPNKCs):
-    from al_analysis.wpnkc_shuffles import lesion_coinput
+    from pyolfsysm.wpnkc_shuffles import lesion_coinput
 
     with pytest.raises(ValueError, match='one-row-per-claw'):
         lesion_coinput(wPNKCs['kc'], {('DM1', 'DM4'): 0})
@@ -460,7 +460,7 @@ def test_lesion_coinput_errors(wPNKCs):
 def test_lesion_coinput_raise(wPNKCs, within_kc_type):
     """A target above the current count raises the pair's shared-KC count by claw swaps
     that keep every margin, with other listed pairs not gaining and protected pairs unchanged."""
-    from al_analysis.wpnkc_shuffles import coinput_counts, lesion_coinput, shuffle_wPNKC
+    from pyolfsysm.wpnkc_shuffles import coinput_counts, lesion_coinput, shuffle_wPNKC
 
     wPNKC = wPNKCs['claw']
     co = coinput_counts(wPNKC)
@@ -502,7 +502,7 @@ def test_lesion_coinput_raise(wPNKCs, within_kc_type):
 def test_match_coinput(wPNKCs):
     """Annealed same-type claw swaps bring a within-type Curveball draw's pairwise shared-KC
     counts toward the real wiring's, keeping every margin, without rebuilding the real wiring."""
-    from al_analysis.wpnkc_shuffles import coinput_counts, match_coinput, shuffle_wPNKC
+    from pyolfsysm.wpnkc_shuffles import coinput_counts, match_coinput, shuffle_wPNKC
 
     wPNKC = wPNKCs['claw']
     shuffled = shuffle_wPNKC(wPNKC, 'curveball', within_kc_type=True, seed=1)
@@ -536,7 +536,7 @@ def test_match_coinput(wPNKCs):
 
 
 def test_match_coinput_errors(wPNKCs):
-    from al_analysis.wpnkc_shuffles import match_coinput
+    from pyolfsysm.wpnkc_shuffles import match_coinput
 
     with pytest.raises(ValueError, match='one-row-per-claw'):
         match_coinput(wPNKCs['kc'], wPNKCs['kc'])
@@ -561,7 +561,7 @@ def _check_margins(orig: pd.DataFrame, new: pd.DataFrame, within_kc_type: bool) 
 
 @pytest.mark.parametrize('within_kc_type', [True, False])
 def test_redraw_kc_subset(wPNKCs, within_kc_type):
-    from al_analysis.wpnkc_shuffles import redraw_kc_subset
+    from pyolfsysm.wpnkc_shuffles import redraw_kc_subset
 
     wPNKC = wPNKCs['claw']
     kcs = _subset(wPNKC, 25)
@@ -606,7 +606,7 @@ def test_redraw_kc_subset(wPNKCs, within_kc_type):
 
 @pytest.mark.parametrize('within_kc_type', [True, False])
 def test_restore_kc_subset(wPNKCs, within_kc_type):
-    from al_analysis.wpnkc_shuffles import redraw_kc_subset, restore_kc_subset
+    from pyolfsysm.wpnkc_shuffles import redraw_kc_subset, restore_kc_subset
 
     wPNKC = wPNKCs['claw']
     kcs = _subset(wPNKC, 25)
@@ -643,7 +643,7 @@ def test_restore_kc_subset(wPNKCs, within_kc_type):
 
 
 def test_subset_errors(wPNKCs):
-    from al_analysis.wpnkc_shuffles import redraw_kc_subset, restore_kc_subset
+    from pyolfsysm.wpnkc_shuffles import redraw_kc_subset, restore_kc_subset
 
     with pytest.raises(ValueError, match='one-row-per-claw'):
         redraw_kc_subset(wPNKCs['kc'], [])

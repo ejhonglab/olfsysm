@@ -14,9 +14,11 @@ from tqdm import tqdm
 from hong2p.pandas import pd_allclose, addlevel
 from hong2p.olf import parse_odor_name
 
-from al_analysis import al_util
-from al_analysis.al_util import warn, savefig, read_csv, read_parquet, to_csv, data_root
-from al_analysis.mb_model import (megamat_orn_deltas, fit_and_plot_mb_model,
+from hong2p import io as hong2p_io
+from hong2p.io import savefig, read_csv, read_parquet, to_csv
+from hong2p.util import warn
+from pyolfsysm.util import data_root
+from pyolfsysm.mb_model import (megamat_orn_deltas, fit_and_plot_mb_model,
     megamat_orn_deltas, get_thr_and_APL_weights, format_model_params, abbrev_model_id,
     dict_seq_product, read_model_output, KC_TYPE
 )
@@ -129,7 +131,7 @@ def main():
     plot_root.mkdir(exist_ok=True)
 
     # TODO avoid need to set this to see plots being saved
-    al_util.verbose = True
+    hong2p_io.verbose = True
 
     model_strs = [format_model_params(x) for x in model_tune_kws]
     model_str2abbrev = {m: abbrev_model_id(m) for m in model_strs}

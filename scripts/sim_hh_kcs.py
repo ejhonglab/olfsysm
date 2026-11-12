@@ -12,9 +12,10 @@ import matplotlib.pyplot as plt
 
 from hong2p.xarray import load_dataarray
 
-from al_analysis import al_util
-from al_analysis.al_util import warn, savefig
-from al_analysis.mb_model import (plot_spike_rasters, summarize_isi, REFRACTORY_PERIOD,
+from hong2p import io as hong2p_io
+from hong2p.io import savefig
+from hong2p.util import warn
+from pyolfsysm.mb_model import (plot_spike_rasters, summarize_isi, REFRACTORY_PERIOD,
     get_odor_fname_suffix
 )
 
@@ -26,7 +27,7 @@ def main():
     refractory period then upsampling. Plots saved under `hh_output` (next to this
     script).
     """
-    al_util.verbose = True
+    hong2p_io.verbose = True
 
     script_path = Path(__file__).resolve().parent
 

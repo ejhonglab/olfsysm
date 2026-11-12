@@ -12,7 +12,7 @@ import olfsysm as osm
 
 from hong2p.types import ParamDict
 
-from al_analysis.mb_model import (fit_mb_model, megamat_orn_deltas,
+from pyolfsysm.mb_model import (fit_mb_model, megamat_orn_deltas,
     make_fixed_param_kc_simulator, fixed_params_to_fit_mb_model_kws, format_model_params,
     onestep_lr_cache_key, assert_fit_outputs_equal, optimize_mb_model_params,
     max_apl_unit_coupling, APL_DYNAMICS_PARAMS, apl_dynamics_param_dict, _get_fixed_params,

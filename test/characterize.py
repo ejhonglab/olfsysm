@@ -3,8 +3,8 @@
 The characterization tests freeze outputs of the current code (tables, tuned
 parameters, printed summaries) under `test_data/characterization/`, so that later
 refactors (moving the model code to olfsysm, the output helpers to hong2p) can be checked
-against them. This module has no dependency on al_analysis, so a copy of it can move with
-the tests that use it.
+against them. This module depends on neither al_analysis nor pyolfsysm; al_analysis's tests
+have their own copy (it moved here with the model's tests, 2026-11).
 
 To (re)generate the frozen outputs, run the tests with `CHARACTERIZE_REGEN=1`, e.g.:
 ```

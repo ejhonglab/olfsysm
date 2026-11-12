@@ -34,8 +34,8 @@ import xarray as xr
 
 from hong2p.types import ParamDict
 
-from al_analysis.al_util import savefig, to_csv, to_parquet
-from al_analysis.mb_model import (megamat_orn_deltas, fit_mb_model,
+from hong2p.io import savefig, to_csv, to_parquet
+from pyolfsysm.mb_model import (megamat_orn_deltas, fit_mb_model,
     make_fixed_param_kc_simulator, fixed_params_to_fit_mb_model_kws, make_kc_data_loss,
     remy_megamat_kc_targets, plot_apl_activity_sections, format_model_params, APL_UNIT
 )

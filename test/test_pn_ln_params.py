@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import olfsysm as osm
 
-from al_analysis.mb_model import (fit_mb_model, megamat_orn_deltas, AL_INH_PARAMS,
+from pyolfsysm.mb_model import (fit_mb_model, megamat_orn_deltas, AL_INH_PARAMS,
     format_model_params, make_fixed_param_kc_simulator,
     fixed_params_to_fit_mb_model_kws, onestep_lr_cache_key, get_time_index
 )

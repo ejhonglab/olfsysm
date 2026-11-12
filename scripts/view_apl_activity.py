@@ -27,9 +27,9 @@ import xarray as xr
 
 from hong2p.types import ParamDict
 
-from al_analysis import al_util
-from al_analysis.al_util import savefig
-from al_analysis.mb_model import (APL_UNIT, megamat_orn_deltas, fit_and_plot_mb_model,
+from hong2p import io as hong2p_io
+from hong2p.io import savefig
+from pyolfsysm.mb_model import (APL_UNIT, megamat_orn_deltas, fit_and_plot_mb_model,
     fit_mb_model, get_thr_and_APL_weights, load_apl_points, load_dynamics,
     plot_apl_activity_sections, view_apl_activity_3d, format_model_params
 )
@@ -175,7 +175,7 @@ def main():
                 'pass --no-show to only save plots'
             )
 
-    al_util.verbose = True
+    hong2p_io.verbose = True
 
     plot_root = args.output_dir.resolve()
     plot_root.mkdir(exist_ok=True, parents=True)

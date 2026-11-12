@@ -7,7 +7,7 @@ indexed an empty vector inside the parallel region (`IndexError: vector::_M_rang
 import numpy as np
 import pytest
 
-from al_analysis.mb_model import fit_mb_model, megamat_orn_deltas, get_sim_var
+from pyolfsysm.mb_model import fit_mb_model, megamat_orn_deltas, get_sim_var
 
 
 pytestmark = pytest.mark.filterwarnings('ignore::UserWarning')

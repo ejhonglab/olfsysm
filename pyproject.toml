@@ -1,3 +1,86 @@
 [build-system]
 requires = ["setuptools >= 75.3.4", "pybind11 >= 2.2"]
 build-backend = "setuptools.build_meta"
+
+# Tests of the C++ model and of pyolfsysm (moved from al_analysis, 2026-11, with the same
+# settings). Run from the repository root, with QUICK=1 to skip most model cases:
+# `QUICK=1 ./venv/bin/python -m pytest`
+[tool.pytest.ini_options]
+minversion = "8.3.5"
+# NOTE: --pdbcls needs IPython installed (only when a debugger is entered)
+addopts = "--no-header -q --tb=short --pdbcls=IPython.terminal.debugger:TerminalPdb -s -vv"
+testpaths = [
+    "test",
+]
+# pytest's builtin tmp_path fixture will create temp dirs under /tmp/pytest-of-<user>,
+# and default retention policy ("all") does not clear their contents. The "none"
+# retention policy will remove all of these temp dirs after test completion, regardless
+# of test failure/success (test_mb_model.py writes many model outputs there).
+# NOTE: override by adding `-o tmp_path_retention_policy=all` to pytest CLI args.
+tmp_path_retention_policy = "none"
+filterwarnings = [
+    # xarray==0.19 with modern setuptools (probably anything more recent than about
+    # 60-64) will cause these warnings when pytest is collecting tests
+    'ignore:distutils Version classes are deprecated. Use packaging.version instead.:DeprecationWarning',
+    'ignore:pkg_resources is deprecated as an API.:DeprecationWarning',
+    'ignore:Deprecated call to `pkg_resources.declare_namespace:DeprecationWarning',
+]
+
+# Plain `pytest` just runs in the current environment. `tox` runs the tests in all of
+# the envs below (`tox -e py38` / `tox -e current` for just one). Extra args after `--`
+# are passed to pytest, e.g. `QUICK=1 tox -e py38 -- -k test_vector_thr`. Requires
+# `pip install tox tox-uv` (tox-uv will download python 3.8 if needed).
+[tool.tox]
+requires = ["tox >= 4.21", "tox-uv"]
+env_list = ["py38", "current"]
+
+[tool.tox.env_run_base]
+# tox otherwise strips most env vars. QUICK/PLOT used by test_mb_model.py, HONG2P_* /
+# HONG_NAS used by hong2p to find data.
+pass_env = [
+    "QUICK", "PLOT", "HONG2P_*", "HONG_NAS", "MB_MODEL_USE_LR_CACHE", "HARDCODE_LR",
+]
+
+[tool.tox.env_run_base.set_env]
+# breakpoint() calls are disabled by default (they would otherwise fail tests in
+# `tox -p` runs, which have no stdin). set TOX_PYTHONBREAKPOINT (e.g. =ipdb.set_trace)
+# in calling environment to override.
+PYTHONBREAKPOINT = "{env:TOX_PYTHONBREAKPOINT:0}"
+# separate pytest temp root for each env, so concurrent runs don't delete each other's
+# tmp_path dirs
+PYTEST_DEBUG_TEMPROOT = "{env_tmp_dir}"
+
+# Oldest supported versions: python 3.8 + the pins of al_analysis's Python 3.8
+# environment (its requirements-py38-test.txt, in the al_analysis checkout beside this
+# one), which cover pyolfsysm's dependencies.
+[tool.tox.env.py38]
+base_python = ["python3.8"]
+skip_install = true
+# so pip is available for commands_pre
+uv_seed = true
+deps = ["-r {tox_root}/../al_analysis/requirements-py38-test.txt"]
+# Local checkouts of the other packages, installed w/o deps (all their deps should already
+# be pinned above). This package is not installed editable, as an editable install would
+# put the py3.8 compiled extension in this source dir.
+commands_pre = [
+    ["python", "-m", "pip", "install", "-q", "--no-deps",
+        "-e", "{tox_root}/../hong2p",
+        "-e", "{tox_root}/../drosolf",
+        "-e", "{tox_root}/../natmix",
+        "{tox_root}",
+    ],
+]
+commands = [
+    ["pytest", { replace = "posargs", extend = true }],
+]
+
+# The venv of the al_analysis checkout beside this one (which has this package installed
+# editable), as-is (tox does not install anything into it)
+[tool.tox.env.current]
+skip_install = true
+allowlist_externals = ["{tox_root}/../al_analysis/venv/bin/python"]
+commands = [
+    ["{tox_root}/../al_analysis/venv/bin/python", "-m", "pytest",
+        { replace = "posargs", extend = true }
+    ],
+]

@@ -1,4 +1,4 @@
-"""Characterization tests of the MB model (`al_analysis.mb_model`, olfsysm).
+"""Characterization tests of the MB model (`pyolfsysm.mb_model`, olfsysm).
 
 Freezes outputs of the current code for the model's main configurations and the
 variants added since the repro tests' reference outputs were generated
@@ -7,8 +7,8 @@ variants added since the repro tests' reference outputs were generated
 PN>KC wiring, from `fit_mb_model` on the committed megamat ORN deltas. Also covers the
 outputs `fit_and_plot_mb_model` writes and the `plot-dynamics` command.
 
-Planned to move with the model code (to the olfsysm repository, as pyolfsysm), with its
-frozen outputs (`test_data/characterization/model/`) and `characterize.py`.
+Moved with the model code from al_analysis (2026-11), with its frozen outputs
+(`test_data/characterization/model/`, unchanged by the move) and `characterize.py`.
 
 Frozen outputs come from the code at the commit they were added in. Regenerate with
 `CHARACTERIZE_REGEN=1 QUICK=0`. Cases on the full claw / bouton connectome (tens of s to
@@ -30,13 +30,13 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from al_analysis.mb_model import (fit_mb_model, fit_and_plot_mb_model,
+from pyolfsysm.mb_model import (fit_mb_model, fit_and_plot_mb_model,
     megamat_orn_deltas, connectome_wPNKC,
     load_and_plot_dynamics_cli, load_dynamics, plot_dynamics,
     default_model_odor_startstop_times, read_params, read_tuned_params, KC_ID,
     glomerulus_col, FitMBModelOutputs
 )
-from al_analysis.wpnkc_shuffles import shuffle_wPNKC, shuffled_wPNKC
+from pyolfsysm.wpnkc_shuffles import shuffle_wPNKC, shuffled_wPNKC
 
 from .characterize import check_frozen, frame_summary, to_jsonable
 from .conftest import test_data_dir

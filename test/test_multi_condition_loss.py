@@ -13,8 +13,8 @@ from scipy.spatial.distance import pdist, squareform
 
 from hong2p.types import ParamDict
 
-from al_analysis import mb_model
-from al_analysis.mb_model import (make_kc_data_loss, make_multi_condition_loss,
+from pyolfsysm import mb_model
+from pyolfsysm.mb_model import (make_kc_data_loss, make_multi_condition_loss,
     optimize_mb_model_params, megamat_orn_deltas, drop_silent_model_cells,
     format_model_params, QUICK_MODEL_KW_LIST
 )

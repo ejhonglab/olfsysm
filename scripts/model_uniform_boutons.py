@@ -33,8 +33,8 @@ from tqdm import tqdm
 from hong2p.olf import parse_odor_name
 from hong2p.types import ParamDict
 
-from al_analysis.al_util import savefig, read_parquet
-from al_analysis.mb_model import (megamat_orn_deltas, natmix_orn_deltas,
+from hong2p.io import savefig, read_parquet
+from pyolfsysm.mb_model import (megamat_orn_deltas, natmix_orn_deltas,
     fit_and_plot_mb_model, get_thr_and_APL_weights, format_model_params,
     calc_mix_suppression, plot_avg_mixsupp, load_remy_megamat_mean_kc_corrs,
     drop_silent_model_cells, bootstrapped_corr, MIX_NAME_PREFIXES, KC_TYPE

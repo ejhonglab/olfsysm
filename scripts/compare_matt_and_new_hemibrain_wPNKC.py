@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from al_analysis.al_analysis import connectome_wPNKC
+from pyolfsysm.mb_model import connectome_wPNKC
 
 
 def main():

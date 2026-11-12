@@ -28,7 +28,7 @@ import xarray as xr
 # TODO does importing this before hong2p.equals allow that warning (optional from within
 # `equals`) to be hooked in same way (from `al_util` module-level warning format
 # handling change)? import order matter? (delete if not)
-from al_analysis import al_util
+from hong2p import io as hong2p_io
 #
 from hong2p.types import ParamDict
 from hong2p.pandas import pd_allclose, pd_indices_equal
@@ -38,10 +38,12 @@ from hong2p.xarray import (coords_equal, series2xarray_like, move_all_coords_to_
 )
 import olfsysm as osm
 
-from al_analysis.al_util import (warn, diag_panel_str, fly_cols, load_natmix_dff,
-    data_root, paper_repro_kws, remy_megamat_sparsity
+from hong2p.olf import diag_panel_str
+from hong2p.util import warn, fly_cols
+from pyolfsysm.util import (load_natmix_dff, data_root, paper_repro_kws,
+    remy_megamat_sparsity
 )
-from al_analysis.mb_model import (fit_mb_model, fit_and_plot_mb_model, connectome_wPNKC,
+from pyolfsysm.mb_model import (fit_mb_model, fit_and_plot_mb_model, connectome_wPNKC,
     connectome_APL_weights, KC_ID, CLAW_ID, BOUTON_ID, KC_TYPE, step_around,
     read_param_csv, read_params, read_tuned_params, get_thr_and_APL_weights,
     variable_n_claw_options, dict_seq_product, get_connectome_wPNKC_params,
@@ -171,10 +173,10 @@ def mark_kw_list_entries_xfail(model_kw_list: List[ParamDict]) -> List[ParamDict
 
 FITANDPLOT_MODEL_KW_LIST = mark_kw_list_entries_xfail(FITANDPLOT_MODEL_KW_LIST)
 
-# TODO set `al_util.verbose = True` for all these (at least, so long as that's only
+# TODO set `hong2p.io.verbose = True` for all these (at least, so long as that's only
 # way to get olfsysm log output printed?) (or add a new way to configure that, and use
 # that) (doing so for now)
-al_util.verbose = True
+hong2p_io.verbose = True
 
 @pytest.fixture(scope='session')
 # the name of this function is the name of the variable made accessible to test using
@@ -2576,7 +2578,7 @@ def view_apl_activity(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, 'fit_unit_dynamics', fit_unit_dynamics)
     # (script sets this to True)
-    monkeypatch.setattr(al_util, 'verbose', al_util.verbose)
+    monkeypatch.setattr(hong2p_io, 'verbose', hong2p_io.verbose)
 
     def run(*args: str) -> None:
         monkeypatch.setattr(sys, 'argv', [view_apl_activity_script.name,
@@ -4836,7 +4838,7 @@ def test_onestep_lr_cache(tmp_path, monkeypatch, orn_deltas):
     and starts from a cache in the old format, which should be moved to a backup.
     """
     cache_path = tmp_path / 'lr_cache.json'
-    monkeypatch.setattr('al_analysis.mb_model.onestep_lr_cache_path', cache_path)
+    monkeypatch.setattr('pyolfsysm.mb_model.onestep_lr_cache_path', cache_path)
     # cache otherwise only used under pytest if QUICK=1
     monkeypatch.setenv('QUICK', '1')
 
@@ -5248,7 +5250,7 @@ def test_sensitivity_analysis_no_responses(tmp_path, orn_deltas):
     assert len(tried) == 6
     assert (tried.sparsity == 0).any()
     assert (tried.sparsity > 0).any()
-    assert (sens_dir / f'spearman_of_pearsons.{al_util.plot_fmt}').exists()
+    assert (sens_dir / f'spearman_of_pearsons.{hong2p_io.plot_fmt}').exists()
 
 
 # one-row-per-KC hemibrain model, and a (reduced, for speed) claw + bouton model, to

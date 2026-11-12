@@ -1,4 +1,4 @@
-"""Tests of the model-provenance functions in `al_analysis.mb_model` (which olfsysm build
+"""Tests of the model-provenance functions in `pyolfsysm.mb_model` (which olfsysm build
 and which commits of our code produced an output). None of these compare version
 information against reference outputs: the repro tests are meant to work across versions.
 """
@@ -7,11 +7,12 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 
 import pytest
 
-from al_analysis import mb_model
-from al_analysis.mb_model import (olfsysm_build_info, olfsysm_checkout_info, olfsysm_is_clean,
+from pyolfsysm import mb_model
+from pyolfsysm.mb_model import (olfsysm_build_info, olfsysm_checkout_info, olfsysm_is_clean,
     olfsysm_clean_problems, require_clean_olfsysm, repo_info, model_provenance,
     write_model_provenance, OlfsysmBuildError, ALLOW_DIRTY_OLFSYSM_ENV_VAR,
     model_provenance_name
@@ -106,8 +107,12 @@ def test_model_provenance_and_write(tmp_path):
     df = pd.DataFrame(np.arange(6.0).reshape(2, 3), index=['a', 'b'], columns=list('xyz'))
     prov = model_provenance(orn_deltas=df, scale=1.5, nothing=None)
     for k in ('timestamp', 'host', 'platform', 'cpu', 'python', 'packages', 'olfsysm',
-            'al_analysis', 'hong2p', 'inputs'):
+            'pyolfsysm', 'hong2p', 'inputs'):
         assert k in prov, k
+    # al_analysis only when it is the caller (it has been imported)
+    assert ('al_analysis' in prov) == ('al_analysis' in sys.modules)
+    # this package's checkout is the olfsysm repository (with the C++ sources)
+    assert prov['pyolfsysm']['path'] == repo_info(mb_model)['path']
     assert prov['inputs']['orn_deltas']['sha256'] == model_provenance(orn_deltas=df
         )['inputs']['orn_deltas']['sha256']
     assert prov['inputs']['scale'] == 1.5 and prov['inputs']['nothing'] is None

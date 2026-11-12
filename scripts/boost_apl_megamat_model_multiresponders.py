@@ -10,9 +10,9 @@ from tqdm import tqdm
 
 from hong2p.types import ParamDict
 
-from al_analysis import al_util
-from al_analysis.al_util import warn
-from al_analysis.mb_model import (fit_and_plot_mb_model, connectome_wPNKC,
+from hong2p import io as hong2p_io
+from hong2p.util import warn
+from pyolfsysm.mb_model import (fit_and_plot_mb_model, connectome_wPNKC,
     connectome_APL_weights, read_parquet, megamat_orn_deltas,
     get_connectome_wPNKC_params, BOUTON_MODEL_KW_LIST, NONCLAW_MODEL_KW_LIST,
     dict_seq_product, check_model_kws_unique, assert_fit_and_plot_outputs_equal
@@ -336,7 +336,7 @@ def main():
     # TODO still needed? thought i saw some output of plots being saved (well, not
     # seeing now, when i tried removing)?
     # (here and in other scripts that set it just for that reason)
-    al_util.verbose = True
+    hong2p_io.verbose = True
 
     orn_deltas = megamat_orn_deltas()
 

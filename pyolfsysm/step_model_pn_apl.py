@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-After `pip install`-ing `al_analysis`, you should be able to invoke this script via:
+After `pip install`-ing `olfsysm`, you should be able to invoke this script via:
 `step_model_pn_apl`, and it will save outputs in current directory (can be quite large,
 if saving dynamics via `-d/--save-dynamics` flag).
 
@@ -24,11 +24,11 @@ from hong2p.olf import parse_odor_name
 from hong2p.viz import matshow
 from hong2p.util import symlink, subset_same_in_all_dicts, shorten_path
 
-from al_analysis import al_util
-from al_analysis.al_util import (savefig, ParamDict, warn, read_parquet, to_json,
-    read_json
-)
-from al_analysis.mb_model import (fit_and_plot_mb_model, megamat_orn_deltas,
+from hong2p import io as hong2p_io
+from hong2p.io import savefig, read_parquet, to_json
+from hong2p.types import ParamDict
+from hong2p.util import warn, read_json
+from pyolfsysm.mb_model import (fit_and_plot_mb_model, megamat_orn_deltas,
     dict_seq_product, format_weights, format_model_params, get_thr_and_APL_weights,
     glomerulus_col, save_and_remove_from_param_dict, drop_silent_model_cells,
     load_and_plot_dynamics, update_var2range, MinMaxDict, natmix_orn_deltas,
@@ -1051,7 +1051,7 @@ def main():
 
     # TODO is this required to see when we are saving figs (think so)? change so that's
     # not the case (and for saving other things, if necessary)?
-    al_util.verbose = True
+    hong2p_io.verbose = True
 
     # TODO TODO TODO also analyze natmix (ea/eb/binary/kmix, same for control) mix
     # suppression (and plot avg of metric(s) of that across steps, and do same for yangs

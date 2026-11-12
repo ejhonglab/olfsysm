@@ -24,9 +24,9 @@ from tqdm import tqdm
 from termcolor import cprint
 
 from hong2p.util import format_date, symlink
-from al_analysis.al_util import warn
-from al_analysis import mb_model
-from al_analysis.mb_model import (read_param_csv, format_model_params,
+from hong2p.util import warn
+from pyolfsysm import mb_model
+from pyolfsysm.mb_model import (read_param_csv, format_model_params,
     fitandplot_finished_writing, megamat_orn_deltas, fit_and_plot_mb_model,
     get_fitandplot_model_kw_list, QUICK_MODEL_KW_LIST
 )

@@ -49,9 +49,10 @@ import pandas as pd
 from hong2p import olf
 from hong2p.types import ParamDict
 
-from al_analysis import al_util
-from al_analysis.al_util import savefig, to_csv, warn
-from al_analysis.mb_model import (fit_and_plot_mb_model, optimize_mb_model_params,
+from hong2p import io as hong2p_io
+from hong2p.io import savefig, to_csv
+from hong2p.util import warn
+from pyolfsysm.mb_model import (fit_and_plot_mb_model, optimize_mb_model_params,
     make_kc_data_loss, remy_megamat_kc_targets, megamat_orn_deltas,
     optimizable_model_params, drop_silent_model_cells, read_model_output,
     max_apl_unit_coupling
@@ -444,7 +445,7 @@ def main():
     plot_root = args.output_dir
     plot_root.mkdir(exist_ok=True, parents=True)
 
-    al_util.verbose = True
+    hong2p_io.verbose = True
 
     orn_deltas = megamat_orn_deltas()
     odors = orn_deltas.columns.get_level_values('odor')

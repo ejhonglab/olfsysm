@@ -39,8 +39,8 @@ from tqdm import tqdm
 
 from hong2p.types import ParamDict
 
-from al_analysis.al_util import savefig, read_parquet
-from al_analysis.mb_model import (megamat_orn_deltas, fit_and_plot_mb_model,
+from hong2p.io import savefig, read_parquet
+from pyolfsysm.mb_model import (megamat_orn_deltas, fit_and_plot_mb_model,
     fit_mb_model, get_thr_and_APL_weights, format_model_params, KC_ID, KC_TYPE
 )
 

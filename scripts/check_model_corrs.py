@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
+
+from pyolfsysm.util import data_root
 
 
 # remy sent this to me on slack 2025-02-05
@@ -57,10 +57,8 @@ def main():
     #DROP_SILENT_CELLS = False
     DROP_SILENT_CELLS = True
 
-    this_script_dir = Path(__file__).parent
-
     # should contain the final model data (newer than sent_to_anoop/[v1,v2] dirs)
-    data_dir = Path(this_script_dir / '../data/sent_to_anoop/2024-05-16')
+    data_dir = data_root / 'sent_to_anoop/2024-05-16'
 
     # first CSV column is 'model_kc' (w/ kc number from 0) and rest are odor
     # abbreviations w/ '@ -3' suffix. responses are binary (0/1)
@@ -111,7 +109,7 @@ def main():
     u7_corr_dist_ser = df_triu(u7_corr_dist)
 
 
-    anoop_dir = Path(this_script_dir / '../data/from_anoop/megamat_dmats')
+    anoop_dir = data_root / 'from_anoop/megamat_dmats'
 
     # both of these contain correlation distances, and the rows seem to be in the same
     # order as the columns, as diagonal has 0 correlation distance (rows unlabeled)
