@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
 import datetime
-import glob
-import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import platform
@@ -109,13 +108,29 @@ if use_cnpy:
 # Build provenance, baked into the extension so a loaded `olfsysm` module can say exactly
 # which code it was compiled from (`olfsysm.build_info()`, `olfsysm.__git_hash__`, ...):
 # the git commit, whether tracked files were modified (dirty), the diff of a dirty build,
-# a SHA-256 over the compiled sources and headers, the build time, flags, compiler and
-# host. Written to a generated source file (gitignored) on every build.
+# whether the compiled C++ sources / headers differed from that commit (cpp_dirty) and their
+# diff, a SHA-256 over the compiled sources and headers, the build time, flags, compiler and
+# host. Written to a generated source file (gitignored) on every build. Which files are
+# compiled, and how they are hashed, is defined in pyolfsysm/build_sources.py, which
+# pyolfsysm also uses to compare a build with its checkout's current C++ sources (so commits
+# that only change the Python package need no rebuild).
 HERE = Path(__file__).resolve().parent
 BUILD_INFO_CPP = HERE / 'bindings' / 'python' / 'olfsysm_build_info.cpp'
-SOURCES = ['libolfsysm/src/olfsysm.cpp', 'bindings/python/pyolfsysm.cpp']
-HEADERS = sorted(str(Path(p).relative_to(HERE)) for pat in ('libolfsysm/api/**/*', 'libolfsysm/include/**/*')
-    for p in glob.glob(str(HERE / pat), recursive=True) if Path(p).is_file())
+
+
+def _load_build_sources():
+    # by path, as pyolfsysm is not installed (and its dependencies may not be) at build time
+    spec = importlib.util.spec_from_file_location('_olfsysm_build_sources',
+        HERE / 'pyolfsysm' / 'build_sources.py'
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+build_sources = _load_build_sources()
+SOURCES = build_sources.SOURCES
+HEADERS = build_sources.headers(HERE)
 MAX_DIFF_CHARS = 60_000
 
 
@@ -127,26 +142,27 @@ def _git(*args):
         return None
 
 
-def source_sha256():
-    h = hashlib.sha256()
-    for rel in SOURCES + HEADERS:
-        h.update(rel.encode()); h.update(b'\0')
-        h.update((HERE / rel).read_bytes()); h.update(b'\0')
-    return h.hexdigest()
+def _truncate_diff(diff):
+    if len(diff) > MAX_DIFF_CHARS:
+        diff = diff[:MAX_DIFF_CHARS] + f'\n... [diff truncated at {MAX_DIFF_CHARS} characters]\n'
+    return diff
 
 
 def git_build_info():
     head = _git('rev-parse', 'HEAD')
     if head is None:
         # not built from a git checkout (e.g. an sdist): nothing known
-        return dict(git_hash='', git_dirty=-1, git_untracked=-1, git_diff='')
+        return dict(git_hash='', git_dirty=-1, git_untracked=-1, git_diff='', cpp_dirty=-1,
+            cpp_diff=''
+        )
     status = _git('status', '--porcelain', '--untracked-files=no') or ''
     untracked = _git('ls-files', '--others', '--exclude-standard') or ''
     diff = _git('diff', 'HEAD', '--') or ''
-    if len(diff) > MAX_DIFF_CHARS:
-        diff = diff[:MAX_DIFF_CHARS] + f'\n... [diff truncated at {MAX_DIFF_CHARS} characters]\n'
     return dict(git_hash=head.strip(), git_dirty=int(bool(status.strip())),
-        git_untracked=len([l for l in untracked.splitlines() if l.strip()]), git_diff=diff)
+        git_untracked=len([l for l in untracked.splitlines() if l.strip()]),
+        git_diff=_truncate_diff(diff), cpp_dirty=build_sources.cpp_dirty(HERE),
+        cpp_diff=_truncate_diff(build_sources.cpp_git_diff(HERE)),
+    )
 
 
 def compiler_version():
@@ -160,12 +176,14 @@ def compiler_version():
 
 def write_build_info(build_flags):
     info = git_build_info()
-    info.update(source_sha256=source_sha256(),
+    info.update(source_sha256=build_sources.source_sha256(HERE),
         build_time=datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
         build_flags=build_flags, compiler=compiler_version(), build_host=platform.node(),
     )
     delim = 'OLFSYSM_BI'   # raw-string delimiters are limited to 16 characters
-    diff = info['git_diff'].replace(f'){delim}"', f'){delim[:-1]}_"')
+    def raw(x):
+        return 'R"' + delim + '(' + x.replace(f'){delim}"', f'){delim[:-1]}_"') + ')' + \
+            delim + '"'
     def cstr(x):
         return '"' + x.replace('\\', '\\\\').replace('"', '\\"') + '"'
     BUILD_INFO_CPP.write_text(
@@ -174,7 +192,9 @@ def write_build_info(build_flags):
         f'extern const char* const git_hash = {cstr(info["git_hash"])};\n'
         f'extern const int git_dirty = {info["git_dirty"]};\n'
         f'extern const int git_untracked = {info["git_untracked"]};\n'
-        f'extern const char* const git_diff = R"{delim}({diff}){delim}";\n'
+        f'extern const char* const git_diff = {raw(info["git_diff"])};\n'
+        f'extern const int cpp_dirty = {info["cpp_dirty"]};\n'
+        f'extern const char* const cpp_diff = {raw(info["cpp_diff"])};\n'
         f'extern const char* const source_sha256 = {cstr(info["source_sha256"])};\n'
         f'extern const char* const build_time = {cstr(info["build_time"])};\n'
         f'extern const char* const build_flags = {cstr(info["build_flags"])};\n'
@@ -219,7 +239,8 @@ class BuildExt(build_ext):
         info = write_build_info(f'openmp={int(not force_single_thread)} debug={int(debug)} '
             f'cnpy={int(use_cnpy)}')
         print(f"olfsysm build info: commit {info['git_hash'][:12] or '(none)'}"
-            f"{' DIRTY' if info['git_dirty'] == 1 else ''}, source sha256 "
+            f"{' DIRTY' if info['git_dirty'] == 1 else ''}"
+            f"{' (C++ sources DIRTY)' if info['cpp_dirty'] == 1 else ''}, source sha256 "
             f"{info['source_sha256'][:12]}, {info['build_time']}")
         ct = self.compiler.compiler_type
         opts = self.c_opts.get(ct, [])

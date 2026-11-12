@@ -14,6 +14,8 @@ extern const char* const git_hash;
 extern const int git_dirty;
 extern const int git_untracked;
 extern const char* const git_diff;
+extern const int cpp_dirty;
+extern const char* const cpp_diff;
 extern const char* const source_sha256;
 extern const char* const build_time;
 extern const char* const build_flags;
@@ -344,6 +346,8 @@ PYBIND11_MODULE(olfsysm, m) {
     m.attr("__git_dirty__") = olfsysm_build_info::git_dirty;
     m.attr("__git_untracked__") = olfsysm_build_info::git_untracked;
     m.attr("__git_diff__") = olfsysm_build_info::git_diff;
+    m.attr("__cpp_dirty__") = olfsysm_build_info::cpp_dirty;
+    m.attr("__cpp_diff__") = olfsysm_build_info::cpp_diff;
     m.attr("__source_sha256__") = olfsysm_build_info::source_sha256;
     m.attr("__build_time__") = olfsysm_build_info::build_time;
     m.attr("__build_flags__") = olfsysm_build_info::build_flags;
@@ -357,6 +361,10 @@ PYBIND11_MODULE(olfsysm, m) {
         d["git_dirty"] = olfsysm_build_info::git_dirty;
         d["git_untracked"] = olfsysm_build_info::git_untracked;
         d["git_diff"] = olfsysm_build_info::git_diff;
+        // the same for the compiled C++ sources and headers only (pyolfsysm/build_sources.py),
+        // which the extension's code depends on (changes to the Python package do not count)
+        d["cpp_dirty"] = olfsysm_build_info::cpp_dirty;
+        d["cpp_diff"] = olfsysm_build_info::cpp_diff;
         d["source_sha256"] = olfsysm_build_info::source_sha256;
         d["build_time"] = olfsysm_build_info::build_time;
         d["build_flags"] = olfsysm_build_info::build_flags;
@@ -367,8 +375,9 @@ PYBIND11_MODULE(olfsysm, m) {
         Build provenance baked in at compile time (setup.py): the git commit the extension
         was built from, whether tracked files were modified then (git_dirty: 1 = dirty,
         0 = clean, -1 = not built from a git checkout), the number of untracked files, the
-        diff of a dirty build, a SHA-256 over the compiled sources and headers, and the
-        build time, flags, compiler and host.
+        diff of a dirty build, whether the compiled C++ sources / headers themselves differed
+        from that commit (cpp_dirty, same values) and their diff (cpp_diff), a SHA-256 over
+        the compiled sources and headers, and the build time, flags, compiler and host.
     )pbdoc");
 }
 

@@ -19465,11 +19465,14 @@ def _write_params(param_dict: ParamDict, model_output_dir: Path, name: str, *,
 # ---------------------------------------------------------------------------
 # model provenance: which olfsysm build and which commits of our code produced an output
 #
-# olfsysm bakes its git hash, a clean / dirty flag, the diff of a dirty build, a hash of the
-# compiled sources and the build time / flags into the extension (olfsysm/setup.py); the
-# functions below read those, compare them with the checkout the package was installed
-# from, and collect the same for al_analysis and hong2p, so every model output can be tied
-# to the exact code that made it.
+# olfsysm bakes its git hash, a clean / dirty flag (of the whole checkout, and of the
+# compiled C++ sources alone), the diff of a dirty build, a hash of the compiled sources and
+# the build time / flags into the extension (olfsysm/setup.py); the functions below read
+# those and compare the compiled sources with the C++ sources of the checkout the extension
+# was installed from (pyolfsysm/build_sources.py), so a commit that changes only this Python
+# package needs no rebuild. The Python code's own commit, dirty state and diff (pyolfsysm,
+# hong2p, and al_analysis when it is the caller) are recorded at run time, so every model
+# output can be tied to the exact code that made it.
 
 ALLOW_DIRTY_OLFSYSM_ENV_VAR = 'AL_ANALYSIS_ALLOW_DIRTY_OLFSYSM'
 model_provenance_name = 'model_provenance.json'
@@ -19502,10 +19505,12 @@ def olfsysm_build_info() -> Dict[str, Any]:
     Keys (from `olfsysm.build_info()`, written by olfsysm's setup.py at build time):
     'version', 'git_hash' (commit built from; '' if not built from a git checkout),
     'git_dirty' (1 = tracked files were modified when built, 0 = clean, -1 = unknown),
-    'git_untracked' (count), 'git_diff' (of a dirty build, truncated), 'source_sha256'
-    (over the compiled sources and headers), 'build_time', 'build_flags', 'compiler',
-    'build_host'; plus 'module_file' and 'legacy_build' (True if the installed extension
-    predates build provenance, in which case the other values are placeholders).
+    'git_untracked' (count), 'git_diff' (of a dirty build, truncated), 'cpp_dirty' (the
+    same as 'git_dirty', for the compiled C++ sources and headers only; None if the build
+    predates this field), 'cpp_diff' (their diff), 'source_sha256' (over the compiled
+    sources and headers), 'build_time', 'build_flags', 'compiler', 'build_host'; plus
+    'module_file' and 'legacy_build' (True if the installed extension predates build
+    provenance, in which case the other values are placeholders).
     """
     import olfsysm
     if hasattr(olfsysm, 'build_info'):
@@ -19516,6 +19521,10 @@ def olfsysm_build_info() -> Dict[str, Any]:
             git_untracked=-1, git_diff='', source_sha256='', build_time='', build_flags='',
             compiler='', build_host='', legacy_build=True
         )
+    # builds before 2026-11 (when pyolfsysm moved into the olfsysm repository) only recorded
+    # the dirty state of the whole checkout
+    info.setdefault('cpp_dirty', None)
+    info.setdefault('cpp_diff', None)
     info['module_file'] = olfsysm.__file__
     return info
 
@@ -19559,16 +19568,23 @@ def olfsysm_checkout_info() -> Dict[str, Any]:
 
     The checkout is the editable install location (pip's direct_url.json), else the
     directory of the extension module (an in-place build). Keys: 'path', 'editable',
-    'git_hash', 'dirty' (tracked files modified), 'untracked', 'remote'; the git keys are
-    None if the path is not a git checkout.
+    'source_sha256' (of the C++ sources there now, as `olfsysm.build_info()` computes it at
+    build time; None if the path has no C++ sources), 'git_hash', 'dirty' (tracked files
+    modified), 'cpp_dirty' (the compiled C++ sources / headers differ from HEAD, or include
+    untracked files), 'untracked', 'remote'; the git keys are None if the path is not a git
+    checkout.
     """
+    from pyolfsysm import build_sources
     path, editable = _olfsysm_install_location()
-    out: Dict[str, Any] = dict(path=str(path), editable=editable, git_hash=None, dirty=None,
-        untracked=None, remote=None
+    out: Dict[str, Any] = dict(path=str(path), editable=editable,
+        source_sha256=build_sources.source_sha256(path), git_hash=None, dirty=None,
+        cpp_dirty=None, untracked=None, remote=None
     )
     head = _run_git(['rev-parse', 'HEAD'], path)
     if head is None:
         return out
+    cpp_dirty = build_sources.cpp_dirty(path)
+    out['cpp_dirty'] = None if cpp_dirty == -1 else bool(cpp_dirty)
     status = _run_git(['status', '--porcelain', '--untracked-files=no'], path) or ''
     untracked = _run_git(['ls-files', '--others', '--exclude-standard'], path) or ''
     remote = (_run_git(['remote', 'get-url', 'origin'], path) or '').strip()
@@ -19581,39 +19597,47 @@ def olfsysm_checkout_info() -> Dict[str, Any]:
 def olfsysm_clean_problems() -> List[str]:
     """Reasons the installed olfsysm is not a clean, known build (empty list = clean).
 
-    Clean means: built from a git commit with no uncommitted changes to tracked files,
-    and, when the checkout it was installed from is found, that checkout is at the same
-    commit and also has no uncommitted changes to tracked files (otherwise the extension
-    may be stale with respect to the source).
+    Clean means: built from a git commit whose compiled C++ sources and headers had no
+    uncommitted changes, and, when the checkout it was installed from is found, that
+    checkout's C++ sources are the ones compiled (same `source_sha256`) and have no
+    uncommitted changes (otherwise the extension may be stale with respect to the source).
+    The checkout may be at a later commit than the build, as long as the C++ sources are
+    unchanged: changes to the Python package (pyolfsysm) need no rebuild, and are recorded
+    (commit, dirty state and diff) by `model_provenance` at run time instead.
     """
     build = olfsysm_build_info()
     checkout = olfsysm_checkout_info()
     problems = []
+    # builds from before cpp_dirty existed only know whether the whole checkout was dirty
+    build_dirty = build['cpp_dirty'] if build['cpp_dirty'] is not None else build['git_dirty']
     if build['legacy_build']:
         problems.append('the installed olfsysm extension predates build provenance (no '
             'olfsysm.build_info()); rebuild it from a current checkout'
         )
-    elif build['git_dirty'] == -1:
+    elif build_dirty == -1:
         problems.append('olfsysm was not built from a git checkout, so its commit is unknown')
-    elif build['git_dirty'] == 1:
+    elif build_dirty == 1:
+        changed = ('its C++ sources' if build['cpp_dirty'] is not None else
+            'tracked files'
+        )
         problems.append(f"olfsysm was built from commit {build['git_hash'][:12]} with "
-            'uncommitted changes to tracked files'
+            f'uncommitted changes to {changed}'
         )
-    if (checkout['git_hash'] and build['git_hash'] and
-            checkout['git_hash'] != build['git_hash']):
-        problems.append(f"the installed olfsysm was built from {build['git_hash'][:12]} but "
-            f"its checkout {checkout['path']} is at {checkout['git_hash'][:12]} (reinstall "
-            'it, or check out the built commit)'
+    if (checkout['source_sha256'] and build['source_sha256'] and
+            checkout['source_sha256'] != build['source_sha256']):
+        problems.append(f"the installed olfsysm was compiled from C++ sources (built from "
+            f"{build['git_hash'][:12]}) that differ from those in its checkout "
+            f"{checkout['path']} (at {(checkout['git_hash'] or '?')[:12]}); reinstall it"
         )
-    if checkout['dirty']:
+    if checkout['cpp_dirty']:
         problems.append(f"the olfsysm checkout {checkout['path']} has uncommitted changes to "
-            'tracked files, so the installed build may be stale'
+            'its C++ sources, so the installed build may be stale'
         )
     return problems
 
 
 def olfsysm_is_clean() -> bool:
-    """Whether the installed olfsysm is a clean build matching its checkout's HEAD."""
+    """Whether the installed olfsysm is a clean build of its checkout's C++ sources."""
     return len(olfsysm_clean_problems()) == 0
 
 
@@ -19640,7 +19664,7 @@ def require_clean_olfsysm(*, allow_env_override: bool = True, context: str = '')
         )
         return
     msg = ('refusing to run the model: ' + '; '.join(problems) + '.\n'
-        'Fix: commit (or stash) the olfsysm changes and rebuild with '
+        'Fix: commit (or stash) the changes to olfsysm\'s C++ sources and rebuild with '
         '`pip install -e <olfsysm checkout>` (every install recompiles everything), so model '
         'outputs can be tied to a commit.'
     )
