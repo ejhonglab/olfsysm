@@ -4,7 +4,11 @@ al_analysis's mb_model.py, wpnkc_shuffles.py and the model-only part of al_util.
 the data the model reads in pyolfsysm/data), scripts that run the model (scripts/) and the
 tests of both (test/). al_analysis installs it with its optional `model` extra, and its
 al_analysis.mb_model / wpnkc_shuffles only forward to pyolfsysm. pyolfsysm must not import
-al_analysis.
+al_analysis. pyolfsysm.readout, kc_stats, effects and tuning came from the KC-remapping
+experiment queue (model_experiment_queue, 2026-11-12), which keeps wrappers with its own
+defaults; their outputs are frozen in test/test_frozen_from_queue.py (inputs and expected
+outputs in test/test_data/frozen_from_queue/), so a change to them that changes those
+numbers needs Tom's attention, as for the model.
 
 Tests for the C++ code and pyolfsysm are in test/ (test/test_mb_model.py and the other
 model tests). Any changes to the model should preserve existing behavior, and write

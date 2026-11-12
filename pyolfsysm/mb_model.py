@@ -19490,13 +19490,9 @@ class OlfsysmBuildError(RuntimeError):
 
 
 def _run_git(args: Sequence[str], cwd) -> Optional[str]:
-    """stdout of `git <args>` run in `cwd`, or None if git fails / is missing."""
-    import subprocess
-    try:
-        return subprocess.run(['git', *args], cwd=str(cwd), capture_output=True, text=True,
-            check=True).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return None
+    """stdout of `git <args>` run in `cwd`, or None if git fails / is missing
+    (`hong2p.util.run_git`)."""
+    return util.run_git(args, cwd)
 
 
 def olfsysm_build_info() -> Dict[str, Any]:
@@ -19681,41 +19677,14 @@ def require_clean_olfsysm(*, allow_env_override: bool = True, context: str = '')
 
 
 def repo_info(path_or_module) -> Dict[str, Any]:
-    """Git hash, dirty flag and diff digest of the repository containing a path / module.
+    """Git hash, dirty flag and diff digest of the repository containing a path / module
+    (`hong2p.util.repo_info`, with the diff truncated to `_MAX_PROVENANCE_DIFF_CHARS`).
 
     Keys: 'path' (repository root, or the input path if not a git checkout), 'git_hash',
     'dirty' (tracked files modified), 'diff_sha256' and 'diff' (of a dirty checkout,
     truncated to `_MAX_PROVENANCE_DIFF_CHARS`; None when clean), 'untracked', 'remote'.
     """
-    path = path_or_module
-    if hasattr(path_or_module, '__file__') or hasattr(path_or_module, '__path__'):
-        # a module, or a (possibly namespace) package, whose __file__ can be None
-        path = getattr(path_or_module, '__file__', None) or list(path_or_module.__path__)[0]
-    path = Path(path).resolve()
-    if path.is_file():
-        path = path.parent
-    out: Dict[str, Any] = dict(path=str(path), git_hash=None, dirty=None, diff_sha256=None,
-        diff=None, untracked=None, remote=None
-    )
-    top = _run_git(['rev-parse', '--show-toplevel'], path)
-    if top is None:
-        return out
-    top = top.strip()
-    status = (_run_git(['status', '--porcelain', '--untracked-files=no'], top) or '').strip()
-    diff = _run_git(['diff', 'HEAD', '--'], top) or ''
-    untracked = _run_git(['ls-files', '--others', '--exclude-standard'], top) or ''
-    out.update(path=top, git_hash=(_run_git(['rev-parse', 'HEAD'], top) or '').strip(),
-        dirty=bool(status), remote=(_run_git(['remote', 'get-url', 'origin'], top) or
-            '').strip() or None,
-        untracked=len([l for l in untracked.splitlines() if l.strip()]),
-    )
-    if status:
-        out['diff_sha256'] = hashlib.sha256(diff.encode()).hexdigest()
-        if len(diff) > _MAX_PROVENANCE_DIFF_CHARS:
-            diff = (diff[:_MAX_PROVENANCE_DIFF_CHARS] +
-                f'\n... [diff truncated at {_MAX_PROVENANCE_DIFF_CHARS} characters]\n')
-        out['diff'] = diff
-    return out
+    return util.repo_info(path_or_module, max_diff_chars=_MAX_PROVENANCE_DIFF_CHARS)
 
 
 def _cpu_model() -> Optional[str]:

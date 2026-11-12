@@ -15,8 +15,16 @@ Python bindings are in `bindings/python/` (the compiled `olfsysm` module). `pyol
 the model's Python side (moved from [al_analysis](https://github.com/ejhonglab/al_analysis),
 with its history, in 2026-11): `pyolfsysm.mb_model` (`fit_mb_model`, `fit_and_plot_mb_model`,
 `model_mb_responses`, the inputs: `megamat_orn_deltas`, `connectome_wPNKC`, ...),
-`pyolfsysm.wpnkc_shuffles` (shuffled PN->KC wiring) and `pyolfsysm.util` (loaders of the KC
-and ORN data the model is compared with), with the data they read in `pyolfsysm/data`
+`pyolfsysm.wpnkc_shuffles` (shuffled PN->KC wiring), `pyolfsysm.util` (loaders of the KC
+and ORN data the model is compared with), `pyolfsysm.readout` (the model's KC output read as
+calcium imaging sees it: compressive readouts, spikes through the indicator kernel,
+measurement noise, a per-KC session z-score), `pyolfsysm.kc_stats` (KC population
+statistics: response concentration, odors-per-KC classes), `pyolfsysm.effects` (the effect
+of a manipulation, e.g. blocking APL, on odor-odor distances, against the data's) and
+`pyolfsysm.tuning` (re-tuning threshold and APL scales to hold response rates, populations
+of simulators; the last four from the KC-remapping experiment queue,
+[model_experiment_queue](https://github.com/ejhonglab/model_experiment_queue), 2026-11-12),
+with the data they read in `pyolfsysm/data`
 (installed with the package; see its README). `scripts/` has scripts that run the model,
 and `test/` the tests of both the C++ code and pyolfsysm.
 
