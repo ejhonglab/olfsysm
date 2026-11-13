@@ -171,7 +171,9 @@ def test_longer_pulse(timing_model):
     n_steps = int(round((1.25 - mp.time_pre_start) / mp.time_dt))
     assert rv.orn.sims[0].shape[-1] == n_steps
     ts = get_time_index(mp, rv)
-    assert len(ts) == n_steps and ts.iloc[0] == mp.time_pre_start and ts.iloc[-1] == 1.25
+    # (olfsysm's step times: the last step is one dt before time_end)
+    assert len(ts) == n_steps and ts.iloc[0] == mp.time_pre_start
+    assert np.isclose(ts.iloc[-1], 1.25 - mp.time_dt, rtol=0, atol=1e-12)
 
     # the input is on longer: PN rates the same up to the default pulse's end, and
     # higher from 0.55 s to 0.75 s (the odor still on), for every odor

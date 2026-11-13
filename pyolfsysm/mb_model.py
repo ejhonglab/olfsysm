@@ -9007,11 +9007,31 @@ def last_axes(axs: Union[np.ndarray, Axes]) -> Axes:
 
 
 # TODO rename 'time_s'->'t' everywhere?
-def get_time_index(mp: osm.ModelParams, rv: osm.RunVars) -> pd.Index:
+def get_time_index(mp: osm.ModelParams, rv: osm.RunVars, *,
+    legacy_linspace: bool = False) -> pd.Series:
     """Returns Series ('seconds') of float time of each timepoint, w/ odor onset at 0.
 
-    Times are from `mp.time_pre_start` (or `mp.time_start`, if pretime was removed) to
-    `mp.time_end`, inferring which from the # of timepoints in `rv.orn.sims`.
+    Times are olfsysm's own step times: step k (counted from the start of its
+    simulations) is at `mp.time_pre_start + k * mp.time_dt`, for the
+    `int((mp.time_end - mp.time_pre_start) / mp.time_dt)` steps olfsysm simulates (its
+    truncating step arithmetic), so the last step is one `dt` before `mp.time_end`. If
+    pretime was removed (`osm.remove_all_pretime`), the steps before
+    `int((mp.time_start - mp.time_pre_start) / mp.time_dt)` are gone and the times start
+    there (at `mp.time_start`). Which of the two is inferred from the # of timepoints in
+    `rv.orn.sims`. Times are rounded to 1e-9 s (as `_spike_times_frame`'s), only to drop
+    float noise, so steps on round times (odor onset, `mp.time_stim_end`) are exactly
+    those values, and windows with edges there select the steps olfsysm uses (e.g.
+    `(t >= mp.time_stim_start) & (t < mp.time_stim_end)` the steps the odor is on).
+
+    Args:
+        legacy_linspace: if True, returns the times this function gave before
+            2026-11-13 instead, to reproduce outputs computed with them: the same number
+            of steps spread evenly from the first time to `mp.time_end` inclusive
+            (`np.linspace`), which labels step k late by k / (n - 1) of a step (up to
+            nearly a whole step at the end). A window closed at its upper edge (`t <=
+            0.5`) then loses the step at that edge, and one open at its lower edge (`t >
+            -0.5`) gains the step at that edge; half-open windows `[t0, t1)` with edges
+            on the step grid select the same steps either way.
     """
     # from default parameters:
     # p.time.pre_start  = -2.0;
@@ -9028,12 +9048,29 @@ def get_time_index(mp: osm.ModelParams, rv: osm.RunVars) -> pd.Index:
     # orn.sims should always be present. all dynamics should have same # of timepoints.
     # list of length odors, w/ each element (#-glomeruli, #-timepoints).
     n_sim_samples = rv.orn.sims[0].shape[-1]
+
+    if not legacy_linspace:
+        pre_start = float(mp.time_pre_start)
+        dt = float(mp.time_dt)
+        # as olfsysm's ModelParams::Time::steps_all() and start_step()
+        # (unsigned((t - pre_start) / dt), in the same double arithmetic)
+        n_all = int((float(mp.time_end) - pre_start) / dt)
+        start_step = int((float(mp.time_start) - pre_start) / dt)
+        if n_sim_samples == n_all:
+            first_step = 0
+        elif n_sim_samples == n_all - start_step:
+            first_step = start_step
+        else:
+            raise AssertionError(f'{n_sim_samples=} matches neither the {n_all} steps '
+                f'from time_pre_start nor the {n_all - start_step} from time_start'
+            )
+        steps = np.arange(first_step, n_all, dtype=np.float64)
+        return pd.Series(name='seconds', data=np.round(pre_start + steps * dt, 9))
+
+    # (the pre-2026-11-13 times, see `legacy_linspace`)
     #
     # assuming the start and end times are one of these combinations (the latter if
     # remove_all_pretime has been called, which should correspond to rv.ready=false)
-    #
-    # TODO does olfsysm have some variable(s) to track dynamics start / stop time? (add
-    # one, and set at init and in remove_all_pretime?)?
     found_time_boundaries = False
     for delete_pretime in (True, False):
         if not delete_pretime:
@@ -9060,7 +9097,12 @@ def get_time_index(mp: osm.ModelParams, rv: osm.RunVars) -> pd.Index:
 
 def slice_to_odor_pulse(da: xr.DataArray, mp: osm.ModelParams, *,
     include_before: bool = False) -> xr.DataArray:
-    """Returns `da` sliced (along 'time_s') to odor pulse (to `mp.time_stim_end`).
+    """Returns `da` sliced (along 'time_s') to odor pulse (up to `mp.time_stim_end`).
+
+    The slice is half-open, [start, `mp.time_stim_end`): the steps olfsysm has the odor
+    on. (These are also the steps the inclusive slice gave with `get_time_index`'s
+    pre-2026-11-13 times, which put the step at `mp.time_stim_end` just after it, so
+    dynamics saved with either times give the same steps.)
 
     Args:
         include_before: if True, will slice from `mp.time_start` (default -0.5) instead
@@ -9072,7 +9114,8 @@ def slice_to_odor_pulse(da: xr.DataArray, mp: osm.ModelParams, *,
         t0 = mp.time_start
 
     # TODO ever want to slice to mp.time_end? add include_after flag too?
-    return da.sel(time_s=slice(t0, mp.time_stim_end))
+    ts = da['time_s'].values
+    return da.isel(time_s=np.flatnonzero((ts >= t0) & (ts < mp.time_stim_end)))
 
 
 # TODO worth looking in to no-copy ways we might be able to access these variables via
@@ -15286,7 +15329,6 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             # can't convert this one to an array, cause it's a list of lists
             # (where inner lists are of variable length)
             # TODO TODO what to check here?
-            print('what to check here?')
             pn_to_Btns = rv.pn.pn_to_Btns
             #breakpoint()
             # TODO TODO TODO save those outputs in olfsysm to check against?
