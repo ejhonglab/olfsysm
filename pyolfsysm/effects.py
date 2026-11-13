@@ -5,7 +5,8 @@ The effect is, for each odor pair, the distance in the intact condition minus th
 under the manipulation (e.g. with APL on minus with APL output blocked: the APL effect).
 `effect_stats` compares a model's per-pair effect with the data's (the root mean squared
 error, split exactly into its mean part and its pattern part, and the correlations of the
-pattern), `effect_decomposition` splits the pattern part further into what each odor
+pattern), `effect_spread_shape` splits the pattern part into the spread of the per-pair
+effects and their shape, `effect_decomposition` splits the pattern part further into what each odor
 contributes additively and a pair-specific rest, and `effect_by_class` splits each
 condition's similarities, and so the effect, by the units' odors-per-KC class.
 
@@ -63,6 +64,35 @@ def effect_stats(intact: pd.Series, manipulated: pd.Series, data: pd.Series,
         f'{prefix}mean': float(m.mean()), f'{prefix}mean_error': mean_error,
         f'{prefix}spearman': spearman(m, d), f'{prefix}pearson': pearson(m, d),
         f'{prefix}n_pairs': int(len(m))
+    }
+
+
+def effect_spread_shape(intact: pd.Series, manipulated: pd.Series, data: pd.Series,
+    order: Optional[Sequence] = None, prefix: str = 'effect_') -> Dict[str, float]:
+    """Returns the pattern part of the effect's error (`effect_stats`' 'rmse_centered') split
+    exactly into an amplitude part and a shape part (the Taylor-diagram identity),
+    rmse_centered**2 = amplitude**2 + shape**2, over the pairs both sides have.
+
+    With sd the spread over pairs of each side's per-pair effect (root mean square about
+    its mean) and r Pearson's correlation of the two: amplitude = |sd_model - sd_data|,
+    how much the model's per-pair effects are too spread out or too compressed;
+    shape = sqrt(2 sd_model sd_data (1 - r)), what is left of the pattern's error at
+    matched spread. A model whose effect is the data's scaled about its mean has shape 0.
+
+    Keys (after `prefix`): 'amplitude', 'shape', 'sd_model', 'sd_data', 'sd_ratio'
+    (sd_model / sd_data).
+    """
+    m, d = align_pairs(pair_effect(intact, manipulated, order), data)
+    mc = m.to_numpy(dtype=float) - float(m.mean())
+    dc = d.to_numpy(dtype=float) - float(d.mean())
+    sd_m = float(np.sqrt(np.mean(mc ** 2)))
+    sd_d = float(np.sqrt(np.mean(dc ** 2)))
+    # (2 sd_m sd_d (1 - r) = mean((mc - dc)**2) - (sd_m - sd_d)**2, without dividing by an sd)
+    shape2 = float(np.mean((mc - dc) ** 2)) - (sd_m - sd_d) ** 2
+    return {f'{prefix}amplitude': abs(sd_m - sd_d),
+        f'{prefix}shape': float(np.sqrt(max(shape2, 0.0))),
+        f'{prefix}sd_model': sd_m, f'{prefix}sd_data': sd_d,
+        f'{prefix}sd_ratio': sd_m / sd_d if sd_d > 0 else float('nan')
     }
 
 

@@ -160,6 +160,31 @@ def test_one_class_equals_effect_stats():
     assert st['apl_effect_n_pairs'] == 120
 
 
+def test_effect_spread_shape():
+    """The amplitude and shape parts add, in squares, to the pattern part; a model whose
+    effect is the data's scaled about its mean has shape 0, and its amplitude is the
+    difference of the spreads."""
+    on, off = _counts(1), _counts(2, p_resp=0.14)
+    d_on, d_off = pair_distances(on, order=ODORS), pair_distances(off, order=ODORS)
+    eff = E.pair_effect(d_on, d_off, ODORS)
+    data = 0.8 * eff + 0.01 * np.sin(np.arange(len(eff)))
+    st = E.effect_stats(d_on, d_off, data, ODORS, prefix='apl_effect_')
+    sp = E.effect_spread_shape(d_on, d_off, data, ODORS, prefix='apl_effect_')
+    assert np.isclose(sp['apl_effect_amplitude'] ** 2 + sp['apl_effect_shape'] ** 2,
+        st['apl_effect_rmse_centered'] ** 2, rtol=1e-10)
+    r = st['apl_effect_pearson']
+    assert np.isclose(sp['apl_effect_shape'] ** 2, 2 * sp['apl_effect_sd_model'] *
+        sp['apl_effect_sd_data'] * (1 - r), rtol=1e-8)
+    assert np.isclose(sp['apl_effect_sd_ratio'],
+        sp['apl_effect_sd_model'] / sp['apl_effect_sd_data'])
+
+    scaled = 0.03 + 0.5 * (eff - eff.mean())
+    sp2 = E.effect_spread_shape(d_on, d_off, scaled, ODORS)
+    assert sp2['effect_shape'] < 1e-7
+    assert np.isclose(sp2['effect_amplitude'], sp2['effect_sd_model'] / 2, rtol=1e-10)
+    assert np.isclose(sp2['effect_sd_ratio'], 2.0, rtol=1e-10)
+
+
 def test_responders_aligned_by_label():
     """Responder frames are aligned to the matrix by odor label, arrays by position."""
     on, off = _counts(1), _counts(2, p_resp=0.14)
