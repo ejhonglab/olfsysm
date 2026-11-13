@@ -406,6 +406,22 @@ struct ModelParams {
          * Default false (subtractive; outputs unchanged). */
         bool apl_inh_divisive;
 
+        /* Pooled share s (0 to 1) of the APL>KC inhibition that a claw does not absorb.
+         * Each claw's net drive x (its PN>KC drive minus its APL inhibition) is clipped at
+         * 0 before the claws are summed, so a KC loses to APL at most what each claw
+         * receives (unless allow_net_inh_per_claw). With s > 0, each KC's summed drive is
+         *   sum over its claws of max(x, 0) + s * min(x, 0),
+         * so s = 1 puts APL's inhibition on the KC's summed drive (a claw driven less than
+         * its inhibition then takes from the KC's other claws), and s = 0 is the clipped
+         * form exactly. claw_sims (saved, and the claw>APL drive if pn_claw_to_apl=true)
+         * stay the clipped states. With APL off (no inhibition) s changes nothing. Active
+         * in every KC simulation, including those fit_sparseness tunes APL weights from.
+         * Requires wPNKC_one_row_per_claw=true; not supported with allow_net_inh_per_claw,
+         * n_claws_active_to_spike > 0, apl_inh_divisive, claw_dynamics or a per-claw
+         * transfer (claw_sat / claw_thr / claw_thr_subgain / claw_pow). Must be finite
+         * and in [0, 1]. Default 0 (outputs unchanged). */
+        double claw_inh_pool;
+
         /* Absolute refractory period (seconds) of each KC: after a spike at step t0 the
          * KC's potential Vm is held at its reset value (0) and no spike can occur at steps
          * t0+1 .. t0+n-1, where n = ceil(refractory_period / p.time.dt) (so no two spikes

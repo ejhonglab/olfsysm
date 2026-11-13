@@ -278,6 +278,7 @@ ModelParams const DEFAULT_PARAMS = []() {
     p.kc.claw_pow_ref             = 50.0;
     p.kc.ext_inh_scale            = 1.0;
     p.kc.apl_inh_divisive         = false;
+    p.kc.claw_inh_pool            = 0.0;
     // no refractory period and no adaptation: after a spike Vm is reset to 0 and
     // integration resumes at the next step
     p.kc.refractory_period        = 0.0;
@@ -3078,6 +3079,14 @@ void sim_KC_layer(
             Eigen::VectorXd kc_drive = sum_across_claws_within_each_kc(p, rv,
                 saturate_claws(p, claw_sims.col(t))
             );
+            // the pooled share of the inhibition the claws did not absorb (claw_sims stay
+            // the clipped states; s > 0 is only allowed w/o claw dynamics, so
+            // pn_drive_with_inh is each claw's net drive at t)
+            if (p.kc.claw_inh_pool > 0) {
+                kc_drive += p.kc.claw_inh_pool * sum_across_claws_within_each_kc(p, rv,
+                    pn_drive_with_inh.array().min(0.0).matrix()
+                );
+            }
             dKCdt = (-Vm.col(t-1) + kc_drive).array() - use_ffapl * ffapl_t(t-1);
         } else {
             dKCdt = (
@@ -3366,6 +3375,10 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 ", p.pn.bouton_inh_divisive=", p.pn.bouton_inh_divisive
             ));
         }
+        // (only if not the default, so the logs of other models do not change)
+        if (p.kc.claw_inh_pool != 0) {
+            rv.log(cat("p.kc.claw_inh_pool=", p.kc.claw_inh_pool));
+        }
         rv.log(cat("p.kc.n_apl_units=", p.kc.n_apl_units));
         if (p.kc.use_kc_kc_inh) {
             rv.log(cat("p.kc.use_kc_kc_inh=", p.kc.use_kc_kc_inh, ", p.kc.kc_kc_tau=",
@@ -3471,6 +3484,25 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
         check(p.kc.wPNKC_one_row_per_claw);
         // (spiking would not depend on the summed, transformed, drive)
         check(p.kc.n_claws_active_to_spike <= 0);
+    }
+
+    // (also true for NaN, which the first check then refuses)
+    if (p.kc.claw_inh_pool != 0) {
+        check(std::isfinite(p.kc.claw_inh_pool) && p.kc.claw_inh_pool >= 0 &&
+            p.kc.claw_inh_pool <= 1
+        );
+        check(p.kc.wPNKC_one_row_per_claw);
+        // (claws would carry their net drive already)
+        check(!p.kc.allow_net_inh_per_claw);
+        // (spiking would not depend on the summed drive)
+        check(p.kc.n_claws_active_to_spike <= 0);
+        // (the pooled part is defined for the subtractive form, on the claws' net drive
+        // at t, untransformed)
+        check(!p.kc.apl_inh_divisive);
+        check(!p.kc.claw_dynamics);
+        check(p.kc.claw_sat == 0 && p.kc.claw_thr == 0 && p.kc.claw_pow == 1.0 &&
+            p.kc.claw_thr_subgain == 0
+        );
     }
 
     // (also false for NaN)

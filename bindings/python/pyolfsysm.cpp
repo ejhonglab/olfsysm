@@ -137,6 +137,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("claw_pow_ref", &ModelParams::KC::claw_pow_ref)
         .def_readwrite("ext_inh_scale", &ModelParams::KC::ext_inh_scale)
         .def_readwrite("apl_inh_divisive", &ModelParams::KC::apl_inh_divisive)
+        .def_readwrite("claw_inh_pool", &ModelParams::KC::claw_inh_pool)
         .def_readwrite("refractory_period", &ModelParams::KC::refractory_period)
         .def_readwrite("adapt_inc", &ModelParams::KC::adapt_inc)
         .def_readwrite("adapt_tau", &ModelParams::KC::adapt_tau)
