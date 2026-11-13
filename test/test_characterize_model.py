@@ -38,7 +38,7 @@ from pyolfsysm.mb_model import (fit_mb_model, fit_and_plot_mb_model,
 )
 from pyolfsysm.wpnkc_shuffles import shuffle_wPNKC, shuffled_wPNKC
 
-from .characterize import check_frozen, frame_summary, to_jsonable
+from .characterize import check_frozen, frame_summary, to_jsonable, REGEN
 from .conftest import test_data_dir
 
 
@@ -376,6 +376,25 @@ def test_fit_mb_model_case(case):
     print(f'{case}: response rate {rate:.4f}, {int(spike_counts.values.sum())} spikes, '
         f'{responses.shape[0]} KCs'
     )
+
+
+@pytest.mark.skipif(REGEN, reason='compares with the frozen outputs of other cases')
+@pytest.mark.parametrize('case', ['rb', 'rb_pn_claw_to_apl'])
+def test_claw_inh_pool_zero_matches_frozen(case):
+    """Tests `claw_inh_pool=0.0` (the clipped form, passed explicitly) reproduces the
+    frozen outputs of the reduced claw + bouton cases, tuned, apart from the recorded
+    parameter.
+    """
+    orn, kws = _model_inputs(case)
+    responses, spike_counts, _, params = fit_mb_model(orn, make_plots=False,
+        claw_inh_pool=0.0, **kws
+    )
+    params = dict(params)
+    assert params.pop('claw_inh_pool') == 0.0
+    prefix = f'model/fit_mb_model/{case}'
+    check_frozen(f'{prefix}/spike_counts', spike_counts)
+    check_frozen(f'{prefix}/responses', responses)
+    freeze_params(prefix, params)
 
 
 def test_fit_mb_model_dynamics():

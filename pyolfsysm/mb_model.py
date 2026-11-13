@@ -624,6 +624,11 @@ EXT_INH_RECORDED_PARAMS: Tuple[str, ...] = ('ext_inh_kc_max', 'ext_inh_bouton_ma
 # output params (and model IDs) if True.
 APL_INH_FORM_PARAMS: Tuple[str, ...] = ('apl_inh_divisive', 'bouton_inh_divisive')
 
+# `fit_mb_model` kwarg for the pooled share of the APL>claw inhibition the claws do not
+# absorb (olfsysm `mp.kc.claw_inh_pool`). The clipped form (0, olfsysm's default) if None,
+# and only recorded in output params (and model IDs) if passed.
+CLAW_INH_POOL_PARAMS: Tuple[str, ...] = ('claw_inh_pool',)
+
 # `fit_mb_model` kwargs for a KC refractory period and spike-frequency adaptation
 # (olfsysm `mp.kc.refractory_period`, `mp.kc.adapt_inc`, `mp.kc.adapt_tau`: each kwarg
 # is the olfsysm parameter with a 'kc_' prefix). Each left at olfsysm's default (no
@@ -852,7 +857,7 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
         'claw_weight': 'presence',
         **{k: None for k in AL_INH_PARAMS + KC_KC_INH_PARAMS + CLAW_SAT_PARAMS +
             BOUTON_DEPLETION_PARAMS + EXT_INH_PARAMS + EXT_INH_RECORDED_PARAMS +
-            KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS
+            KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
         },
         **{k: False for k in APL_INH_FORM_PARAMS},
     }
@@ -862,7 +867,7 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
         for k in KC_KC_INH_PARAMS + ('claw_sat', 'claw_thr', 'claw_thr_width',
             'claw_thr_subgain', 'claw_pow', 'claw_pow_ref') + BOUTON_DEPLETION_PARAMS +
             EXT_INH_RECORDED_PARAMS + KC_SPIKING_PARAMS + TIME_PARAMS +
-            APL_DYNAMICS_PARAMS
+            APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
     }
 
     def is_excluded_value(k: str, v: Any) -> bool:
@@ -12652,6 +12657,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     ext_inh_bouton: Optional[pd.DataFrame] = None,
     ext_inh_scale: Optional[float] = None,
     apl_inh_divisive: bool = False, bouton_inh_divisive: bool = False,
+    claw_inh_pool: Optional[float] = None,
     kc_refractory_period: Optional[float] = None, kc_adapt_inc: Optional[float] = None,
     kc_adapt_tau: Optional[float] = None,
     time_stim_end: Optional[float] = None, time_end: Optional[float] = None,
@@ -13082,6 +13088,21 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `prat_boutons=True`. False (the default) keeps the subtractive form, and is
             not recorded in output params.
 
+        claw_inh_pool: if not None, the pooled share `s` (0 to 1) of the APL>claw
+            inhibition the claws do not absorb (olfsysm `mp.kc.claw_inh_pool`). Each
+            claw's net drive `x` (its PN>KC drive minus its APL inhibition) is clipped at
+            0 before the claws are summed, so a KC loses to APL at most what each claw
+            receives; with `s`, each KC's summed drive is the sum over its claws of
+            `max(x, 0) + s * min(x, 0)`, so `s = 1` puts APL's inhibition on the KC's
+            summed drive (a claw driven less than its inhibition takes from the KC's other
+            claws; E91 of the KC-remapping experiments) and `s = 0` is the clipped form
+            exactly (but is recorded). Claw states (`claw_sims`, and the claw>APL drive
+            w/ `pn_claw_to_apl=True`) stay the clipped ones, and nothing changes with APL
+            off. Active during threshold / APL tuning. Requires `one_row_per_claw=True`;
+            not supported w/ `allow_net_inh_per_claw`, `n_claws_active_to_spike`,
+            `apl_inh_divisive`, `claw_dynamics` or a per-claw transfer (`claw_sat` /
+            `claw_thr` / `claw_pow`). Must be finite and in [0, 1].
+
         kc_refractory_period: if not None, an absolute refractory period (seconds) of
             each KC (olfsysm `mp.kc.refractory_period`): after a spike the KC's
             potential is held at its reset value (0) and no spike can occur until
@@ -13214,8 +13235,9 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `AL_INH_PARAMS`, `KC_KC_INH_PARAMS`, `CLAW_SAT_PARAMS` or
             `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc',
             `EXT_INH_RECORDED_PARAMS` for `EXT_INH_PARAMS` passed, any of
-            `APL_INH_FORM_PARAMS` that were True, and any of `KC_SPIKING_PARAMS`,
-            `TIME_PARAMS` or `APL_DYNAMICS_PARAMS` that were passed).
+            `APL_INH_FORM_PARAMS` that were True, and any of `CLAW_INH_POOL_PARAMS`,
+            `KC_SPIKING_PARAMS`, `TIME_PARAMS` or `APL_DYNAMICS_PARAMS` that were
+            passed).
 
             If `use_connectome_APL_weights=True`, output will have `wAPLKC_scale` and
             `wKCAPL_scale`, which are scalars that could be used as input to `wAPLKC` /
@@ -13535,6 +13557,32 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         mp.kc.apl_inh_divisive = True
     if bouton_inh_divisive:
         mp.pn.bouton_inh_divisive = True
+
+    # (only if passed, to also add to param_dict below)
+    claw_inh_pool_params = dict()
+    if claw_inh_pool is not None:
+        claw_inh_pool = float(claw_inh_pool)
+        if not (np.isfinite(claw_inh_pool) and 0 <= claw_inh_pool <= 1):
+            raise ValueError('claw_inh_pool must be finite and in [0, 1] (got '
+                f'{claw_inh_pool})'
+            )
+        if not one_row_per_claw:
+            raise ValueError('claw_inh_pool requires one_row_per_claw=True')
+        incompatible = [k for k, v in (
+                ('allow_net_inh_per_claw', allow_net_inh_per_claw),
+                ('n_claws_active_to_spike', n_claws_active_to_spike is not None),
+                ('apl_inh_divisive', apl_inh_divisive),
+                ('claw_dynamics', claw_dynamics),
+                (' / '.join(claw_sat_params), len(claw_sat_params) > 0),
+            ) if v
+        ]
+        if len(incompatible) > 0:
+            raise ValueError('claw_inh_pool not supported with '
+                f'{", ".join(incompatible)} (it pools the subtractive inhibition of '
+                'claws whose net drive, untransformed, sums at the KC)'
+            )
+        claw_inh_pool_params['claw_inh_pool'] = claw_inh_pool
+        mp.kc.claw_inh_pool = claw_inh_pool
 
     # (only those passed, to also add to param_dict below)
     kc_spiking_params = kc_spiking_param_dict(kc_refractory_period=kc_refractory_period,
@@ -16536,6 +16584,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     param_dict.update(bouton_depletion_params)
     param_dict.update(ext_inh_params)
     param_dict.update(apl_inh_form_params)
+    param_dict.update(claw_inh_pool_params)
     param_dict.update(kc_spiking_params)
     param_dict.update(time_params)
     param_dict.update(apl_dynamics_params)
@@ -17232,7 +17281,8 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
             `claw_thr` / `claw_thr_width` / `claw_thr_subgain` / `claw_pow` /
             `claw_pow_ref` / `bouton_ves_p` / `ext_inh_kc` / `ext_inh_bouton` /
             `ext_inh_scale` / `apl_inh_divisive` / `bouton_inh_divisive` /
-            `kc_refractory_period` / `kc_adapt_inc` / `kc_adapt_tau`) apply to the
+            `claw_inh_pool` / `kc_refractory_period` / `kc_adapt_inc` /
+            `kc_adapt_tau`) apply to the
             initial call and to all simulations (the external inhibition matrices stay
             set in the olfsysm variables the simulations reuse). So do `TIME_PARAMS`
             (`time_stim_end`, `time_end`: the odor pulse and the simulation length),
@@ -20903,7 +20953,7 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
             # inputs (same for all seeds), so they still match model_kws values below
             for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + CLAW_SAT_PARAMS +
                     BOUTON_DEPLETION_PARAMS + EXT_INH_RECORDED_PARAMS +
-                    APL_INH_FORM_PARAMS):
+                    APL_INH_FORM_PARAMS + CLAW_INH_POOL_PARAMS):
                 if k in param_dict:
                     assert len(set(param_dict[k])) == 1
                     param_dict[k] = param_dict[k][0]

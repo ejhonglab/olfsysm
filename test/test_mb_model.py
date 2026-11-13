@@ -71,7 +71,7 @@ from pyolfsysm.mb_model import (fit_mb_model, fit_and_plot_mb_model, connectome_
     plot_apl_activity_sections, view_apl_activity_3d, onestep_lr_cache_key,
     read_onestep_lr_cache, connectome_KCKC_weights, CLAW_SAT_PARAMS,
     BOUTON_DEPLETION_PARAMS, EXT_INH_RECORDED_PARAMS, APL_INH_FORM_PARAMS, get_sim_var,
-    KC_SPIKING_PARAMS, _get_fixed_params
+    KC_SPIKING_PARAMS, _get_fixed_params, CLAW_INH_POOL_PARAMS
 )
 
 # TODO better way?
@@ -6937,6 +6937,223 @@ def test_apl_inh_divisive_simulator(apl_inh_form_model):
     responses_off_sub, spike_counts_off_sub = simulate_sub(apl_off)
     assert responses_off.equals(responses_off_sub)
     assert spike_counts_off.equals(spike_counts_off_sub)
+
+
+# the (reduced, for speed) claw + bouton model (`claw_inh_pool` requires claws), w/ APL
+# driven by KC spikes (the default) and by the claws (`pn_claw_to_apl=True`, as in the
+# KC-remapping experiments' model family)
+CLAW_INH_POOL_MODEL_KWS: List[ParamDict] = [KC_KC_INH_MODEL_KWS[1],
+    dict(KC_KC_INH_MODEL_KWS[1], pn_claw_to_apl=True)
+]
+
+@pytest.fixture(scope='module', params=CLAW_INH_POOL_MODEL_KWS, ids=format_model_params)
+def claw_inh_pool_model(request, orn_deltas
+    ) -> Tuple[pd.DataFrame, ParamDict, FitMBModelOutputs]:
+    """Returns `orn_deltas`, model kwargs, and tuned outputs w/o `claw_inh_pool`.
+
+    Uses `reduced_bouton_system` (so the returned `orn_deltas` and kwargs should be
+    used). Do not modify outputs.
+    """
+    orn_deltas, kws = maybe_reduce_bouton_system(orn_deltas, request.param)
+    return orn_deltas, kws, _fit_mb_model(orn_deltas=orn_deltas, **kws)
+
+
+def test_claw_inh_pool_zero_equals_default(claw_inh_pool_model):
+    """Tests `claw_inh_pool=0.0` (recorded) does not change tuned outputs.
+    """
+    orn_deltas, kws, ret = claw_inh_pool_model
+    assert not any(k in ret[3] for k in CLAW_INH_POOL_PARAMS)
+
+    ret2 = _fit_mb_model(orn_deltas=orn_deltas, claw_inh_pool=0.0, **kws)
+    assert type(ret2[3]['claw_inh_pool']) is float
+    assert_fit_outputs_equal(ret, _pop_param(ret2, 'claw_inh_pool', 0.0))
+
+
+@pytest.mark.parametrize('s', [0.0, 0.5, 1.0])
+def test_claw_inh_pool_summed_drive(claw_inh_pool_model, s):
+    """Tests each KC's summed drive is the sum over its claws of `max(x, 0) +
+    s * min(x, 0)`, w/ `x` each claw's PN>KC drive minus its APL inhibition, at fixed
+    thresholds and APL weights: recreated from the saved dynamics (bouton states, APL
+    activity, the claw>bouton wiring and APL>claw weights) and checked against the KCs'
+    potential, step by step, for every KC (in particular those w/ two claws, one of them
+    net-inhibited), while the saved claw states stay the clipped `max(x, 0)`.
+    """
+    orn_deltas, kws, ret = claw_inh_pool_model
+    fixed_kws = get_thr_and_APL_weights(ret[3], kws)
+    _, spike_counts, _, params = _fit_mb_model(orn_deltas=orn_deltas,
+        claw_inh_pool=s, return_olfsysm_vars=True, return_dynamics=True, **fixed_kws,
+        **kws
+    )
+    mp, rv = params['mp'], params['rv']
+    if s == 0:
+        assert spike_counts.equals(ret[1])
+
+    claws = get_sim_var(rv.kc, 'claw_sims')
+    boutons = get_sim_var(rv.pn, 'bouton_sims')
+    inh = get_sim_var(rv.kc, 'inh_sims')[:, 0, :]
+    vm = get_sim_var(rv.kc, 'vm_sims')
+    spikes = get_sim_var(rv.kc, 'spike_recordings')
+    wPNKC = np.array(rv.kc.wPNKC)
+    wAPLKC = np.array(rv.kc.wAPLKC)[:, 0]
+    claw_to_kc = np.array(rv.kc.claw_to_kc)
+    n_kcs = vm.shape[1]
+    assert wPNKC.shape == (claws.shape[1], boutons.shape[1])
+    assert len(claw_to_kc) == len(wAPLKC) == claws.shape[1]
+
+    # KCs w/ exactly two claws
+    n_claws = np.bincount(claw_to_kc, minlength=n_kcs)
+    two_claw_kcs = np.flatnonzero(n_claws == 2)
+    assert len(two_claw_kcs) > 0
+    two_claw = np.isin(claw_to_kc, two_claw_kcs)
+
+    ratio = mp.kc.taum / mp.time_dt
+    n_net_inh = 0
+    n_two_claw_checked = 0
+    for o in range(claws.shape[0]):
+        # steps of the KC simulation (bouton states are NaN before it)
+        ts = np.flatnonzero(~np.isnan(boutons[o, 0]))
+        assert ts[0] > 0 and np.array_equal(ts, np.arange(ts[0], claws.shape[2]))
+        assert not np.isnan(boutons[o][:, ts]).any()
+        assert (vm[o][:, ts[0] - 1] == 0).all()
+
+        x = wPNKC @ boutons[o][:, ts] - wAPLKC[:, None] * inh[o, ts - 1][None, :]
+        # (the saved claw states are the clipped net drives)
+        assert np.allclose(claws[o][:, ts], np.maximum(x, 0), rtol=1e-12, atol=1e-9)
+        n_net_inh += int((x < 0).sum())
+
+        expected = np.zeros((n_kcs, len(ts)))
+        np.add.at(expected, claw_to_kc, np.maximum(x, 0) + s * np.minimum(x, 0))
+        # the summed drive, from the potential's update (Vm(t) = Vm(t-1) + dt / taum *
+        # (-Vm(t-1) + drive(t)), at steps w/o a spike, which resets Vm to 0)
+        drive = vm[o][:, ts - 1] + (vm[o][:, ts] - vm[o][:, ts - 1]) * ratio
+        no_spike = spikes[o][:, ts] == 0
+        assert no_spike.mean() > 0.9
+        assert np.allclose(drive[no_spike], expected[no_spike], rtol=1e-9, atol=1e-6)
+
+        # two-claw KCs at steps where one claw is net-inhibited and the other driven
+        net_inh_kcs = np.unique(claw_to_kc[two_claw & (x < 0).any(axis=1)])
+        for k in net_inh_kcs:
+            (c1, c2) = np.flatnonzero(claw_to_kc == k)
+            mixed = ((x[c1] < 0) & (x[c2] > 0)) | ((x[c1] > 0) & (x[c2] < 0))
+            mixed &= no_spike[k]
+            if not mixed.any():
+                continue
+            lo = np.minimum(x[c1], x[c2])[mixed]
+            hi = np.maximum(x[c1], x[c2])[mixed]
+            assert np.allclose(drive[k][mixed], hi + s * lo, rtol=1e-9, atol=1e-6)
+            n_two_claw_checked += 1
+
+    # (the inhibition is large enough for the test to mean something)
+    assert n_net_inh > 0
+    assert n_two_claw_checked > 0
+
+
+def test_claw_inh_pool_apl_off_and_simulator(claw_inh_pool_model):
+    """Tests `make_fixed_param_kc_simulator` keeps `claw_inh_pool` in its KC simulations
+    (matching `fit_mb_model`), that it changes outputs w/ APL on and nothing w/ APL off
+    (all APL weight scales 0), and that setting `mp.kc.claw_inh_pool` on a simulator's
+    olfsysm parameters gives the same outputs (and an invalid value raises ValueError,
+    from olfsysm's check, before any simulation).
+    """
+    orn_deltas, kws, ret = claw_inh_pool_model
+    simulate, initial_params = make_fixed_param_kc_simulator(orn_deltas, **kws)
+    assert not any(k in initial_params for k in CLAW_INH_POOL_PARAMS)
+    simulate_pool, _ = make_fixed_param_kc_simulator(orn_deltas,
+        initial_params=initial_params, claw_inh_pool=1.0, **kws
+    )
+    responses0, spike_counts0 = simulate(dict())
+    responses, spike_counts = simulate_pool(dict())
+    assert not spike_counts.equals(spike_counts0)
+
+    responses2, spike_counts2, _, params2 = _fit_mb_model(orn_deltas=orn_deltas,
+        claw_inh_pool=1.0,
+        **{**kws, **fixed_params_to_fit_mb_model_kws(initial_params)}
+    )
+    assert params2['claw_inh_pool'] == 1.0
+    assert responses.equals(responses2)
+    assert spike_counts.equals(spike_counts2)
+
+    apl_off = {k: 0.0 for k in initial_params if k != 'fixed_thr'}
+    responses_off, spike_counts_off = simulate(apl_off)
+    responses_off_pool, spike_counts_off_pool = simulate_pool(apl_off)
+    assert spike_counts_off.values.sum() > spike_counts0.values.sum()
+    assert responses_off.equals(responses_off_pool)
+    assert spike_counts_off.equals(spike_counts_off_pool)
+
+    cells = dict(zip(simulate.__code__.co_freevars, simulate.__closure__))
+    mp = cells['mp'].cell_contents
+    assert mp.kc.claw_inh_pool == 0
+    try:
+        mp.kc.claw_inh_pool = 1.0
+        assert simulate(dict())[1].equals(spike_counts)
+        mp.kc.claw_inh_pool = 1.5
+        with pytest.raises(ValueError, match='claw_inh_pool'):
+            simulate(dict())
+    finally:
+        mp.kc.claw_inh_pool = 0.0
+    assert simulate(dict())[1].equals(spike_counts0)
+
+
+def test_claw_inh_pool_one_equals_net_inh_per_claw(claw_inh_pool_model):
+    """Tests `claw_inh_pool=1` equals `allow_net_inh_per_claw=True` (claws carrying
+    their net drive) when APL is not driven by the claws (`pn_claw_to_apl=False`), at
+    fixed thresholds and APL weights, and that both differ from the clipped form.
+    """
+    orn_deltas, kws, ret = claw_inh_pool_model
+    if kws.get('pn_claw_to_apl', False):
+        pytest.skip('w/ pn_claw_to_apl, net-inhibited claws would also lower APL drive '
+            'under allow_net_inh_per_claw'
+        )
+    fixed_kws = get_thr_and_APL_weights(ret[3], kws)
+    responses, spike_counts, _, _ = _fit_mb_model(orn_deltas=orn_deltas,
+        claw_inh_pool=1.0, **fixed_kws, **kws
+    )
+    responses2, spike_counts2, _, _ = _fit_mb_model(orn_deltas=orn_deltas,
+        allow_net_inh_per_claw=True, **fixed_kws, **kws
+    )
+    assert responses.equals(responses2)
+    assert spike_counts.equals(spike_counts2)
+    assert not spike_counts.equals(ret[1])
+
+
+def test_claw_inh_pool_invalid(orn_deltas):
+    """Tests invalid `claw_inh_pool` values and unsupported combinations raise
+    ValueError.
+    """
+    claw_kws = dict(one_row_per_claw=True, prat_claws=True,
+        use_connectome_APL_weights=True
+    )
+    for s in (-0.1, 1.5, np.nan, np.inf):
+        with pytest.raises(ValueError, match='claw_inh_pool must be'):
+            fit_mb_model(orn_deltas, claw_inh_pool=s, **claw_kws)
+
+    with pytest.raises(ValueError, match='claw_inh_pool requires one_row_per_claw'):
+        fit_mb_model(orn_deltas, claw_inh_pool=1.0, weight_divisor=20)
+
+    for bad in (dict(allow_net_inh_per_claw=True), dict(apl_inh_divisive=True),
+            dict(pn_claw_to_apl=True, claw_dynamics=True), dict(claw_thr=70.0),
+            dict(claw_sat=150.0), dict(claw_pow=2.0), dict(n_claws_active_to_spike=2)
+        ):
+        with pytest.raises(ValueError, match='claw_inh_pool not supported'):
+            fit_mb_model(orn_deltas, claw_inh_pool=1.0, **claw_kws, **bad)
+
+
+def test_claw_inh_pool_model_id():
+    """Tests model IDs / LR cache keys only change when `claw_inh_pool` is passed.
+    """
+    kws = dict(BOUTON_DEPLETION_MODEL_KWS)
+    assert format_model_params({**kws, 'claw_inh_pool': None}) == \
+        format_model_params(kws)
+    assert onestep_lr_cache_key({**kws, 'claw_inh_pool': None}) == \
+        onestep_lr_cache_key(kws)
+
+    variants = (dict(), dict(claw_inh_pool=0.0), dict(claw_inh_pool=0.5),
+        dict(claw_inh_pool=1.0)
+    )
+    ids = {format_model_params({**kws, **x}) for x in variants}
+    assert len(ids) == len(variants)
+    lr_keys = {onestep_lr_cache_key({**kws, **x}) for x in variants}
+    assert len(lr_keys) == len(variants)
 
 
 # one-row-per-KC hemibrain model (the olfsysm `sim_KC_layer` branch w/o claws), and a
