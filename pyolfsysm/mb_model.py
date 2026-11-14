@@ -17861,7 +17861,8 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
     tie_apl_weights: Union[bool, Sequence[str]] = True, method: str = 'Nelder-Mead',
     maxfev: int = 200,
     optimizer_kws: Optional[ParamDict] = None, verify: bool = True,
-    verbose: bool = True, **model_kws) -> ParamDict:
+    verbose: bool = True, extra_params: Optional[Dict[str, Dict[str, Any]]] = None,
+    **model_kws) -> ParamDict:
     """Optimizes KC threshold / APL weight scales to minimize loss vs measured KC data.
 
     For models w/ the APL split into units, can also optimize `apl_unit_coupling`.
@@ -17974,6 +17975,19 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
             includes `fit_mb_model` outputs in returned dict. If
             `condition_param_overrides` passed, does this for each condition.
 
+        extra_params: if passed, maps names (not parameters of the simulator) to dicts
+            with 'initial' (a value), 'bounds' ((lower, upper), containing it) and 'set'
+            (a callable `set(simulate, value)` that changes the simulator for that value,
+            e.g. its unscaled weights in place through the closure of `simulate`, the
+            function `make_fixed_param_kc_simulator` returns). They are optimized
+            together with `params_to_optimize` (rescaled to [0, 1] within their bounds the
+            same way), each 'set' is called with its value before every evaluation's
+            simulations (the initial one included), and their values are in the history
+            and in the returned 'params' (but not in what the simulator, the conditions'
+            parameters, the hooks or 'fit_mb_model_kws' get, which have no equivalent for
+            them). Not with `verify=True` (the simulator they change has no
+            `fit_mb_model` equivalent). Off (None) by default, which changes nothing.
+
         **model_kws: passed to `fit_mb_model` (see `make_fixed_param_kc_simulator`)
 
     Returns dict with:
@@ -18006,6 +18020,9 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
         If `condition_spike_times` passed, also:
         'condition_spike_times': dict mapping each of those conditions to its spike
             times at best parameters
+        If `extra_params` passed, also:
+        'extra_params': the best values of the extra parameters (also in 'params')
+        'initial_extra_params': their initial values
     """
     if model_kws.get('plot_dir') is not None:
         raise ValueError('plot_dir not supported. to make plots, call '
@@ -18075,6 +18092,23 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
                 'condition_param_overrides'
             )
 
+    extra_params = dict(extra_params or {})
+    for name, e in extra_params.items():
+        missing = {'initial', 'bounds', 'set'} - set(e)
+        if missing:
+            raise ValueError(f'extra_params[{name!r}] lacks {missing}')
+        if not callable(e['set']):
+            raise ValueError(f"extra_params[{name!r}]['set'] is not callable")
+        lower, upper = e['bounds']
+        if not lower <= e['initial'] <= upper:
+            raise ValueError(f"extra_params[{name!r}]: initial {e['initial']} not within "
+                f"bounds {(lower, upper)}"
+            )
+    if extra_params and verify:
+        raise ValueError('extra_params need verify=False (the simulator they change has '
+            'no fit_mb_model equivalent)'
+        )
+
     simulator_kws = dict(model_kws)
     if (initial_params is None and target_response_rates is not None and
             'target_sparsity' not in model_kws):
@@ -18109,6 +18143,10 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
     if len(unknown) > 0:
         raise ValueError(f'bounds passed for {unknown}, not in {params_to_optimize=}')
 
+    clash = set(extra_params) & set(initial_params)
+    if len(clash) > 0:
+        raise ValueError(f'extra_params {clash} are parameters of the simulator')
+
     if 'apl_unit_coupling' in params_to_optimize:
         max_coupling = max_apl_unit_coupling(
             n_neighbors=model_kws.get('apl_unit_n_neighbors'),
@@ -18139,6 +18177,13 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
 
         param_bounds[p] = (lower, upper)
 
+    # (the extra parameters after the simulator's, in the order given; none by default)
+    for name, e in extra_params.items():
+        param_bounds[name] = tuple(float(x) for x in e['bounds'])
+    model_param_names = list(params_to_optimize)
+    params_to_optimize = model_param_names + list(extra_params)
+    initial_extra = {name: float(e['initial']) for name, e in extra_params.items()}
+
     def transform(p: str, value: float) -> float:
         lower = param_bounds[p][0]
         return np.log(value) if lower > 0 else value
@@ -18168,7 +18213,7 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
             )
 
     def unit_to_params(u: np.ndarray) -> ParamDict:
-        params = dict(initial_params)
+        params = dict(initial_params, **initial_extra)
         params.update({p: from_unit(p, x) for p, x in zip(params_to_optimize, u)})
 
         wAPLKC_factor = params['wAPLKC_scale'] / initial_params['wAPLKC_scale']
@@ -18177,8 +18222,12 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
 
         return params
 
+    def model_params(params: ParamDict) -> ParamDict:
+        # (the simulator's parameters: without any extra parameters)
+        return {k: v for k, v in params.items() if k not in extra_params}
+
     def condition_params(params: ParamDict) -> Dict[str, ParamDict]:
-        return {c: {**params, **overrides}
+        return {c: {**model_params(params), **overrides}
             for c, overrides in condition_param_overrides.items()
         }
 
@@ -18197,8 +18246,11 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
             raise _MaxEvalsReached
 
         before = time.time()
+        for name, e in extra_params.items():
+            e['set'](simulate, params[name])
+
         if condition_param_overrides is None:
-            responses, spike_counts = simulate(params)
+            responses, spike_counts = simulate(model_params(params))
             losses = loss_fn(responses, spike_counts)
             outputs = dict(responses=responses, spike_counts=spike_counts)
         else:
@@ -18228,7 +18280,9 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
                     c_outputs = c_outputs[:2]
                 condition_outputs[c] = c_outputs
 
-            hook_outputs = {c: hook(simulate, params) for c, hook in condition_hooks.items()}
+            hook_outputs = {c: hook(simulate, model_params(params))
+                for c, hook in condition_hooks.items()
+            }
 
             losses = loss_fn({**condition_outputs, **hook_outputs})
             spike_times = {c: o[2] for c, o in condition_outputs.items()
@@ -18275,10 +18329,12 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
 
         return unit2loss[key]
 
-    evaluate(initial_params)
+    evaluate(dict(initial_params, **initial_extra))
     initial_losses = history[0]
 
-    u0 = np.array([to_unit(p, initial_params[p]) for p in params_to_optimize])
+    u0 = np.array([to_unit(p, {**initial_params, **initial_extra}[p])
+        for p in params_to_optimize
+    ])
     unit2loss[tuple(u0)] = initial_losses['loss']
     unit_bounds = [(0.0, 1.0)] * len(params_to_optimize)
 
@@ -18356,12 +18412,12 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
 
     result = {
         'params': best['params'],
-        'fit_mb_model_kws': _fixed_param_model_kws(model_kws, best['params']),
+        'fit_mb_model_kws': _fixed_param_model_kws(model_kws, model_params(best['params'])),
         'loss': best['loss'],
         'losses': best['losses'],
         'initial_params': initial_params,
         'initial_losses': {k: v for k, v in initial_losses.items()
-            if k not in initial_params and k != 'time_s'
+            if k not in initial_params and k not in initial_extra and k != 'time_s'
         },
         'history': history,
         'scipy_result': scipy_result,
@@ -18369,6 +18425,9 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
         'params_to_optimize': params_to_optimize,
         'tied_params': tied,
     }
+    if extra_params:
+        result['extra_params'] = {k: best['params'][k] for k in extra_params}
+        result['initial_extra_params'] = dict(initial_extra)
 
     if condition_param_overrides is not None:
         best_condition_params = condition_params(best['params'])

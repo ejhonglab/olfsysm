@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for the `fit_mb_model` APL time constant kwarg (`APL_DYNAMICS_PARAMS`: `apl_taum`),
-and `optimize_mb_model_params`' `condition_spike_times`.
+and `optimize_mb_model_params`' `condition_spike_times` and `extra_params`.
 """
 
 from typing import Tuple
@@ -252,3 +252,68 @@ def test_optimize_condition_spike_times(taum_model):
         optimize_mb_model_params(sub, loss_fn=lambda r, s: 0.0, initial_params=params,
             params_to_optimize=['fixed_thr'], maxfev=1, condition_spike_times=['on'], **kws
         )
+
+
+def test_optimize_extra_params(taum_model):
+    """Tests `optimize_mb_model_params`' `extra_params`: a parameter outside the simulator (here a
+    factor on its unscaled APL->KC weights, set in place through the closure of `simulate`) is
+    set before every evaluation and optimized with the simulator's; at its initial value (a
+    no-op) the first evaluation is the one without it; the history, 'params' and
+    'extra_params' carry its values, the conditions' parameters and 'fit_mb_model_kws' do not;
+    and the refusals.
+    """
+    orn_deltas, kws, ret = taum_model
+    params = _get_fixed_params(ret[3])
+    sub = _odor_columns(orn_deltas, ret[1].sum().sort_values(ascending=False).index[:3])
+
+    def loss(outputs):
+        r_on, s_on = outputs['on']
+        r_off, _ = outputs['off']
+        return {'loss': float(abs(r_on.values.mean() - 0.05) + abs(r_off.values.mean() - 0.1)),
+            'n_on': float(s_on.values.sum())
+        }
+
+    common = dict(loss_fn=loss, condition_param_overrides={'on': {}, 'off': _apl_off(params)},
+        params_to_optimize=['fixed_thr'], initial_params=params, maxfev=4, verify=False,
+        verbose=False, **kws
+    )
+    res0 = optimize_mb_model_params(sub, **common)
+    calls = []
+    base = {}
+
+    def set_factor(simulate, d):
+        cells = dict(zip(simulate.__code__.co_freevars, simulate.__closure__))
+        w = cells['wAPLKC_unscaled'].cell_contents
+        base.setdefault('w', w.copy())
+        w[...] = base['w'] * (1.0 + d)
+        calls.append(d)
+
+    extra = {'factor': dict(initial=0.0, bounds=(0.0, 4.0), set=set_factor)}
+    res1 = optimize_mb_model_params(sub, extra_params=extra, **common)
+    h0, h1 = res0['history'], res1['history']
+    assert 'factor' not in h0 and 'extra_params' not in res0
+    # at its initial value the extra parameter changes nothing: the first evaluation is the same
+    assert calls[0] == 0.0 and h1['factor'].iloc[0] == 0.0
+    assert h1['loss'].iloc[0] == h0['loss'].iloc[0] and h1['n_on'].iloc[0] == h0['n_on'].iloc[0]
+    assert h1['fixed_thr'].iloc[0] == h0['fixed_thr'].iloc[0]
+    # set before every evaluation, with the value the history records
+    assert len(calls) == len(h1) and list(h1['factor']) == calls
+    # the simplex's step on it (the threshold at its initial value) inhibits more: fewer APL-on spikes
+    step = h1[(h1.factor > 0) & np.isclose(h1.fixed_thr, params['fixed_thr'], rtol=1e-12, atol=0)]
+    assert len(step) and (step.n_on < h0['n_on'].iloc[0]).all()
+    assert res1['extra_params'] == {'factor': res1['params']['factor']}
+    assert res1['initial_extra_params'] == {'factor': 0.0}
+    assert 'factor' in res1['params_to_optimize']
+    assert all('factor' not in p for p in res1['condition_params'].values())
+    assert 'factor' not in res1['fit_mb_model_kws']
+    assert 0.0 <= res1['params']['factor'] <= 4.0
+
+    bad = [dict(extra_params={'fixed_thr': dict(extra['factor'])}),
+        dict(extra_params={'factor': dict(initial=0.0, bounds=(0.0, 4.0))}),
+        dict(extra_params={'factor': dict(initial=5.0, bounds=(0.0, 4.0), set=set_factor)}),
+        dict(extra_params={'factor': dict(initial=0.0, bounds=(0.0, 4.0), set=None)}),
+        dict(extra_params=extra, verify=True),
+    ]
+    for b in bad:
+        with pytest.raises(ValueError):
+            optimize_mb_model_params(sub, **{**common, **b})
