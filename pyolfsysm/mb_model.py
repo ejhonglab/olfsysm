@@ -6814,7 +6814,7 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
     prat_boutons: bool = False, apl_units: bool = False,
     wPNKC: Optional[pd.DataFrame] = None, kc_types: Optional[pd.Series] = None,
     kc_to_claws: Optional[List[List[int]]] = None, _drop_glom_with_plus: bool = True,
-    plot_dir: Optional[Path] = None
+    plot_dir: Optional[Path] = None, dropped_counts: Optional[dict] = None
     ) -> Union[
         Tuple[pd.Series, pd.Series, Optional[pd.Series], Optional[pd.Series]],
         Tuple[pd.Series, pd.Series, Optional[pd.Series], Optional[pd.Series],
@@ -6884,8 +6884,20 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
         connectome: same as for `connectome_wPNKC`
 
         plot_dir: same as for `connectome_wPNKC`
+
+        dropped_counts: if a dict is passed (requires `prat_claws=True` and `wPNKC`),
+            it is filled with what this function drops of the calyx (CA(R)) APL<>KC
+            synapses of the KCs in `wPNKC`: keys 'wAPLKC' and 'wKCAPL', each a DataFrame
+            indexed by the KC IDs of `wPNKC` (sorted, as in `wPNKC`), with integer
+            columns 'nan_claw' (synapses without a claw ID), 'unassigned_claw'
+            (claw ID -1, where `wPNKC` has no claw -1 for that KC) and 'other_claw'
+            (other claw IDs not in `wPNKC` for that KC: claws the wiring drops).
+            Synapses kept in the returned weights are not counted. Nothing returned
+            changes.
     """
     assert connectome in connectome_options
+    if dropped_counts is not None and not (prat_claws and wPNKC is not None):
+        raise NotImplementedError('dropped_counts requires prat_claws=True and wPNKC')
 
     if connectome != 'hemibrain':
         raise NotImplementedError('currently only have data for APL-KC connections'
@@ -7229,6 +7241,11 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
         kc2apl_df, n_nonclaw_kc2apl_syns_per_kc = drop_missing_claws(kc2apl_df,
             'kc2apl', [KC_ID]
         )
+        # synapses without a claw ID, per KC (for `dropped_counts`; the names above are
+        # reassigned further down)
+        name2nan_claw_per_kc = {'wAPLKC': n_nonclaw_apl2kc_syns_per_kc,
+            'wKCAPL': n_nonclaw_kc2apl_syns_per_kc
+        }
 
         # TODO check that tianpei's path thru here currently does something sensible in
         # Btn_separate=True (prat_claws=False) case too (matters less)
@@ -7882,6 +7899,25 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
         n_nonclaw_apl2kc_syns_per_kc = n_nonclaw_apl2kc_syns_per_kc2
         n_nonclaw_kc2apl_syns_per_kc = n_nonclaw_kc2apl_syns_per_kc2
 
+        if dropped_counts is not None:
+            for name, weights in (('wAPLKC', apl2kc_weights),
+                    ('wKCAPL', kc2apl_weights)):
+
+                dropped = weights[~weights.index.isin(index_nodupes)]
+                claw_ids = dropped.index.get_level_values(CLAW_ID)
+                cols = {
+                    'nan_claw': name2nan_claw_per_kc[name],
+                    'unassigned_claw': dropped[claw_ids == -1].groupby(level=KC_ID
+                        ).sum(),
+                    'other_claw': dropped[claw_ids != -1].groupby(level=KC_ID).sum(),
+                }
+                df = pd.DataFrame({k: reindex(v, unique_kc_ids).fillna(0)
+                    for k, v in cols.items()}
+                )
+                rounded = df.round()
+                assert np.allclose(df.values, rounded.values)
+                dropped_counts[name] = rounded.astype(int)
+
     if prat_boutons:
         # TODO convert dtype of bouton_id to int earlier (or prevent from becoming
         # float in first place) (there are no NaNs here, and should be asserted
@@ -8434,6 +8470,117 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
         name2unit_fracs[name] = unit_fracs
 
     return wAPLKC, wKCAPL, wAPLPN, wPNAPL, name2unit_fracs
+
+
+# the APL<>KC synapse tables `connectome_APL_weights(prat_claws=True)` reads
+APL_KC_SYNAPSE_TABLES = {
+    'APL>KC': 'APLunit-to-KCclaw_Connectivity_2025-12-14-21-12-48.parquet',
+    'KC>APL': 'KCclaw-to-APLunit_Connectivity_2025-12-14-21-12-48.parquet',
+}
+
+APL_KC_COUNT_COLUMNS = ('n_claws', 'kept', 'kept_unassigned', 'dropped_claw', 'no_claw',
+    'no_claw_nan', 'peduncle'
+)
+
+
+def connectome_APL_KC_synapse_counts(wPNKC_index: pd.MultiIndex,
+    direction: str = 'APL>KC', *, calyx_roi: str = 'CA(R)', peduncle_roi: str = 'PED(R)',
+    synapses: Optional[pd.DataFrame] = None) -> Tuple[pd.DataFrame, pd.Series]:
+    """Per KC of a one-row-per-claw wiring, its APL<>KC synapses split by where they are.
+
+    Reads the table `connectome_APL_weights(prat_claws=True)` reads (Pratyush's hemibrain
+    synapses, `APL_KC_SYNAPSE_TABLES`) and applies that function's filters: the right
+    APL ('APL_R'), and both synaptic sites in the ROI (`filter_synapses_to_roi`). The
+    calyx synapses then split exactly into those `connectome_APL_weights` keeps (on a
+    (KC, claw) of the wiring) and those it drops (`dropped_counts` there): on a claw the
+    wiring does not have, or on no claw.
+
+    Args:
+        wPNKC_index: index of a one-row-per-claw wiring (`connectome_wPNKC(prat_claws=True)`),
+            with `KC_ID` and `CLAW_ID` levels (Pratyush's claw IDs, -1 for his claw of
+            spatially unclustered synapses from one PN).
+
+        direction: 'APL>KC' (APL presynaptic) or 'KC>APL'.
+
+        calyx_roi, peduncle_roi: the ROIs (both sites in the ROI).
+
+        synapses: the synapse table to use instead of the file (columns 'bodyId_pre',
+            'bodyId_post', 'roi_pre', 'roi_post', 'instance_pre', 'instance_post',
+            'anatomical_claw_corrected'), e.g. a made-up one in a test.
+
+    Returns:
+        per_kc: DataFrame indexed by the KC IDs of `wPNKC_index` (in its order, sorted),
+            integer columns (`APL_KC_COUNT_COLUMNS`): 'n_claws' (rows of the wiring),
+            'kept' (calyx synapses on a (KC, claw) of the wiring: what
+            `connectome_APL_weights` keeps, summed over the KC's claws),
+            'kept_unassigned' (of 'kept', those with claw ID -1, kept on the wiring's
+            claw -1 of the KC), 'dropped_claw' (calyx synapses on a claw other than -1
+            that the wiring does not have for the KC), 'no_claw' (calyx synapses on no
+            claw: claw ID -1 where the wiring has no claw -1 for the KC, or no claw ID),
+            'no_claw_nan' (of 'no_claw', those without a claw ID), 'peduncle' (synapses
+            with both sites in `peduncle_roi`).
+
+        per_claw: Series indexed by `wPNKC_index`, the calyx synapses kept on each row
+            (a (KC, claw) with several rows of the wiring has its count split evenly
+            over them, as in `connectome_APL_weights`).
+    """
+    if direction == 'APL>KC':
+        kc_col, apl_instance_col = 'bodyId_post', 'instance_pre'
+    elif direction == 'KC>APL':
+        kc_col, apl_instance_col = 'bodyId_pre', 'instance_post'
+    else:
+        raise ValueError(f"direction must be 'APL>KC' or 'KC>APL' (got {direction!r})")
+
+    if synapses is None:
+        synapses = pd.read_parquet(prat_hemibrain_seg_dir /
+            APL_KC_SYNAPSE_TABLES[direction]
+        )
+
+    claws = wPNKC_index.to_frame(index=False)[[KC_ID, CLAW_ID]]
+    kc_ids = pd.Index(claws[KC_ID].drop_duplicates().to_numpy(), name=KC_ID)
+    assert kc_ids.is_monotonic_increasing
+    rows_per_claw = claws.groupby([KC_ID, CLAW_ID]).size()
+
+    df = synapses[(synapses[apl_instance_col] == 'APL_R') &
+        synapses[kc_col].isin(kc_ids)
+    ]
+    calyx = df[(df.roi_pre == calyx_roi) & (df.roi_post == calyx_roi)]
+    peduncle = df[(df.roi_pre == peduncle_roi) & (df.roi_post == peduncle_roi)]
+
+    kc = calyx[kc_col].to_numpy()
+    claw = calyx['anatomical_claw_corrected'].to_numpy(dtype=float)
+    has_claw = ~np.isnan(claw)
+    claw_int = np.where(has_claw, claw, -2).astype(int)
+    assert np.array_equal(claw_int[has_claw], claw[has_claw])
+    pairs = pd.MultiIndex.from_arrays([kc, claw_int], names=[KC_ID, CLAW_ID])
+    on_wiring = has_claw & np.asarray(pairs.isin(rows_per_claw.index))
+    unassigned = has_claw & (claw_int == -1)
+
+    masks = {
+        'kept': on_wiring,
+        'kept_unassigned': on_wiring & unassigned,
+        'dropped_claw': has_claw & ~unassigned & ~on_wiring,
+        'no_claw': ~has_claw | (unassigned & ~on_wiring),
+        'no_claw_nan': ~has_claw,
+    }
+    per_kc = pd.DataFrame(index=kc_ids)
+    per_kc['n_claws'] = claws.groupby(KC_ID).size().reindex(kc_ids).to_numpy()
+    for name, mask in masks.items():
+        per_kc[name] = pd.Series(mask.astype(int)).groupby(kc).sum().reindex(kc_ids
+            ).fillna(0).to_numpy().astype(int)
+
+    per_kc['peduncle'] = peduncle.groupby(kc_col).size().reindex(kc_ids).fillna(0
+        ).to_numpy().astype(int)
+    per_kc = per_kc[list(APL_KC_COUNT_COLUMNS)]
+
+    kept = pd.Series(1, index=pairs[on_wiring]).groupby(level=[KC_ID, CLAW_ID]).sum()
+    keys = pd.MultiIndex.from_frame(claws)
+    per_claw = pd.Series(
+        kept.reindex(keys).fillna(0).to_numpy(dtype=float) /
+            rows_per_claw.reindex(keys).to_numpy(dtype=float),
+        index=wPNKC_index, name='n_synapses'
+    )
+    return per_kc, per_claw
 
 
 def drop_silent_model_cells(responses: pd.DataFrame) -> pd.DataFrame:
