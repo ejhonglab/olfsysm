@@ -17,9 +17,13 @@ model on ORN data and connectome wiring, and to save, load and plot its outputs:
   distances, pair by pair, against a measured one.
 - `pyolfsysm.tuning`: re-tuning a fixed-parameter model's threshold and APL scales to hold its
   response rates, and running a population of simulators.
+- `pyolfsysm.rebuild`: a fitted model rebuilt from its saved pieces (wiring, APL weights,
+  absolute parameters; the archives written for the queue's fits) and run on new ORN input,
+  or re-tuned.
 
 Moved from al_analysis (its `mb_model`, `wpnkc_shuffles` and part of `al_util`), 2026-11;
 `readout`, `kc_stats`, `effects` and `tuning` from the KC-remapping experiment queue
-(model_experiment_queue's kcq.harness and experiments), 2026-11-12.
+(model_experiment_queue's kcq.harness and experiments), 2026-11-12; `rebuild`'s breadth
+weighting and glomerulus gain from its E10_joint_fit / E27_glomerulus_gain, 2026-11-16.
 Importing this package does not import the submodules (`mb_model` is large).
 """
