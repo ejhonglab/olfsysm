@@ -1,6 +1,7 @@
 """Tests of the bouton base's variants for olfdb's baseline models (`pyolfsysm.baselines`):
 `pn2kc_connections='uniform-glomeruli-boutons'`, `uniform_apl_weights` and
-`shuffle_connectome_seed` / `shuffle_apl_pairs` (`fit_mb_model` kwargs).
+`shuffle_connectome_seed` / `shuffle_apl_pairs` and `input_glomeruli_only` (`fit_mb_model`
+kwargs).
 """
 import numpy as np
 import pandas as pd
@@ -8,7 +9,8 @@ import pytest
 from scipy.stats import chisquare
 
 from pyolfsysm.mb_model import (fit_mb_model, connectome_wPNKC, uniform_bouton_wPNKC,
-    connectome_shuffle_perms, permute_rows, megamat_orn_deltas, format_model_params,
+    connectome_shuffle_perms, permute_rows, restrict_to_input_glomeruli,
+    megamat_orn_deltas, format_model_params,
     get_fitmbmodel_default, glomerulus_col, KC_ID, WIRING_CONTROL_PARAMS
 )
 from pyolfsysm.baselines import BOUTON_BASE_KWS, BASELINE_VARIANTS, baseline_kws
@@ -132,6 +134,10 @@ def test_option_validation(orn_deltas):
         fit_mb_model(orn_deltas, **dict(BASE, apl_unit_coupling=1.0,
             shuffle_connectome_seed=0
         ))
+    with pytest.raises(ValueError):
+        fit_mb_model(orn_deltas, prat_claws=True, one_row_per_claw=True,
+            input_glomeruli_only=True
+        )
 
 
 def test_defaults_unchanged(orn_deltas, base_fit):
@@ -139,7 +145,7 @@ def test_defaults_unchanged(orn_deltas, base_fit):
     """
     responses, spike_counts, wPNKC, params, weights = base_fit
     explicit = _fit(orn_deltas, **BASE, uniform_apl_weights=False,
-        shuffle_connectome_seed=None, shuffle_apl_pairs=True
+        shuffle_connectome_seed=None, shuffle_apl_pairs=True, input_glomeruli_only=False
     )
     assert responses.equals(explicit[0])
     assert spike_counts.equals(explicit[1])
@@ -151,7 +157,8 @@ def test_defaults_unchanged(orn_deltas, base_fit):
     assert set(params) == set(explicit[3])
     # and nothing new in the model's ID
     assert format_model_params(BASE) == format_model_params(dict(BASE,
-        uniform_apl_weights=False, shuffle_connectome_seed=None, shuffle_apl_pairs=True
+        uniform_apl_weights=False, shuffle_connectome_seed=None, shuffle_apl_pairs=True,
+        input_glomeruli_only=False
     ))
 
 
@@ -246,3 +253,90 @@ def test_baseline_variants():
     with pytest.raises(ValueError):
         baseline_kws('nope')
     assert baseline_kws('bouton_base', seed=3)['seed'] == 3
+
+
+def test_restrict_to_input_glomeruli(bouton_wPNKC, orn_deltas):
+    gloms = set(orn_deltas.index)
+    all_gloms = set(bouton_wPNKC.columns.get_level_values(glomerulus_col))
+    # (otherwise nothing to test)
+    assert len(all_gloms - gloms) > 0 and len(all_gloms & gloms) > 0
+
+    w = restrict_to_input_glomeruli(bouton_wPNKC, gloms)
+    in_cols = bouton_wPNKC.columns.get_level_values(glomerulus_col).isin(gloms)
+    assert w.columns.equals(bouton_wPNKC.columns[in_cols])
+    # claws with any input from input glomeruli kept (values unchanged), others dropped
+    has_input = (bouton_wPNKC.loc[:, in_cols] != 0).any(axis='columns')
+    assert w.index.equals(bouton_wPNKC.index[has_input.values])
+    assert w.equals(bouton_wPNKC.loc[has_input.values, in_cols])
+    assert (w.sum(axis='columns') > 0).all()
+    assert w.index.is_monotonic_increasing
+    # KCs keep their claws with input
+    n_in = has_input.groupby(level=KC_ID).sum()
+    assert (w.groupby(level=KC_ID).size() == n_in[n_in > 0]).all()
+
+    w_all_rows = restrict_to_input_glomeruli(bouton_wPNKC, gloms, drop_claws=False)
+    assert w_all_rows.index.equals(bouton_wPNKC.index)
+    with pytest.raises(ValueError):
+        restrict_to_input_glomeruli(bouton_wPNKC, ['not_a_glomerulus'])
+
+
+def test_input_glomeruli_uniform(orn_deltas, bouton_wPNKC):
+    kws = baseline_kws('uniform_glomeruli_claws_uniform_apl_input_glomeruli')
+    assert kws['input_glomeruli_only'] is True
+    _, _, wPNKC, params, weights = _fit(orn_deltas, **kws)
+    gloms = wPNKC.columns.get_level_values(glomerulus_col)
+    assert set(gloms) == set(orn_deltas.index) & set(
+        bouton_wPNKC.columns.get_level_values(glomerulus_col))
+    expected = uniform_bouton_wPNKC(
+        restrict_to_input_glomeruli(bouton_wPNKC, orn_deltas.index, drop_claws=False),
+        n_claws=7, seed=0, glomerulus_probs='uniform'
+    )
+    assert wPNKC.equals(expected)
+    # every KC, 7 claws each
+    assert (wPNKC.groupby(level=KC_ID).size() == 7).all()
+    assert wPNKC.index.get_level_values(KC_ID).nunique() == \
+        bouton_wPNKC.index.get_level_values(KC_ID).nunique()
+    n_claws_per_glom = wPNKC.sum().groupby(level=glomerulus_col).sum()
+    assert chisquare(n_claws_per_glom).pvalue > 0.01
+    for k in ('wAPLKC', 'wKCAPL', 'wAPLPN', 'wPNAPL'):
+        assert (weights[k] == 1).all(), k
+    assert len(weights['wAPLPN']) == wPNKC.shape[1]
+    assert params['input_glomeruli_only'] is True
+    assert 'input-glomeruli-only_True' in format_model_params(kws)
+
+
+@pytest.mark.parametrize('shuffle_seed', [None, 0])
+def test_input_glomeruli_connectome(orn_deltas, bouton_wPNKC, base_fit, shuffle_seed):
+    kws = dict(BASE, input_glomeruli_only=True)
+    if shuffle_seed is not None:
+        kws.update(shuffle_connectome_seed=shuffle_seed, shuffle_apl_pairs=False)
+    responses, _, wPNKC, params, weights = _fit(orn_deltas, **kws)
+    restricted = restrict_to_input_glomeruli(bouton_wPNKC, orn_deltas.index)
+    if shuffle_seed is None:
+        assert wPNKC.equals(restricted)
+    else:
+        # permuted only among the claws and boutons with input
+        perms = connectome_shuffle_perms(*restricted.shape, shuffle_seed,
+            keep_apl_pairs=False
+        )
+        assert wPNKC.equals(permute_rows(restricted, perms['wPNKC']))
+        assert np.array_equal(wPNKC.sum().values, restricted.sum().values)
+    assert np.array_equal(weights['wPNKC'], wPNKC.values)
+    assert set(wPNKC.columns.get_level_values(glomerulus_col)) <= set(orn_deltas.index)
+    assert responses.index.get_level_values(KC_ID).equals(
+        restricted.index.get_level_values(KC_ID).unique()
+    )
+    # APL weights: one per kept claw / bouton, normalized to mean 1 among them
+    assert len(weights['wAPLKC']) == len(wPNKC)
+    assert len(weights['wAPLPN']) == wPNKC.shape[1]
+    for k in ('wAPLKC', 'wKCAPL', 'wAPLPN', 'wPNAPL'):
+        assert np.isclose(weights[k].mean(), 1), k
+    if shuffle_seed is None:
+        # the same synapse counts as the full wiring's, on the kept claws, renormalized
+        base_wPNKC, base_w = base_fit[2], base_fit[4]
+        kept = base_wPNKC.index.isin(wPNKC.index)
+        assert kept.sum() == len(wPNKC) < len(base_wPNKC)
+        for k in ('wAPLKC', 'wKCAPL'):
+            b = base_w[k][kept]
+            assert np.allclose(weights[k], b / b.mean()), k
+    assert params['input_glomeruli_only'] is True

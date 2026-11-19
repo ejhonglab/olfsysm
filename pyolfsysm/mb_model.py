@@ -637,16 +637,19 @@ uniform_bouton_options: Set[str] = {'uniform-boutons', 'uniform-glomeruli-bouton
 
 # `fit_mb_model` kwargs that replace the connectome's identities in claw+bouton models
 # (`one_row_per_claw=True, prat_boutons=True, use_connectome_APL_weights=True`):
-# `uniform_apl_weights` (every per-claw KC<>APL and per-bouton PN<>APL weight equal) and
+# `uniform_apl_weights` (every per-claw KC<>APL and per-bouton PN<>APL weight equal),
 # `shuffle_connectome_seed` / `shuffle_apl_pairs` (the PN->KC, KC<>APL and PN<>APL
-# connections each permuted, with one seed; see `connectome_shuffle_perms`). Only
-# recorded in output params (and model IDs) if not at their defaults.
+# connections each permuted, with one seed; see `connectome_shuffle_perms`) and
+# `input_glomeruli_only` (the wiring restricted to the glomeruli of the ORN input; see
+# `restrict_to_input_glomeruli`). Only recorded in output params (and model IDs) if not
+# at their defaults.
 WIRING_CONTROL_PARAMS: Tuple[str, ...] = ('uniform_apl_weights',
-    'shuffle_connectome_seed', 'shuffle_apl_pairs'
+    'shuffle_connectome_seed', 'shuffle_apl_pairs', 'input_glomeruli_only'
 )
-# their defaults (the connectome's weights, unshuffled)
+# their defaults (the connectome's weights, unshuffled, all glomeruli)
 WIRING_CONTROL_DEFAULTS: Dict[str, Any] = {'uniform_apl_weights': False,
-    'shuffle_connectome_seed': None, 'shuffle_apl_pairs': True
+    'shuffle_connectome_seed': None, 'shuffle_apl_pairs': True,
+    'input_glomeruli_only': False
 }
 
 # `fit_mb_model` kwargs for a KC refractory period and spike-frequency adaptation
@@ -6118,6 +6121,30 @@ def connectome_shuffle_perms(n_claws: int, n_boutons: int, seed: int, *,
         perms['wKCAPL'] = perms['wAPLKC']
         perms['wPNAPL'] = perms['wAPLPN']
     return perms
+
+
+def restrict_to_input_glomeruli(wPNKC: pd.DataFrame, glomeruli: Iterable[str], *,
+    drop_claws: bool = True) -> pd.DataFrame:
+    """Returns claw x bouton `wPNKC` with only the boutons of `glomeruli`.
+
+    For `fit_mb_model(input_glomeruli_only=True)`.
+
+    Args:
+        wPNKC: one row per claw, one column per bouton (with a `glomerulus_col` level),
+            e.g. from `connectome_wPNKC(prat_claws=True, prat_boutons=True)`
+        glomeruli: the glomeruli to keep (those of the ORN input)
+        drop_claws: if True, also drops claws (rows) left with no input (those fed only
+            by dropped boutons), and so KCs left with no claws. Their other claws, and
+            all index levels, are kept.
+    """
+    gloms = wPNKC.columns.get_level_values(glomerulus_col)
+    keep = gloms.isin(set(glomeruli))
+    if not keep.any():
+        raise ValueError('no glomeruli of the wiring are in the ORN input')
+    wPNKC = wPNKC.loc[:, keep]
+    if drop_claws:
+        wPNKC = wPNKC.loc[(wPNKC != 0).any(axis='columns')]
+    return wPNKC.copy()
 
 
 def permute_rows(x: Union[pd.Series, pd.DataFrame], perm: np.ndarray
@@ -12875,7 +12902,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     apl_unit_coupling: Optional[float] = None,
     apl_unit_n_neighbors: Optional[int] = None, apl_weights_kc_mean: bool = False,
     uniform_apl_weights: bool = False, shuffle_connectome_seed: Optional[int] = None,
-    shuffle_apl_pairs: bool = True,
+    shuffle_apl_pairs: bool = True, input_glomeruli_only: bool = False,
     dist_weight: Optional[str] = None, _wPNKC: Optional[pd.DataFrame] = None,
     _wAPLKC: Optional[pd.Series] = None, _wKCAPL: Optional[pd.Series] = None,
     _wAPLPN: Optional[pd.Series] = None, _wPNAPL: Optional[pd.Series] = None,
@@ -13059,6 +13086,30 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             claw->APL weights share one permutation (each claw's pair stays together),
             and likewise APL->bouton and bouton->APL. If False, each of the four is
             permuted independently.
+
+        input_glomeruli_only: if True, the claw x bouton wiring is restricted to the
+            glomeruli of the ORN input (`orn_deltas`' glomeruli, whatever they are),
+            before anything else is built from it (see `restrict_to_input_glomeruli`).
+            For claw+bouton models only (`one_row_per_claw=True, prat_boutons=True`).
+            With `uniform_bouton_options`, claws draw only boutons of input glomeruli
+            ('uniform-glomeruli-boutons': each input glomerulus equally likely), every
+            KC keeping `n_claws` claws. With the connectome wiring, the boutons of
+            glomeruli without input, and the claws fed only by them (and KCs left
+            without claws), are dropped, before `shuffle_connectome_seed` (which then
+            permutes only claws and boutons with input) and before the APL weights are
+            matched to claws and boutons and normalized to mean 1 (so the APL synapses
+            of dropped claws and boutons no longer count).
+
+            What changes for the unshuffled connectome model (e.g. the bouton base):
+            without this, glomeruli without input are in the model with zero odor
+            input but their spontaneous rate (the mean Hallem rate is imputed for those
+            not in Hallem), so their claws give KCs spontaneous drive, their boutons and
+            claws take part in APL's input and output, and they count in the mean-1
+            normalization of the APL weights. With it, those claws and boutons are gone:
+            KCs lose that spontaneous drive (so the tuned threshold and APL scales
+            change), APL neither receives from nor inhibits them, the remaining APL
+            weights are normalized among themselves, and KCs fed only by them are
+            dropped. Odor input to the remaining claws is unchanged.
 
         apl_weights_kc_mean: if True, normalizes per-claw KC<>APL weights so each KC's
             total (summed over its claws) has a mean of 1 across KCs (as for
@@ -13616,6 +13667,17 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             )
     elif not shuffle_apl_pairs:
         raise ValueError('shuffle_apl_pairs=False requires shuffle_connectome_seed')
+    if input_glomeruli_only:
+        if not (one_row_per_claw and prat_boutons):
+            raise ValueError('input_glomeruli_only requires the claw x bouton wiring '
+                '(one_row_per_claw=True, prat_boutons=True)'
+            )
+        if _wPNKC is not None:
+            raise ValueError('input_glomeruli_only not supported with _wPNKC (it is '
+                'used as passed)'
+            )
+        if tune_on_hallem:
+            raise NotImplementedError('input_glomeruli_only with tune_on_hallem')
 
     # TODO rename? there is a fixed number of claws, just that we can set them w/
     # n_claws for these models, as opposed to wPNKC determining it (from whatever
@@ -14273,7 +14335,17 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True,
                 **shared_wPNKC_kws
             )
-            wPNKC = uniform_bouton_wPNKC(bouton_wPNKC, n_claws=n_claws, seed=seed,
+            # (every KC keeps its n_claws random claws, so claws are not dropped here)
+            draw_from = bouton_wPNKC
+            if input_glomeruli_only:
+                draw_from = restrict_to_input_glomeruli(bouton_wPNKC, orn_deltas.index,
+                    drop_claws=False
+                )
+                # (for the PN<>APL weights below)
+                bouton_wPNKC = restrict_to_input_glomeruli(bouton_wPNKC,
+                    orn_deltas.index
+                )
+            wPNKC = uniform_bouton_wPNKC(draw_from, n_claws=n_claws, seed=seed,
                 glomerulus_probs=(
                     'uniform' if pn2kc_connections == 'uniform-glomeruli-boutons'
                     else 'boutons'
@@ -14357,11 +14429,16 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     else:
         wPNKC = _wPNKC.copy()
 
+    if input_glomeruli_only and not uniform_boutons:
+        wPNKC = restrict_to_input_glomeruli(wPNKC, orn_deltas.index)
+
     # the (unshuffled) wiring connectome_APL_weights matches APL synapses to claws and
     # boutons with
     wPNKC_for_apl = wPNKC
     # (only those not at their defaults, so other models' outputs do not change)
     wiring_control_params = dict()
+    if input_glomeruli_only:
+        wiring_control_params['input_glomeruli_only'] = True
     if uniform_apl_weights:
         wiring_control_params['uniform_apl_weights'] = True
     shuffle_perms = None

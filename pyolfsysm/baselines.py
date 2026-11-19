@@ -6,7 +6,8 @@ boutons), the hemibrain claw+bouton model with connectome APL weights, KC and PN
 (bouton) input to APL, a response of 2 or more spikes, tuned with APL on to a 5 %
 response rate. Its variants replace the connectome's identities (`fit_mb_model`'s
 `pn2kc_connections='uniform-glomeruli-boutons'`, `uniform_apl_weights`,
-`shuffle_connectome_seed` / `shuffle_apl_pairs`).
+`shuffle_connectome_seed` / `shuffle_apl_pairs`), each also with the wiring restricted to
+the glomeruli of the ORN input (`input_glomeruli_only`; names ending '_input_glomeruli').
 
 `run_baseline` runs one as E13 did (E3's `tune_and_knockout`): tuned with APL on, then
 acutely without APL output (the tuned threshold kept, APL->KC and APL->bouton weights 0,
@@ -49,6 +50,11 @@ BASELINE_VARIANTS: Dict[str, Dict[str, Any]] = {
         shuffle_connectome_seed=0, shuffle_apl_pairs=False
     ),
 }
+# each with the wiring restricted to the glomeruli of the ORN input it is run on
+# (`fit_mb_model`'s `input_glomeruli_only`), as '<name>_input_glomeruli'
+BASELINE_VARIANTS.update({f'{name}_input_glomeruli': dict(kws, input_glomeruli_only=True)
+    for name, kws in list(BASELINE_VARIANTS.items())
+})
 
 
 def baseline_kws(name: str, **overrides) -> Dict[str, Any]:
