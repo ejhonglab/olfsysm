@@ -629,6 +629,26 @@ APL_INH_FORM_PARAMS: Tuple[str, ...] = ('apl_inh_divisive', 'bouton_inh_divisive
 # and only recorded in output params (and model IDs) if passed.
 CLAW_INH_POOL_PARAMS: Tuple[str, ...] = ('claw_inh_pool',)
 
+# `pn2kc_connections` options where each KC claw draws a random hemibrain bouton (see
+# `uniform_bouton_wPNKC`): 'uniform-boutons' each bouton equally likely,
+# 'uniform-glomeruli-boutons' each glomerulus (with boutons) equally likely, then one of
+# its boutons
+uniform_bouton_options: Set[str] = {'uniform-boutons', 'uniform-glomeruli-boutons'}
+
+# `fit_mb_model` kwargs that replace the connectome's identities in claw+bouton models
+# (`one_row_per_claw=True, prat_boutons=True, use_connectome_APL_weights=True`):
+# `uniform_apl_weights` (every per-claw KC<>APL and per-bouton PN<>APL weight equal) and
+# `shuffle_connectome_seed` / `shuffle_apl_pairs` (the PN->KC, KC<>APL and PN<>APL
+# connections each permuted, with one seed; see `connectome_shuffle_perms`). Only
+# recorded in output params (and model IDs) if not at their defaults.
+WIRING_CONTROL_PARAMS: Tuple[str, ...] = ('uniform_apl_weights',
+    'shuffle_connectome_seed', 'shuffle_apl_pairs'
+)
+# their defaults (the connectome's weights, unshuffled)
+WIRING_CONTROL_DEFAULTS: Dict[str, Any] = {'uniform_apl_weights': False,
+    'shuffle_connectome_seed': None, 'shuffle_apl_pairs': True
+}
+
 # `fit_mb_model` kwargs for a KC refractory period and spike-frequency adaptation
 # (olfsysm `mp.kc.refractory_period`, `mp.kc.adapt_inc`, `mp.kc.adapt_tau`: each kwarg
 # is the olfsysm parameter with a 'kc_' prefix). Each left at olfsysm's default (no
@@ -860,6 +880,7 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
             KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
         },
         **{k: False for k in APL_INH_FORM_PARAMS},
+        **WIRING_CONTROL_DEFAULTS,
     }
 
     # float formats for params where default '.2f' would lose too much precision
@@ -896,7 +917,7 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
         exclude = exclude_params | set(exclude)
 
     if (model_kws.get('prat_claws', False) or
-            model_kws.get('pn2kc_connections') == 'uniform-boutons'):
+            model_kws.get('pn2kc_connections') in uniform_bouton_options):
         exclude.add('one_row_per_claw')
 
     # TODO add option to wrap (along logical boundaries) at certain line length?
@@ -1035,7 +1056,8 @@ def model_pnkc_class(model_str: str, *,
     claw_substr = 'prat-claws_True'
     bouton_substr = 'prat-boutons_True'
 
-    if uniform_bouton_substr in model_str:
+    if (uniform_bouton_substr in model_str or
+            'pn2kc_uniform-glomeruli-boutons' in model_str):
         assert not any(x in model_str for x in [wd20_substr, claw_substr])
         pnkc = 'uniform-bouton'
 
@@ -1304,8 +1326,8 @@ connectome_options: Set[str] = {'hemibrain', 'fafb-left', 'fafb-right'}
 
 pn2kc_connections_options: Set[str] = set(variable_n_claw_options)
 pn2kc_connections_options.update(connectome_options)
-# each KC claw draws a random hemibrain bouton (see `uniform_bouton_wPNKC`)
-pn2kc_connections_options.add('uniform-boutons')
+# each KC claw draws a random hemibrain bouton (see `uniform_bouton_options`)
+pn2kc_connections_options.update(uniform_bouton_options)
 
 # TODO change type hint of output, now that we sometimes have pytest.param wrappers
 # (if keeping...) (ParameterSet, but not sure best way to get that type. type(...)
@@ -5980,16 +6002,19 @@ def bouton_glomerulus_probs(boutons: pd.Index) -> pd.Series:
 
 
 def uniform_bouton_wPNKC(bouton_wPNKC: pd.DataFrame, *, n_claws: int = 7,
-    seed: Optional[int] = None) -> pd.DataFrame:
+    seed: Optional[int] = None, glomerulus_probs: str = 'boutons') -> pd.DataFrame:
     """Returns one-row-per-claw wPNKC, where each KC claw is from a random bouton.
 
-    For `pn2kc_connections='uniform-boutons'`. As for `pn2kc_connections='uniform'`,
-    each KC has `n_claws` claws, each drawn independently (so a KC can draw the same
-    input more than once), but here each claw receives input from a bouton (rather than
-    a glomerulus). Each claw draws a glomerulus with probability `p(glom)` (the # of
-    boutons of that glomerulus divided by the total # of boutons; see
-    `bouton_glomerulus_probs`), and then one of that glomerulus' boutons, uniformly.
-    This is equivalent to drawing each claw's bouton uniformly from all boutons.
+    For `pn2kc_connections='uniform-boutons'` (and 'uniform-glomeruli-boutons'). As for
+    `pn2kc_connections='uniform'`, each KC has `n_claws` claws, each drawn independently
+    (so a KC can draw the same input more than once), but here each claw receives input
+    from a bouton (rather than a glomerulus). Each claw draws a glomerulus with
+    probability `p(glom)`, and then one of that glomerulus' boutons, uniformly. With
+    `glomerulus_probs='boutons'` (for 'uniform-boutons'), `p(glom)` is the # of boutons
+    of that glomerulus divided by the total # of boutons (see `bouton_glomerulus_probs`),
+    which is equivalent to drawing each claw's bouton uniformly from all boutons. With
+    `glomerulus_probs='uniform'` (for 'uniform-glomeruli-boutons'), every glomerulus
+    with boutons is equally likely.
 
     Args:
         bouton_wPNKC: from `connectome_wPNKC(prat_claws=True, prat_boutons=True)`. Its
@@ -6001,6 +6026,9 @@ def uniform_bouton_wPNKC(bouton_wPNKC: pd.DataFrame, *, n_claws: int = 7,
 
         seed: seeds `np.random.default_rng`
 
+        glomerulus_probs: 'boutons' (each glomerulus drawn in proportion to its # of
+            boutons) or 'uniform' (each glomerulus with boutons equally likely)
+
     Returns DataFrame of shape (# KCs * `n_claws`, # boutons), with columns equal to
     `bouton_wPNKC.columns`, and values of 1 for the bouton each claw receives input from
     (0 otherwise). Row index levels are `[KC_ID, CLAW_ID, KC_TYPE] + claw_coord_cols`,
@@ -6009,6 +6037,8 @@ def uniform_bouton_wPNKC(bouton_wPNKC: pd.DataFrame, *, n_claws: int = 7,
     """
     if n_claws < 1:
         raise ValueError(f'{n_claws=} must be >= 1')
+    if glomerulus_probs not in ('boutons', 'uniform'):
+        raise ValueError(f"{glomerulus_probs=} must be 'boutons' or 'uniform'")
 
     boutons = bouton_wPNKC.columns
     gloms = boutons.get_level_values(glomerulus_col)
@@ -6018,6 +6048,8 @@ def uniform_bouton_wPNKC(bouton_wPNKC: pd.DataFrame, *, n_claws: int = 7,
     p_glom = bouton_glomerulus_probs(boutons)
     glom_codes, unique_gloms = pd.factorize(gloms)
     assert p_glom.index.equals(unique_gloms)
+    if glomerulus_probs == 'uniform':
+        p_glom = pd.Series(1.0 / len(p_glom), index=p_glom.index, name=p_glom.name)
     glom_n_boutons = np.bincount(glom_codes)
     glom_first_bouton = np.concatenate([[0], np.cumsum(glom_n_boutons)[:-1]])
 
@@ -6054,6 +6086,48 @@ def uniform_bouton_wPNKC(bouton_wPNKC: pd.DataFrame, *, n_claws: int = 7,
     return pd.DataFrame(values, index=pd.MultiIndex.from_frame(index),
         columns=boutons.copy()
     )
+
+
+def connectome_shuffle_perms(n_claws: int, n_boutons: int, seed: int, *,
+    keep_apl_pairs: bool = True) -> Dict[str, np.ndarray]:
+    """Returns the permutations `fit_mb_model(shuffle_connectome_seed=...)` applies.
+
+    One `np.random.default_rng(seed)` draws five permutations, always in this order (so
+    the PN->KC, APL->claw and APL->bouton permutations of a seed are the same whether or
+    not APL pairs are kept): claws for wPNKC rows, claws for wAPLKC, claws for wKCAPL,
+    boutons for wAPLPN, boutons for wPNAPL. With `keep_apl_pairs=True`, wKCAPL uses
+    wAPLKC's permutation and wPNAPL uses wAPLPN's (so each claw's, and each bouton's,
+    APL->X and X->APL weights move together), and the two other draws are unused.
+
+    Each permutation `perm` is applied as `new[i] = old[perm[i]]` (`permute_rows`): claw
+    (bouton) `i` takes claw (bouton) `perm[i]`'s weights, while its index (KC, claw ID,
+    coordinates) stays.
+
+    Returns dict with keys 'wPNKC', 'wAPLKC', 'wKCAPL' (each of length `n_claws`),
+    'wAPLPN', 'wPNAPL' (each of length `n_boutons`).
+    """
+    rng = np.random.default_rng(seed)
+    perms = {
+        'wPNKC': rng.permutation(n_claws),
+        'wAPLKC': rng.permutation(n_claws),
+        'wKCAPL': rng.permutation(n_claws),
+        'wAPLPN': rng.permutation(n_boutons),
+        'wPNAPL': rng.permutation(n_boutons),
+    }
+    if keep_apl_pairs:
+        perms['wKCAPL'] = perms['wAPLKC']
+        perms['wPNAPL'] = perms['wAPLPN']
+    return perms
+
+
+def permute_rows(x: Union[pd.Series, pd.DataFrame], perm: np.ndarray
+    ) -> Union[pd.Series, pd.DataFrame]:
+    """Returns `x` with row `i` holding the values of row `perm[i]`, index unchanged.
+    """
+    assert len(perm) == len(x)
+    if isinstance(x, pd.Series):
+        return pd.Series(x.values[perm], index=x.index, name=x.name)
+    return pd.DataFrame(x.values[perm], index=x.index, columns=x.columns)
 
 
 # TODO move to hong2p.util
@@ -12800,6 +12874,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     multibouton_claws: str = 'first', claw_weight: str = 'presence',
     apl_unit_coupling: Optional[float] = None,
     apl_unit_n_neighbors: Optional[int] = None, apl_weights_kc_mean: bool = False,
+    uniform_apl_weights: bool = False, shuffle_connectome_seed: Optional[int] = None,
+    shuffle_apl_pairs: bool = True,
     dist_weight: Optional[str] = None, _wPNKC: Optional[pd.DataFrame] = None,
     _wAPLKC: Optional[pd.Series] = None, _wKCAPL: Optional[pd.Series] = None,
     _wAPLPN: Optional[pd.Series] = None, _wPNAPL: Optional[pd.Series] = None,
@@ -12958,6 +13034,32 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             weights are the same for every claw, and only PN<>APL weights are from the
             connectome.
 
+        uniform_apl_weights: if True, every per-claw KC<>APL weight (APL->claw and
+            claw->APL) and every per-bouton PN<>APL weight (APL->bouton and bouton->APL)
+            is 1 (instead of synapse counts), so the mean-1 normalization above leaves
+            them at 1 and tuning scales them as usual. Requires `one_row_per_claw=True`,
+            `prat_boutons=True` and `use_connectome_APL_weights=True`. With the
+            connectome wiring or a `uniform_bouton_options` one.
+
+        shuffle_connectome_seed: if not None, a control for the connectome's identities
+            in the claw+bouton model (`pn2kc_connections='hemibrain'`,
+            `one_row_per_claw=True`, `prat_claws=True`, `prat_boutons=True`,
+            `use_connectome_APL_weights=True`): with one
+            `np.random.default_rng(shuffle_connectome_seed)` (see
+            `connectome_shuffle_perms`), the claw x bouton wPNKC rows are permuted
+            across all claws (each claw takes another claw's input; KCs keep their
+            claws, each bouton its total output), the per-claw KC<>APL weights across
+            all claws (independently of wPNKC), and the per-bouton PN<>APL weights
+            across all boutons. Total weights are preserved. Done on the synapse counts,
+            before olfsysm's normalization and tuning (which then run as without it).
+            The APL weights are first matched to claws and boutons on the unshuffled
+            wiring.
+
+        shuffle_apl_pairs: (only with `shuffle_connectome_seed`) if True, APL->claw and
+            claw->APL weights share one permutation (each claw's pair stays together),
+            and likewise APL->bouton and bouton->APL. If False, each of the four is
+            permuted independently.
+
         apl_weights_kc_mean: if True, normalizes per-claw KC<>APL weights so each KC's
             total (summed over its claws) has a mean of 1 across KCs (as for
             one-row-per-KC weights, and the uniform weights used without connectome APL
@@ -12977,7 +13079,9 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             model (`prat_claws=True, prat_boutons=True`), but each KC instead has
             `n_claws` claws, each from a random bouton (drawn with probability
             proportional to each glomerulus' # of boutons; see `uniform_bouton_wPNKC`).
-            Requires `one_row_per_claw=True`, `prat_boutons=True` and
+            'uniform-glomeruli-boutons' is the same, except each claw draws its
+            glomerulus uniformly over the glomeruli with boutons, then one of that
+            glomerulus' boutons uniformly. Both require `one_row_per_claw=True`, `prat_boutons=True` and
             `use_connectome_APL_weights=True` (and `prat_claws=False`), so boutons and
             claws are separate (and PN<>APL weights, `pn_claw_to_apl`, and
             `claw_dynamics` are all available).
@@ -13425,7 +13529,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `AL_INH_PARAMS`, `KC_KC_INH_PARAMS`, `CLAW_SAT_PARAMS` or
             `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc',
             `EXT_INH_RECORDED_PARAMS` for `EXT_INH_PARAMS` passed, any of
-            `APL_INH_FORM_PARAMS` that were True, and any of `CLAW_INH_POOL_PARAMS`,
+            `APL_INH_FORM_PARAMS` that were True, `WIRING_CONTROL_PARAMS` not at their
+            defaults, and any of `CLAW_INH_POOL_PARAMS`,
             `KC_SPIKING_PARAMS`, `TIME_PARAMS` or `APL_DYNAMICS_PARAMS` that were
             passed).
 
@@ -13475,19 +13580,42 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         # RNG wPNKC in Matt's code vs hers...)?
         raise NotImplementedError
 
-    uniform_boutons = pn2kc_connections == 'uniform-boutons'
+    uniform_boutons = pn2kc_connections in uniform_bouton_options
     if uniform_boutons:
         if not (one_row_per_claw and prat_boutons and use_connectome_APL_weights):
-            raise ValueError("pn2kc_connections='uniform-boutons' requires "
+            raise ValueError(f'{pn2kc_connections=} requires '
                 'one_row_per_claw=True, prat_boutons=True, and '
                 'use_connectome_APL_weights=True'
             )
         if prat_claws or dist_weight is not None:
-            raise ValueError("pn2kc_connections='uniform-boutons' draws claws randomly, "
+            raise ValueError(f'{pn2kc_connections=} draws claws randomly, '
                 'so prat_claws and dist_weight must not be set'
             )
         if n_claws is None:
             n_claws = 7
+
+    if uniform_apl_weights or shuffle_connectome_seed is not None:
+        if not (one_row_per_claw and prat_boutons and use_connectome_APL_weights):
+            raise ValueError('uniform_apl_weights / shuffle_connectome_seed require '
+                'one_row_per_claw=True, prat_boutons=True and '
+                'use_connectome_APL_weights=True'
+            )
+        if apl_unit_coupling is not None:
+            raise NotImplementedError('uniform_apl_weights / shuffle_connectome_seed '
+                'not supported with apl_unit_coupling'
+            )
+        if _wPNKC is not None or _wAPLKC is not None:
+            raise ValueError('uniform_apl_weights / shuffle_connectome_seed not '
+                'supported with _wPNKC / _wAPLKC (hardcoded weights are used as passed: '
+                'pass them without these kwargs)'
+            )
+    if shuffle_connectome_seed is not None:
+        if not (pn2kc_connections in connectome_options and prat_claws):
+            raise ValueError('shuffle_connectome_seed requires the connectome claw '
+                "wiring (pn2kc_connections='hemibrain', prat_claws=True)"
+            )
+    elif not shuffle_apl_pairs:
+        raise ValueError('shuffle_apl_pairs=False requires shuffle_connectome_seed')
 
     # TODO rename? there is a fixed number of claws, just that we can set them w/
     # n_claws for these models, as opposed to wPNKC determining it (from whatever
@@ -13496,7 +13624,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     if pn2kc_connections not in variable_n_claw_options:
         if n_claws is not None and not uniform_boutons:
             raise ValueError(f'n_claws only supported for {variable_n_claw_options} '
-                "and 'uniform-boutons'"
+                f'and {uniform_bouton_options}'
             )
     else:
         # TODO also default to averaging over at least a few seeds in all these cases?
@@ -14145,7 +14273,12 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True,
                 **shared_wPNKC_kws
             )
-            wPNKC = uniform_bouton_wPNKC(bouton_wPNKC, n_claws=n_claws, seed=seed)
+            wPNKC = uniform_bouton_wPNKC(bouton_wPNKC, n_claws=n_claws, seed=seed,
+                glomerulus_probs=(
+                    'uniform' if pn2kc_connections == 'uniform-glomeruli-boutons'
+                    else 'boutons'
+                )
+            )
 
         elif one_row_per_claw:
             # these are only used for Tianpei's outputs that had grouped synapses into
@@ -14223,6 +14356,23 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             )
     else:
         wPNKC = _wPNKC.copy()
+
+    # the (unshuffled) wiring connectome_APL_weights matches APL synapses to claws and
+    # boutons with
+    wPNKC_for_apl = wPNKC
+    # (only those not at their defaults, so other models' outputs do not change)
+    wiring_control_params = dict()
+    if uniform_apl_weights:
+        wiring_control_params['uniform_apl_weights'] = True
+    shuffle_perms = None
+    if shuffle_connectome_seed is not None:
+        shuffle_connectome_seed = int(shuffle_connectome_seed)
+        shuffle_perms = connectome_shuffle_perms(len(wPNKC), wPNKC.shape[1],
+            shuffle_connectome_seed, keep_apl_pairs=shuffle_apl_pairs
+        )
+        wPNKC = permute_rows(wPNKC, shuffle_perms['wPNKC'])
+        wiring_control_params['shuffle_connectome_seed'] = shuffle_connectome_seed
+        wiring_control_params['shuffle_apl_pairs'] = bool(shuffle_apl_pairs)
 
     claw_index = None
     if not one_row_per_claw:
@@ -15278,7 +15428,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
                 wKCAPL = wAPLKC.copy()
             else:
                 apl_weights = connectome_APL_weights(
-                    connectome=connectome, wPNKC=wPNKC, prat_claws=prat_claws,
+                    connectome=connectome, wPNKC=wPNKC_for_apl, prat_claws=prat_claws,
                     prat_boutons=prat_boutons,
                     apl_units=apl_unit_coupling is not None, kc_types=for_kc_types,
                     kc_to_claws=kc_to_claws, _drop_glom_with_plus=_drop_glom_with_plus,
@@ -15287,6 +15437,18 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
                     ),
                 )
                 wAPLKC, wKCAPL, wAPLPN, wPNAPL = apl_weights[:4]
+
+            if uniform_apl_weights:
+                wAPLKC, wKCAPL, wAPLPN, wPNAPL = [
+                    pd.Series(1.0, index=w.index, name=w.name)
+                    for w in (wAPLKC, wKCAPL, wAPLPN, wPNAPL)
+                ]
+            if shuffle_perms is not None:
+                wAPLKC = permute_rows(wAPLKC, shuffle_perms['wAPLKC'])
+                wKCAPL = permute_rows(wKCAPL, shuffle_perms['wKCAPL'])
+                wAPLPN = permute_rows(wAPLPN, shuffle_perms['wAPLPN'])
+                wPNAPL = permute_rows(wPNAPL, shuffle_perms['wPNAPL'])
+
             if apl_unit_coupling is not None:
                 # weight name -> fraction of each claw's (or bouton's) synapses in
                 # each APL unit
@@ -16774,6 +16936,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     param_dict.update(ext_inh_params)
     param_dict.update(apl_inh_form_params)
     param_dict.update(claw_inh_pool_params)
+    param_dict.update(wiring_control_params)
     param_dict.update(kc_spiking_params)
     param_dict.update(time_params)
     param_dict.update(apl_dynamics_params)
@@ -20484,9 +20647,10 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
     #print(', at start of fit_mb_model')
     #
     assert n_seeds >= 1
-    if n_seeds > 1 and model_kws.get('pn2kc_connections') == 'uniform-boutons':
-        raise NotImplementedError("n_seeds > 1 not supported for pn2kc_connections="
-            "'uniform-boutons'. make separate calls with different seed= instead."
+    if n_seeds > 1 and model_kws.get('pn2kc_connections') in uniform_bouton_options:
+        raise NotImplementedError('n_seeds > 1 not supported for pn2kc_connections='
+            f"{model_kws.get('pn2kc_connections')!r}. make separate calls with different "
+            'seed= instead.'
         )
 
     # TODO TODO have it be standard to have tune_dir passed in with path to tuning
@@ -21201,7 +21365,7 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
             # inputs (same for all seeds), so they still match model_kws values below
             for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + CLAW_SAT_PARAMS +
                     BOUTON_DEPLETION_PARAMS + EXT_INH_RECORDED_PARAMS +
-                    APL_INH_FORM_PARAMS + CLAW_INH_POOL_PARAMS):
+                    APL_INH_FORM_PARAMS + CLAW_INH_POOL_PARAMS + WIRING_CONTROL_PARAMS):
                 if k in param_dict:
                     assert len(set(param_dict[k])) == 1
                     param_dict[k] = param_dict[k][0]
