@@ -9,8 +9,9 @@ per-pair APL effect) and every case's output, frozen from the queue's code
 with the queue's parameters (the 16-odor APL panel's order, odor labels abbreviated as the
 queue does: '2h @ -3' -> '2h', the response criterion of 1 z, APL blocking as the
 manipulation); the tuning cases use a deterministic stand-in simulator
-(`frozen_outputs.toy_simulator`), not the model. Exact in the environment the outputs were
-frozen in, else to a relative 1e-9 (1e-6 for root-finding; `frozen_outputs.check`).
+(`frozen_outputs.toy_simulator`), not the model. To a relative 1e-12 with the library versions the
+outputs were frozen with (another CPU differs in the last bits), else to a relative 1e-9 (1e-6 for
+root-finding; `frozen_outputs.check`).
 """
 from pathlib import Path
 

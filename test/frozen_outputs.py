@@ -1,13 +1,15 @@
 """Frozen outputs of the functions that moved from the KC-remapping queue (model_experiment_queue's kcq) to hong2p and
-pyolfsysm (2026-11-12): outputs flattened to arrays, saved with their inputs in one .npz, and compared exactly.
+pyolfsysm (2026-11-12): outputs flattened to arrays, saved with their inputs in one .npz, and compared to the last bits.
 
 The same file is in model_experiment_queue (test/frozen_step3/), hong2p (test/) and olfsysm (test/): the queue's copy
 made the frozen files from the queue's code before the move, and each repository's tests recompute the cases from the
 same inputs (the queue through its re-exports, hong2p and pyolfsysm calling the moved functions with the queue's
-parameters) and require the same outputs. Comparisons are exact (rtol = atol = 0) when numpy, scipy, scikit-learn and
-pandas are the versions the files were made with; with other versions (e.g. Python 3.8 with pandas 1.5) floats may
-differ in the last bits (BLAS, reduction order), so they are compared to rtol 1e-9 (1e-6 for the cases marked as
-solver outputs, whose root-finding can amplify such differences).
+parameters) and require the same outputs. Comparisons are to rtol 1e-12 (atol 1e-14) when numpy, scipy, scikit-learn
+and pandas are the versions the files were made with: the same versions on another CPU still differ in the last bits
+(NumPy's SIMD loops are chosen by CPU and change the order of sums; up to 5.4e-15 on an AVX-512 Ryzen against files
+made on hal, 2026-11-19), so exact equality failed there. With other versions (e.g. Python 3.8 with pandas 1.5) floats may
+differ in the last bits (BLAS, reduction order), so they are compared to rtol 1e-9. The cases marked as solver outputs
+are compared to rtol 1e-6 in every environment: root-finding and fitting amplify last-bit differences.
 """
 from typing import Dict, Optional
 
@@ -129,26 +131,30 @@ def same_versions(frozen: Dict[str, Dict[str, np.ndarray]]) -> bool:
 
 
 def check(frozen: Dict[str, Dict[str, np.ndarray]], case: str, output, solver: bool = False) -> None:
-    """Asserts that `output` flattens to the frozen arrays of `case` (exactly, unless the library versions differ)."""
+    """Asserts that `output` flattens to the frozen arrays of `case`.
+
+    With the library versions the outputs were frozen with, to a relative 1e-12 (absolute 1e-14): the same
+    versions on another CPU differ in the last bits (NumPy picks its SIMD loops by CPU, which changes the order
+    of a sum; up to 5.4e-15 on viki's AVX-512 against the hal-frozen outputs). Otherwise to a relative 1e-9.
+    Root-finding and fitting (`solver`) always to a relative 1e-6: an optimizer turns those last bits into
+    differences of up to ~1e-6 (the indicator-kernel fits on viki)."""
     got = flatten(output, case)
     want = {k: v for k, v in frozen['out'].items() if k == case or k.startswith(case + '/')}
     assert want, f'no frozen outputs for {case}'
     assert sorted(got) == sorted(want), (case, sorted(set(got) ^ set(want)))
-    exact = same_versions(frozen)
-    rtol = 0.0 if exact else (1e-6 if solver else 1e-9)
+    same = same_versions(frozen)
+    rtol = 1e-6 if solver else (1e-12 if same else 1e-9)
+    atol = 1e-14 if same and not solver else 1e-12
     for k, w in want.items():
         g = got[k]
         assert g.shape == w.shape, (k, g.shape, w.shape)
         assert g.dtype.kind == w.dtype.kind, (k, g.dtype, w.dtype)
         if w.dtype.kind == 'f':
-            if exact:
-                ok = np.array_equal(g, w, equal_nan=True)
-            else:
-                ok = np.allclose(g, w, rtol=rtol, atol=1e-12, equal_nan=True)
+            ok = np.allclose(g, w, rtol=rtol, atol=atol, equal_nan=True)
             if not ok:
                 bad = ~((g == w) | (np.isnan(g) & np.isnan(w)))
                 raise AssertionError(f'{k}: {int(bad.sum())} of {g.size} values differ (max abs diff '
-                    f'{np.nanmax(np.abs(g - w)):.3g}; exact={exact})')
+                    f'{np.nanmax(np.abs(g - w)):.3g}; same versions={same})')
         else:
             assert np.array_equal(g, w), (k, g[:5], w[:5])
 
