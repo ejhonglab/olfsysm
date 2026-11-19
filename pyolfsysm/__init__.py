@@ -20,6 +20,8 @@ model on ORN data and connectome wiring, and to save, load and plot its outputs:
 - `pyolfsysm.rebuild`: a fitted model rebuilt from its saved pieces (wiring, APL weights,
   absolute parameters; the archives written for the queue's fits) and run on new ORN input,
   or re-tuned.
+- `pyolfsysm.baselines`: olfdb's baseline models (the queue's bouton base and its variants
+  without the connectome's identities), and running one with APL on and acutely off.
 
 Moved from al_analysis (its `mb_model`, `wpnkc_shuffles` and part of `al_util`), 2026-11;
 `readout`, `kc_stats`, `effects` and `tuning` from the KC-remapping experiment queue
