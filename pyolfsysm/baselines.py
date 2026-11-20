@@ -6,7 +6,7 @@ boutons), the hemibrain claw+bouton model with connectome APL weights, KC and PN
 (bouton) input to APL, a response of 2 or more spikes, tuned with APL on to a 5 %
 response rate. Its variants replace the connectome's identities (`fit_mb_model`'s
 `pn2kc_connections='uniform-glomeruli-boutons'`, `uniform_apl_weights`,
-`shuffle_connectome_seed` / `shuffle_apl_pairs`), each also with the wiring restricted to
+`shuffle_connectome` / `shuffle_seed`), each also with the wiring restricted to
 the glomeruli of the ORN input (`input_glomeruli_only`; names ending '_input_glomeruli').
 
 `run_baseline` runs one as E13 did (E3's `tune_and_knockout`): tuned with APL on, then
@@ -44,10 +44,10 @@ BASELINE_VARIANTS: Dict[str, Dict[str, Any]] = {
     ),
     # the connectome's PN->KC, KC<>APL and PN<>APL connections each permuted (one seed)
     'shuffled_connectome_pairs_kept_seed0': dict(BOUTON_BASE_KWS,
-        shuffle_connectome_seed=0, shuffle_apl_pairs=True
+        shuffle_connectome='pairs_kept', shuffle_seed=0
     ),
     'shuffled_connectome_pairs_broken_seed0': dict(BOUTON_BASE_KWS,
-        shuffle_connectome_seed=0, shuffle_apl_pairs=False
+        shuffle_connectome='pairs_broken', shuffle_seed=0
     ),
 }
 # each with the wiring restricted to the glomeruli of the ORN input it is run on
@@ -72,7 +72,7 @@ def run_baseline(name: str, orn_deltas: pd.DataFrame, **overrides) -> Dict[str, 
         name: a key of `BASELINE_VARIANTS`
         orn_deltas: ORN input (glomeruli x odors), as for `fit_mb_model`
         **overrides: update the baseline's `fit_mb_model` kwargs (e.g. `seed`,
-            `shuffle_connectome_seed`, `target_sparsity`, `plot_dir`)
+            `shuffle_seed`, `target_sparsity`, `plot_dir`)
 
     Returns dict with 'kws' (the APL-on call's kwargs, without make_plots / silent),
     'off_kws' (the APL-off call's), 'responses_on', 'spike_counts_on', 'responses_off',

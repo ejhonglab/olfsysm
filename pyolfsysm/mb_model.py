@@ -638,19 +638,24 @@ uniform_bouton_options: Set[str] = {'uniform-boutons', 'uniform-glomeruli-bouton
 # `fit_mb_model` kwargs that replace the connectome's identities in claw+bouton models
 # (`one_row_per_claw=True, prat_boutons=True, use_connectome_APL_weights=True`):
 # `uniform_apl_weights` (every per-claw KC<>APL and per-bouton PN<>APL weight equal),
-# `shuffle_connectome_seed` / `shuffle_apl_pairs` (the PN->KC, KC<>APL and PN<>APL
-# connections each permuted, with one seed; see `connectome_shuffle_perms`) and
+# `shuffle_connectome` / `shuffle_seed` (the PN->KC, KC<>APL and PN<>APL connections
+# each permuted, with one seed; see `connectome_shuffle_perms`) and
 # `input_glomeruli_only` (the wiring restricted to the glomeruli of the ORN input; see
 # `restrict_to_input_glomeruli`). Only recorded in output params (and model IDs) if not
-# at their defaults.
-WIRING_CONTROL_PARAMS: Tuple[str, ...] = ('uniform_apl_weights',
-    'shuffle_connectome_seed', 'shuffle_apl_pairs', 'input_glomeruli_only'
+# at their defaults (but `shuffle_seed`, recorded with `shuffle_connectome` when it is
+# set, as the seed used).
+WIRING_CONTROL_PARAMS: Tuple[str, ...] = ('uniform_apl_weights', 'shuffle_connectome',
+    'shuffle_seed', 'input_glomeruli_only'
 )
 # their defaults (the connectome's weights, unshuffled, all glomeruli)
 WIRING_CONTROL_DEFAULTS: Dict[str, Any] = {'uniform_apl_weights': False,
-    'shuffle_connectome_seed': None, 'shuffle_apl_pairs': True,
-    'input_glomeruli_only': False
+    'shuffle_connectome': None, 'shuffle_seed': None, 'input_glomeruli_only': False
 }
+# `shuffle_connectome` values: whether each claw's (and bouton's) APL-in and APL-out
+# weights stay together ('pairs_kept') or are permuted independently ('pairs_broken')
+SHUFFLE_CONNECTOME_OPTIONS: Dict[str, bool] = {'pairs_kept': True, 'pairs_broken': False}
+# what `shuffle_seed` is when `shuffle_connectome` is set and it is not passed
+DEFAULT_SHUFFLE_SEED = 0
 
 # `fit_mb_model` kwargs for a KC refractory period and spike-frequency adaptation
 # (olfsysm `mp.kc.refractory_period`, `mp.kc.adapt_inc`, `mp.kc.adapt_tau`: each kwarg
@@ -6093,7 +6098,10 @@ def uniform_bouton_wPNKC(bouton_wPNKC: pd.DataFrame, *, n_claws: int = 7,
 
 def connectome_shuffle_perms(n_claws: int, n_boutons: int, seed: int, *,
     keep_apl_pairs: bool = True) -> Dict[str, np.ndarray]:
-    """Returns the permutations `fit_mb_model(shuffle_connectome_seed=...)` applies.
+    """Returns the permutations `fit_mb_model(shuffle_connectome=...)` applies.
+
+    `keep_apl_pairs` is True for `shuffle_connectome='pairs_kept'`, False for
+    'pairs_broken'; `seed` is `shuffle_seed`.
 
     One `np.random.default_rng(seed)` draws five permutations, always in this order (so
     the PN->KC, APL->claw and APL->bouton permutations of a seed are the same whether or
@@ -12901,8 +12909,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     multibouton_claws: str = 'first', claw_weight: str = 'presence',
     apl_unit_coupling: Optional[float] = None,
     apl_unit_n_neighbors: Optional[int] = None, apl_weights_kc_mean: bool = False,
-    uniform_apl_weights: bool = False, shuffle_connectome_seed: Optional[int] = None,
-    shuffle_apl_pairs: bool = True, input_glomeruli_only: bool = False,
+    uniform_apl_weights: bool = False, shuffle_connectome: Optional[str] = None,
+    shuffle_seed: Optional[int] = None, input_glomeruli_only: bool = False,
     dist_weight: Optional[str] = None, _wPNKC: Optional[pd.DataFrame] = None,
     _wAPLKC: Optional[pd.Series] = None, _wKCAPL: Optional[pd.Series] = None,
     _wAPLPN: Optional[pd.Series] = None, _wPNAPL: Optional[pd.Series] = None,
@@ -13068,11 +13076,11 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `prat_boutons=True` and `use_connectome_APL_weights=True`. With the
             connectome wiring or a `uniform_bouton_options` one.
 
-        shuffle_connectome_seed: if not None, a control for the connectome's identities
+        shuffle_connectome: if not None, a control for the connectome's identities
             in the claw+bouton model (`pn2kc_connections='hemibrain'`,
             `one_row_per_claw=True`, `prat_claws=True`, `prat_boutons=True`,
-            `use_connectome_APL_weights=True`): with one
-            `np.random.default_rng(shuffle_connectome_seed)` (see
+            `use_connectome_APL_weights=True`): 'pairs_kept' or 'pairs_broken' (see
+            below). With one `np.random.default_rng(shuffle_seed)` (see
             `connectome_shuffle_perms`), the claw x bouton wPNKC rows are permuted
             across all claws (each claw takes another claw's input; KCs keep their
             claws, each bouton its total output), the per-claw KC<>APL weights across
@@ -13082,10 +13090,15 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             The APL weights are first matched to claws and boutons on the unshuffled
             wiring.
 
-        shuffle_apl_pairs: (only with `shuffle_connectome_seed`) if True, APL->claw and
-            claw->APL weights share one permutation (each claw's pair stays together),
-            and likewise APL->bouton and bouton->APL. If False, each of the four is
-            permuted independently.
+            With 'pairs_kept', APL->claw and claw->APL weights share one permutation
+            (each claw's pair stays together), and likewise APL->bouton and
+            bouton->APL; with 'pairs_broken', each of the four is permuted
+            independently. (Until olfsysm's commit after 8634969: `shuffle_connectome_seed`
+            = `shuffle_seed`, and `shuffle_apl_pairs` True / False = 'pairs_kept' /
+            'pairs_broken'.)
+
+        shuffle_seed: the seed of `shuffle_connectome`'s permutations (only with it;
+            `DEFAULT_SHUFFLE_SEED`, 0, if None).
 
         input_glomeruli_only: if True, the claw x bouton wiring is restricted to the
             glomeruli of the ORN input (`orn_deltas`' glomeruli, whatever they are),
@@ -13095,7 +13108,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             ('uniform-glomeruli-boutons': each input glomerulus equally likely), every
             KC keeping `n_claws` claws. With the connectome wiring, the boutons of
             glomeruli without input, and the claws fed only by them (and KCs left
-            without claws), are dropped, before `shuffle_connectome_seed` (which then
+            without claws), are dropped, before `shuffle_connectome` (which then
             permutes only claws and boutons with input) and before the APL weights are
             matched to claws and boutons and normalized to mean 1 (so the APL synapses
             of dropped claws and boutons no longer count).
@@ -13645,28 +13658,33 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         if n_claws is None:
             n_claws = 7
 
-    if uniform_apl_weights or shuffle_connectome_seed is not None:
+    if shuffle_connectome is not None and \
+            shuffle_connectome not in SHUFFLE_CONNECTOME_OPTIONS:
+        raise ValueError(f'{shuffle_connectome=} must be None or one of '
+            f'{list(SHUFFLE_CONNECTOME_OPTIONS)}'
+        )
+    if uniform_apl_weights or shuffle_connectome is not None:
         if not (one_row_per_claw and prat_boutons and use_connectome_APL_weights):
-            raise ValueError('uniform_apl_weights / shuffle_connectome_seed require '
+            raise ValueError('uniform_apl_weights / shuffle_connectome require '
                 'one_row_per_claw=True, prat_boutons=True and '
                 'use_connectome_APL_weights=True'
             )
         if apl_unit_coupling is not None:
-            raise NotImplementedError('uniform_apl_weights / shuffle_connectome_seed '
+            raise NotImplementedError('uniform_apl_weights / shuffle_connectome '
                 'not supported with apl_unit_coupling'
             )
         if _wPNKC is not None or _wAPLKC is not None:
-            raise ValueError('uniform_apl_weights / shuffle_connectome_seed not '
+            raise ValueError('uniform_apl_weights / shuffle_connectome not '
                 'supported with _wPNKC / _wAPLKC (hardcoded weights are used as passed: '
                 'pass them without these kwargs)'
             )
-    if shuffle_connectome_seed is not None:
+    if shuffle_connectome is not None:
         if not (pn2kc_connections in connectome_options and prat_claws):
-            raise ValueError('shuffle_connectome_seed requires the connectome claw '
+            raise ValueError('shuffle_connectome requires the connectome claw '
                 "wiring (pn2kc_connections='hemibrain', prat_claws=True)"
             )
-    elif not shuffle_apl_pairs:
-        raise ValueError('shuffle_apl_pairs=False requires shuffle_connectome_seed')
+    elif shuffle_seed is not None:
+        raise ValueError('shuffle_seed requires shuffle_connectome')
     if input_glomeruli_only:
         if not (one_row_per_claw and prat_boutons):
             raise ValueError('input_glomeruli_only requires the claw x bouton wiring '
@@ -14442,14 +14460,14 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     if uniform_apl_weights:
         wiring_control_params['uniform_apl_weights'] = True
     shuffle_perms = None
-    if shuffle_connectome_seed is not None:
-        shuffle_connectome_seed = int(shuffle_connectome_seed)
+    if shuffle_connectome is not None:
+        shuffle_seed = DEFAULT_SHUFFLE_SEED if shuffle_seed is None else int(shuffle_seed)
         shuffle_perms = connectome_shuffle_perms(len(wPNKC), wPNKC.shape[1],
-            shuffle_connectome_seed, keep_apl_pairs=shuffle_apl_pairs
+            shuffle_seed, keep_apl_pairs=SHUFFLE_CONNECTOME_OPTIONS[shuffle_connectome]
         )
         wPNKC = permute_rows(wPNKC, shuffle_perms['wPNKC'])
-        wiring_control_params['shuffle_connectome_seed'] = shuffle_connectome_seed
-        wiring_control_params['shuffle_apl_pairs'] = bool(shuffle_apl_pairs)
+        wiring_control_params['shuffle_connectome'] = shuffle_connectome
+        wiring_control_params['shuffle_seed'] = shuffle_seed
 
     claw_index = None
     if not one_row_per_claw:

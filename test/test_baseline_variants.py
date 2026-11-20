@@ -1,6 +1,6 @@
 """Tests of the bouton base's variants for olfdb's baseline models (`pyolfsysm.baselines`):
 `pn2kc_connections='uniform-glomeruli-boutons'`, `uniform_apl_weights` and
-`shuffle_connectome_seed` / `shuffle_apl_pairs` and `input_glomeruli_only` (`fit_mb_model`
+`shuffle_connectome` / `shuffle_seed` and `input_glomeruli_only` (`fit_mb_model`
 kwargs).
 """
 import numpy as np
@@ -122,17 +122,19 @@ def test_option_validation(orn_deltas):
     with pytest.raises(ValueError):
         # shuffling needs the connectome claws
         fit_mb_model(orn_deltas, **dict(BASE, prat_claws=False,
-            pn2kc_connections='uniform-boutons', shuffle_connectome_seed=0
+            pn2kc_connections='uniform-boutons', shuffle_connectome='pairs_kept'
         ))
     with pytest.raises(ValueError):
-        fit_mb_model(orn_deltas, **dict(BASE, shuffle_apl_pairs=False))
+        fit_mb_model(orn_deltas, **dict(BASE, shuffle_seed=0))
+    with pytest.raises(ValueError):
+        fit_mb_model(orn_deltas, **dict(BASE, shuffle_connectome='pairs'))
     with pytest.raises(ValueError):
         fit_mb_model(orn_deltas, **dict(BASE, prat_boutons=False, pn_claw_to_apl=False,
             uniform_apl_weights=True
         ))
     with pytest.raises(NotImplementedError):
         fit_mb_model(orn_deltas, **dict(BASE, apl_unit_coupling=1.0,
-            shuffle_connectome_seed=0
+            shuffle_connectome='pairs_kept'
         ))
     with pytest.raises(ValueError):
         fit_mb_model(orn_deltas, prat_claws=True, one_row_per_claw=True,
@@ -145,7 +147,7 @@ def test_defaults_unchanged(orn_deltas, base_fit):
     """
     responses, spike_counts, wPNKC, params, weights = base_fit
     explicit = _fit(orn_deltas, **BASE, uniform_apl_weights=False,
-        shuffle_connectome_seed=None, shuffle_apl_pairs=True, input_glomeruli_only=False
+        shuffle_connectome=None, shuffle_seed=None, input_glomeruli_only=False
     )
     assert responses.equals(explicit[0])
     assert spike_counts.equals(explicit[1])
@@ -157,7 +159,7 @@ def test_defaults_unchanged(orn_deltas, base_fit):
     assert set(params) == set(explicit[3])
     # and nothing new in the model's ID
     assert format_model_params(BASE) == format_model_params(dict(BASE,
-        uniform_apl_weights=False, shuffle_connectome_seed=None, shuffle_apl_pairs=True,
+        uniform_apl_weights=False, shuffle_connectome=None, shuffle_seed=None,
         input_glomeruli_only=False
     ))
 
@@ -175,7 +177,7 @@ def test_uniform_glomeruli_uniform_apl(orn_deltas, bouton_wPNKC):
         assert (weights[k] == 1).all(), k
     assert len(weights['wAPLPN']) == bouton_wPNKC.shape[1]
     assert params['uniform_apl_weights'] is True
-    assert 'shuffle_connectome_seed' not in params
+    assert 'shuffle_connectome' not in params and 'shuffle_seed' not in params
     assert 'uniform-glomeruli-boutons' in format_model_params(kws)
     assert 'uniform' in format_model_params(kws) and 'apl' in format_model_params(kws)
 
@@ -193,8 +195,9 @@ def test_uniform_apl_weights_connectome(orn_deltas, base_fit):
 def test_shuffle_connectome(orn_deltas, base_fit, pairs):
     _, _, base_wPNKC, _, base_w = base_fit
     seed = 0
+    mode = 'pairs_kept' if pairs else 'pairs_broken'
     _, _, wPNKC, params, weights = _fit(orn_deltas, **BASE,
-        shuffle_connectome_seed=seed, shuffle_apl_pairs=pairs
+        shuffle_connectome=mode, shuffle_seed=seed
     )
     perms = connectome_shuffle_perms(base_wPNKC.shape[0], base_wPNKC.shape[1], seed,
         keep_apl_pairs=pairs
@@ -232,13 +235,13 @@ def test_shuffle_connectome(orn_deltas, base_fit, pairs):
         same_pairs = pairs_of(weights, a, b) == pairs_of(base_w, a, b)
         assert same_pairs == pairs, (a, b)
 
-    assert params['shuffle_connectome_seed'] == seed
-    assert params['shuffle_apl_pairs'] is pairs
-    model_id = format_model_params(dict(BASE, shuffle_connectome_seed=seed,
-        shuffle_apl_pairs=pairs
+    assert params['shuffle_connectome'] == mode
+    assert params['shuffle_seed'] == seed
+    model_id = format_model_params(dict(BASE, shuffle_connectome=mode,
+        shuffle_seed=seed
     ))
     assert 'shuffle' in model_id
-    assert ('pairs' in model_id) == (not pairs)
+    assert mode.replace('_', '-') in model_id or mode in model_id
 
 
 def test_baseline_variants():
@@ -249,7 +252,7 @@ def test_baseline_variants():
         assert {k: v for k, v in kws.items() if k in BOUTON_BASE_KWS and k != 'prat_claws'
             } == {k: v for k, v in BOUTON_BASE_KWS.items() if k != 'prat_claws'}, name
     assert BASELINE_VARIANTS['shuffled_connectome_pairs_broken_seed0'][
-        'shuffle_apl_pairs'] is False
+        'shuffle_connectome'] == 'pairs_broken'
     with pytest.raises(ValueError):
         baseline_kws('nope')
     assert baseline_kws('bouton_base', seed=3)['seed'] == 3
@@ -309,7 +312,7 @@ def test_input_glomeruli_uniform(orn_deltas, bouton_wPNKC):
 def test_input_glomeruli_connectome(orn_deltas, bouton_wPNKC, base_fit, shuffle_seed):
     kws = dict(BASE, input_glomeruli_only=True)
     if shuffle_seed is not None:
-        kws.update(shuffle_connectome_seed=shuffle_seed, shuffle_apl_pairs=False)
+        kws.update(shuffle_connectome='pairs_broken', shuffle_seed=shuffle_seed)
     responses, _, wPNKC, params, weights = _fit(orn_deltas, **kws)
     restricted = restrict_to_input_glomeruli(bouton_wPNKC, orn_deltas.index)
     if shuffle_seed is None:
