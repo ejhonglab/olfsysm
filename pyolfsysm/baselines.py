@@ -22,10 +22,14 @@ import pandas as pd
 # E13_bouton_coincidence's `bouton_base` (provenance.json "base", plus its
 # `target_sparsity`; `pn2kc_connections` at its default, 'hemibrain'). E13 also passed
 # make_plots=False, silent=True, which change no outputs (`run_baseline` passes them).
+# multibouton_claws='first' (each claw on its PN's lowest-ID bouton) was the default E13
+# ran with; `fit_mb_model`'s default is 'argmax' since 2026-11-20 (pass
+# `multibouton_claws='argmax'` to `baseline_kws` / `run_baseline` for that wiring).
 BOUTON_BASE_KWS: Dict[str, Any] = dict(
     one_row_per_claw=True,
     prat_claws=True,
     prat_boutons=True,
+    multibouton_claws='first',
     use_connectome_APL_weights=True,
     pn_claw_to_apl=True,
     n_spikes_for_response=2,

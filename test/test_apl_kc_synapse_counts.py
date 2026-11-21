@@ -17,7 +17,7 @@ PRAT_KWS = dict(prat_claws=True, prat_boutons=True)
 
 @lru_cache(maxsize=None)
 def _wPNKC() -> pd.DataFrame:
-    return connectome_wPNKC(**PRAT_KWS)
+    return connectome_wPNKC(multibouton_claws='first', **PRAT_KWS)
 
 
 def _synapse(kc, claw, roi='CA(R)', post_roi=None, direction='APL>KC', apl='APL_R'):

@@ -51,11 +51,11 @@ NAME2BASE_KWS: Dict[str, ParamDict] = {
     'claw': dict(one_row_per_claw=True, prat_claws=True,
         use_connectome_APL_weights=True
     ),
-    'bouton': dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    'bouton': dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True
     ),
     'bouton-pn-claw-to-apl': dict(one_row_per_claw=True, prat_claws=True,
-        prat_boutons=True, use_connectome_APL_weights=True, pn_claw_to_apl=True
+        prat_boutons=True, multibouton_claws='first', use_connectome_APL_weights=True, pn_claw_to_apl=True
     ),
 }
 DEFAULT_BASES: List[str] = ['claw', 'bouton']

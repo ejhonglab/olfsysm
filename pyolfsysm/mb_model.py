@@ -635,6 +635,13 @@ CLAW_INH_POOL_PARAMS: Tuple[str, ...] = ('claw_inh_pool',)
 # its boutons
 uniform_bouton_options: Set[str] = {'uniform-boutons', 'uniform-glomeruli-boutons'}
 
+# `connectome_wPNKC` / `fit_mb_model` `multibouton_claws` default: each claw on the bouton
+# of its PN with the most of its synapses (Tom, 2026-11-20; 'first', the lowest-ID bouton,
+# before). Code reproducing outputs from before passes multibouton_claws='first'. Model IDs
+# name it ('multibouton=argmax') for models with boutons (`prat_boutons=True`) that do not
+# pass it, and only 'first' is left out of them, so IDs from before keep their names.
+MULTIBOUTON_CLAWS_DEFAULT: str = 'argmax'
+
 # `fit_mb_model` kwargs that replace the connectome's identities in claw+bouton models
 # (`one_row_per_claw=True, prat_boutons=True, use_connectome_APL_weights=True`):
 # `uniform_apl_weights` (every per-claw KC<>APL and per-bouton PN<>APL weight equal),
@@ -928,6 +935,12 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
             model_kws.get('pn2kc_connections') in uniform_bouton_options):
         exclude.add('one_row_per_claw')
 
+    # a model with boutons that does not pass multibouton_claws has the default
+    # ('argmax' since 2026-11-20), named so its ID differs from those of models from
+    # before (the lowest-ID bouton, 'first', which IDs leave out)
+    if model_kws.get('prat_boutons', False) and 'multibouton_claws' not in model_kws:
+        model_kws['multibouton_claws'] = MULTIBOUTON_CLAWS_DEFAULT
+
     # TODO add option to wrap (along logical boundaries) at certain line length?
     # (to group params into as few lines as possible)
 
@@ -1207,9 +1220,11 @@ FULL_CLAW_MODEL_KW_LIST: List[ParamDict] = dict_seq_product(
     [COMMON_CLAW_MODEL_KWS], TRY_CLAW_MODELS_WITH
 )
 # TODO replace w/ [maybe a filtered verison of] FULL_BOUTON_MODEL_KW_LIST?
+# (multibouton_claws='first' in these: the lowest-ID bouton, as the reference outputs of
+# the tests were made, before 'argmax' became the default; left out of model IDs)
 BOUTON_MODEL_KW_LIST: List[ParamDict] = dict_seq_product([
         dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
-            use_connectome_APL_weights=True
+            use_connectome_APL_weights=True, multibouton_claws='first'
         )
     ],
     # pn_claw_to_apl=True: no-spiking required; direct claw>APL input
@@ -1218,7 +1233,7 @@ BOUTON_MODEL_KW_LIST: List[ParamDict] = dict_seq_product([
 # TODO actually want to try any w/o connectome APL weights? (would have to filter
 # TRY_* list if not...)
 COMMON_BOUTON_MODEL_KWS: ParamDict = dict(
-    one_row_per_claw=True, prat_claws=True, prat_boutons=True
+    one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first'
 )
 FULL_BOUTON_MODEL_KW_LIST: List[ParamDict] = dict_seq_product(
     [COMMON_BOUTON_MODEL_KWS], TRY_BOUTON_MODELS_WITH
@@ -1269,12 +1284,12 @@ MODEL_KW_LIST: List[ParamDict] = (
         apl_unit_coupling=1.0
     ),
     dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
-        use_connectome_APL_weights=True, apl_unit_coupling=1.0
+        use_connectome_APL_weights=True, apl_unit_coupling=1.0, multibouton_claws='first'
     ),
     # same KCs and boutons as prat_boutons=True models above, but each claw (7 per KC)
     # receives input from a random bouton
     dict(pn2kc_connections='uniform-boutons', one_row_per_claw=True, prat_boutons=True,
-        use_connectome_APL_weights=True
+        use_connectome_APL_weights=True, multibouton_claws='first'
     ),
     # TODO (still an issue?) drop multiglomerular PNs are re-run all
     # prat_claws=True variants (hardcode inside that branch of connectome_wPNKC.
@@ -2375,6 +2390,39 @@ kckc_synapses_path: Path = (prat_hemibrain_seg_dir /
 # sha256s)
 malecns_data_dir: Path = data_root / 'malecns_2026-10-25'
 
+
+def malecns_table_path(connectome: str, name: str) -> Path:
+    """Path of a male CNS model table (`name`: 'pn_kc', 'kc_apl', 'apl_kc', 'pn_apl' or
+    'apl_pn') of `connectome` ('malecns-left' or 'malecns-right')."""
+    if connectome not in malecns_connectome_options:
+        raise ValueError(f'{connectome=} not in {sorted(malecns_connectome_options)}')
+    return malecns_data_dir / f'{connectome}_{name}_model.parquet'
+
+
+def load_malecns_table(connectome: str, name: str) -> pd.DataFrame:
+    """Reads a male CNS model table (see `malecns_table_path` and the README in
+    `malecns_data_dir`)."""
+    path = malecns_table_path(connectome, name)
+    if not path.exists():
+        raise FileNotFoundError(f'{path} missing: the male CNS model tables are copied '
+            "there from hong-data's reference_data/connectome (README.md in "
+            f'{malecns_data_dir.name})'
+        )
+    # (without the pandas metadata, for pandas 1.5: the tables were written by pandas 3,
+    # whose metadata names string columns' dtype 'str'; no index was saved, and nothing
+    # read here needs the metadata's dtypes)
+    import pyarrow.parquet as pq
+    return pq.read_table(path).to_pandas(ignore_metadata=True)
+
+
+def claw_compartments_shell_sphere(coords: np.ndarray) -> np.ndarray:
+    """Each claw's compartment by the hemibrain's rule (`connectome_wPNKC`'s
+    `add_compartment_index`, shape 0): 0 within half the largest distance of any claw
+    from the claws' centroid, else 1. `coords`: claws x (x, y, z)."""
+    coords = np.asarray(coords, dtype=float)
+    distances = np.linalg.norm(coords - coords.mean(axis=0), axis=1)
+    return np.where(distances <= 0.5 * distances.max(), 0, 1).astype(np.int32)
+
 claw_coord_cols: List[str] = [f'claw_{d}' for d in ('x', 'y', 'z')]
 
 def center_each_claw_coord(wPNKC: pd.DataFrame) -> pd.DataFrame:
@@ -2990,7 +3038,68 @@ def _malecns_wPNKC(connectome: str, *, prat_claws: bool, prat_boutons: bool,
     'claw_id', 'kc_type', 'claw_x', 'claw_y', 'claw_z', 'compartment'], columns
     ['glomerulus', 'pn_id', 'bouton_id'] (`prat_boutons=True`) or ['glomerulus'].
     """
-    raise NotImplementedError
+    if not prat_claws:
+        raise NotImplementedError(f'{connectome=} has only the claw wiring: pass '
+            'prat_claws=True (and one_row_per_claw=True to fit_mb_model)'
+        )
+    if prat_boutons and multibouton_claws != 'argmax':
+        raise NotImplementedError(f'{connectome=} has each claw on its main bouton '
+            f"only (multibouton_claws='argmax'), not {multibouton_claws=}"
+        )
+    unsupported = dict(dist_weight=dist_weight, weight_divisor=weight_divisor,
+        synapse_con_path=synapse_con_path, synapse_loc_path=synapse_loc_path
+    )
+    unsupported = {k: v for k, v in unsupported.items() if v is not None}
+    if _use_matt_wPNKC:
+        unsupported['_use_matt_wPNKC'] = True
+    if Btn_separate:
+        unsupported['Btn_separate'] = True
+    if unsupported:
+        raise NotImplementedError(f'{connectome=} does not support {unsupported}')
+
+    t = load_malecns_table(connectome, 'pn_kc')
+    if t[[KC_ID, CLAW_ID]].duplicated().any():
+        raise ValueError(f'{connectome}: a claw with more than one bouton in '
+            f'{malecns_table_path(connectome, "pn_kc").name}'
+        )
+    t = t.sort_values([KC_ID, CLAW_ID], kind='stable').reset_index(drop=True)
+
+    coords = t[claw_coord_cols].to_numpy(dtype=float)
+    assert np.isfinite(coords).all(), f'{connectome}: claws without a place'
+    # (the tables' claw coordinates are centered as `center_each_claw_coord` centers
+    # the hemibrain's)
+    mid = (coords.min(axis=0) + coords.max(axis=0)) / 2
+    assert np.allclose(mid, 0, atol=1e-6), f'{connectome}: claw coordinates not centered'
+    compartment = claw_compartments_shell_sphere(coords)
+    # (the tables place them by the same rule, over the same claws)
+    assert np.array_equal(compartment, t['claw_compartment'].to_numpy(dtype=float)), \
+        f'{connectome}: claw compartments differ from the table\'s'
+
+    index = pd.MultiIndex.from_arrays([
+            t[KC_ID].to_numpy(dtype=np.int64), t[CLAW_ID].to_numpy(dtype=np.int64),
+            t[KC_TYPE].astype(str).to_numpy(dtype=object), coords[:, 0], coords[:, 1],
+            coords[:, 2], compartment.astype(np.int32)
+        ], names=[KC_ID, CLAW_ID, KC_TYPE] + claw_coord_cols + ['compartment']
+    )
+    if claw_weight == 'presence':
+        values = np.ones(len(t))
+    else:
+        values = t['synapses'].to_numpy(dtype=float)
+        if claw_weight == 'synapses':
+            values = values / values.mean()
+    glom = t['model_glomerulus'].astype(str).to_numpy(dtype=object)
+    if prat_boutons:
+        col_key = pd.MultiIndex.from_arrays([glom, t[PN_ID].to_numpy(dtype=np.int64),
+            t[BOUTON_ID].to_numpy(dtype=np.int64)], names=[glomerulus_col, PN_ID, BOUTON_ID]
+        )
+        dtype = float
+    else:
+        col_key = pd.Index(glom, name=glomerulus_col)
+        dtype = float if claw_weight != 'presence' else np.int64
+    columns = col_key.unique().sort_values()
+    W = np.zeros((len(t), len(columns)), dtype=dtype)
+    W[np.arange(len(t)), columns.get_indexer(col_key)] = values
+    return pd.DataFrame(W, index=index, columns=columns)
 
 
 def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
@@ -3009,7 +3118,8 @@ def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
     # TODO still want something like that, or never really a case where there is a
     # choice to be made?
     # TODO is this actually Optional? what happens if it's None
-    Btn_num_per_glom: Optional[int] = 10, multibouton_claws: str = 'first',
+    Btn_num_per_glom: Optional[int] = 10,
+    multibouton_claws: str = MULTIBOUTON_CLAWS_DEFAULT,
     claw_weight: str = 'presence') -> pd.DataFrame:
     """Returns PN->KC connectivity matrix (# of claws) for model, from connectome data.
 
@@ -3124,8 +3234,10 @@ def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
         raise ValueError(f"{multibouton_claws=} must be 'first', 'argmax' or 'split'")
     if claw_weight not in ('presence', 'synapses', 'synapses_raw'):
         raise ValueError(f"{claw_weight=} must be 'presence', 'synapses' or 'synapses_raw'")
-    if multibouton_claws != 'first' and not prat_boutons:
-        raise ValueError('multibouton_claws requires prat_boutons=True')
+    # (without boutons the option has no effect: 'first' and 'argmax', the default, are
+    # accepted and ignored, 'split' refused)
+    if multibouton_claws == 'split' and not prat_boutons:
+        raise ValueError("multibouton_claws='split' requires prat_boutons=True")
     if claw_weight != 'presence':
         if not prat_claws:
             raise ValueError(f"{claw_weight=} requires prat_claws=True")
@@ -6973,14 +7085,61 @@ def _malecns_APL_weights(connectome: str, *, prat_claws: bool, prat_boutons: boo
     """`connectome_APL_weights` for `connectome` in `malecns_connectome_options`: the
     synapses between APL and each claw of `wPNKC` (and each of its boutons, for
     `prat_boutons=True`), from the male CNS's model tables, 0 where there are none."""
-    raise NotImplementedError
+    if not prat_claws:
+        raise NotImplementedError(f'{connectome=} has only the claw wiring: pass '
+            'prat_claws=True'
+        )
+    if wPNKC is None:
+        wPNKC = connectome_wPNKC(connectome, prat_claws=True, prat_boutons=prat_boutons)
+
+    def as_key(cols: Sequence[pd.Series]) -> pd.MultiIndex:
+        # (IDs as int64, names as str objects, on both sides of the match)
+        return pd.MultiIndex.from_arrays([c.to_numpy(dtype=np.int64)
+            if pd.api.types.is_integer_dtype(c) else c.astype(str).to_numpy(dtype=object)
+            for c in cols
+        ])
+
+    def weights(name: str, key: Sequence[str], at: pd.MultiIndex, index: pd.Index
+        ) -> pd.Series:
+        t = load_malecns_table(connectome, name)
+        if t.apl_id.nunique() != 1:
+            raise ValueError(f'{connectome} {name}: more than one APL')
+        tkey = as_key([t[k] for k in key])
+        assert not tkey.duplicated().any()
+        i = tkey.get_indexer(at)
+        if (i < 0).any():
+            raise ValueError(f'{connectome} {name}: {int((i < 0).sum())} of the '
+                f"wiring's {len(at)} units are not in the male CNS's model table (e.g. "
+                f'{list(at[i < 0][:3])}); was wPNKC made from {connectome!r}?'
+            )
+        return pd.Series(t['weight'].to_numpy(dtype=float)[i], index=index,
+            name='weight'
+        )
+
+    claws = wPNKC.index.to_frame(index=False)
+    claw_key = as_key([claws[KC_ID], claws[CLAW_ID]])
+
+    wAPLKC = weights('apl_kc', [KC_ID, CLAW_ID], claw_key, wPNKC.index)
+    wKCAPL = weights('kc_apl', [KC_ID, CLAW_ID], claw_key, wPNKC.index)
+    wAPLPN = wPNAPL = None
+    if prat_boutons:
+        assert isinstance(wPNKC.columns, pd.MultiIndex) and list(wPNKC.columns.names) == [
+            glomerulus_col, PN_ID, BOUTON_ID
+        ]
+        boutons = wPNKC.columns.to_frame(index=False)
+        bouton_key = as_key([boutons[glomerulus_col], boutons[PN_ID], boutons[BOUTON_ID]])
+        key = ['model_glomerulus', PN_ID, BOUTON_ID]
+        wAPLPN = weights('apl_pn', key, bouton_key, wPNKC.columns)
+        wPNAPL = weights('pn_apl', key, bouton_key, wPNKC.columns)
+    return wAPLKC, wKCAPL, wAPLPN, wPNAPL
 
 
 def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = False,
     prat_boutons: bool = False, apl_units: bool = False,
     wPNKC: Optional[pd.DataFrame] = None, kc_types: Optional[pd.Series] = None,
     kc_to_claws: Optional[List[List[int]]] = None, _drop_glom_with_plus: bool = True,
-    plot_dir: Optional[Path] = None, dropped_counts: Optional[dict] = None
+    plot_dir: Optional[Path] = None, dropped_counts: Optional[dict] = None,
+    multibouton_claws: Optional[str] = None, claw_weight: Optional[str] = None
     ) -> Union[
         Tuple[pd.Series, pd.Series, Optional[pd.Series], Optional[pd.Series]],
         Tuple[pd.Series, pd.Series, Optional[pd.Series], Optional[pd.Series],
@@ -7050,6 +7209,11 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
         connectome: same as for `connectome_wPNKC`
 
         plot_dir: same as for `connectome_wPNKC`
+
+        multibouton_claws / claw_weight: ignored (accepted so `connectome_wPNKC`'s
+            kwargs, e.g. from `get_connectome_wPNKC_params`, can be passed here too): the
+            weights are per claw and per bouton of `wPNKC`, whichever bouton each claw
+            has there.
 
         dropped_counts: if a dict is passed (requires `prat_claws=True` and `wPNKC`),
             it is filled with what this function drops of the calyx (CA(R)) APL<>KC
@@ -12973,7 +13137,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     tune_on_hallem: bool = False, pn2kc_connections: str = 'hemibrain',
     use_connectome_APL_weights: bool = False, weight_divisor: Optional[float] = None,
     prat_claws: bool = False, prat_boutons: bool = False,
-    multibouton_claws: str = 'first', claw_weight: str = 'presence',
+    multibouton_claws: str = MULTIBOUTON_CLAWS_DEFAULT, claw_weight: str = 'presence',
     apl_unit_coupling: Optional[float] = None,
     apl_unit_n_neighbors: Optional[int] = None, apl_weights_kc_mean: bool = False,
     uniform_apl_weights: bool = False, shuffle_connectome: Optional[str] = None,
@@ -13204,7 +13368,16 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
 
             If among `connectome_options`, passed directly to `connectome_wPNKC`
             `connectome=`, otherwise `connectome_wPNKC` called with
-            `connectome='hemibrain'`.
+            `connectome='hemibrain'`. 'malecns-left' / 'malecns-right' (the male CNS's
+            left / right calyx) need `one_row_per_claw=True, prat_claws=True`, and
+            with `use_connectome_APL_weights=True` take the male CNS's APL weights (see
+            `connectome_wPNKC`); KC->KC weights and APL units exist for the hemibrain
+            only.
+
+            'uniform-boutons' and 'uniform-glomeruli-boutons' draw from the boutons of
+            the hemibrain claw+bouton wiring with `multibouton_claws` (each claw on one
+            bouton: 387 boutons with 'argmax', the default since 2026-11-20, 389 with
+            'first').
 
             'uniform-boutons' uses the KCs and boutons of the hemibrain claw+bouton
             model (`prat_claws=True, prat_boutons=True`), but each KC instead has
@@ -13712,6 +13885,10 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         raise NotImplementedError
 
     uniform_boutons = pn2kc_connections in uniform_bouton_options
+    if uniform_boutons and multibouton_claws == 'split':
+        raise NotImplementedError(f"{pn2kc_connections=} with multibouton_claws='split'"
+            ' (random claws draw one bouton each)'
+        )
     if uniform_boutons:
         if not (one_row_per_claw and prat_boutons and use_connectome_APL_weights):
             raise ValueError(f'{pn2kc_connections=} requires '
@@ -14417,8 +14594,11 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         )
 
         if uniform_boutons:
+            # (the boutons drawn from: those of the connectome's claws, each claw on its
+            # bouton as `multibouton_claws` says; 'first' gives 389 hemibrain boutons,
+            # 'argmax' 387)
             bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True,
-                **shared_wPNKC_kws
+                multibouton_claws=multibouton_claws, **shared_wPNKC_kws
             )
             # (every KC keeps its n_claws random claws, so claws are not dropped here)
             draw_from = bouton_wPNKC
@@ -20840,6 +21020,12 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
     my_data = f'pebbled {dff_latex}'
 
     assert 'orn_deltas' in model_kws, 'orn_deltas required (passed to fit_mb_model)'
+
+    # recorded (in the model ID and the saved params) for models with boutons that do
+    # not pass it, so their params say which bouton each claw has ('argmax' since
+    # 2026-11-20; params from before without it had 'first')
+    if model_kws.get('prat_boutons', False) and 'multibouton_claws' not in model_kws:
+        model_kws['multibouton_claws'] = MULTIBOUTON_CLAWS_DEFAULT
     responses_to = my_data
 
     # TODO also try tuning on remy's subset of hallem odors?
@@ -20895,6 +21081,11 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
     params_for_csv.update(
         {k: v for k, v in model_kws.items() if k not in exclude_params}
     )
+    # (multibouton_claws='first', the default until 2026-11-20, is left out as model IDs
+    # leave it out, so outputs reproduced with it pinned keep the params they had; params
+    # of a model with boutons without it are 'first''s, and later ones say 'argmax')
+    if params_for_csv.get('multibouton_claws') == 'first':
+        del params_for_csv['multibouton_claws']
 
     # prefix defaults to empty str
     title = title_prefix

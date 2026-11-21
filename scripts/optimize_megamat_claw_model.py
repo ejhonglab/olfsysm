@@ -66,7 +66,7 @@ CLAW_MODEL_KWS: ParamDict = dict(one_row_per_claw=True, prat_claws=True,
 )
 # as above, but also w/ PN boutons, and connectome PN<>APL weights
 BOUTON_MODEL_KWS: ParamDict = dict(one_row_per_claw=True, prat_claws=True,
-    prat_boutons=True, use_connectome_APL_weights=True
+    prat_boutons=True, multibouton_claws='first', use_connectome_APL_weights=True
 )
 
 # apl_unit_coupling for standard tuning of models w/ APL units (as in the MODEL_KW_LIST

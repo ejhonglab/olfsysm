@@ -30,7 +30,7 @@ def orn_deltas() -> pd.DataFrame:
 
 @pytest.fixture(scope='module')
 def bouton_wPNKC() -> pd.DataFrame:
-    return connectome_wPNKC(prat_claws=True, prat_boutons=True)
+    return connectome_wPNKC(prat_claws=True, prat_boutons=True, multibouton_claws='first')
 
 
 def _fit(orn_deltas, **kws):

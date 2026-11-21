@@ -26,7 +26,7 @@ model_tune_kws = [
 
     dict(weight_divisor=20),
     dict(one_row_per_claw=True, prat_claws=True),
-    dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True
     ),
 ]

@@ -236,7 +236,7 @@ def _fit_and_plot_mb_model(*args, **kwargs) -> ParamDict:
 def _reduced_bouton_wPNKC() -> pd.DataFrame:
     """Returns wPNKC for `reduced_bouton_system` (cached, so do not modify)
     """
-    wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True)
+    wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True, multibouton_claws='first')
     gloms = wPNKC.columns.get_level_values(glomerulus_col)
     wPNKC = wPNKC.loc[:, gloms.isin(gloms.unique()[::3])]
     wPNKC = wPNKC[(wPNKC != 0).any(axis='columns')]
@@ -2251,7 +2251,7 @@ def test_connectome_apl_unit_fracs():
     """Tests `connectome_APL_weights(apl_units=True)` fractions of synapses per APL unit.
     """
     kws = dict(prat_claws=True, prat_boutons=True)
-    wPNKC = connectome_wPNKC(**kws)
+    wPNKC = connectome_wPNKC(multibouton_claws='first', **kws)
     *weights, name2unit_fracs = connectome_APL_weights(wPNKC=wPNKC, apl_units=True,
         **kws
     )
@@ -2280,10 +2280,10 @@ def test_connectome_apl_unit_fracs():
         dict(one_row_per_claw=True, prat_claws=True, use_connectome_APL_weights=True,
             pn_claw_to_apl=True
         ),
-        dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+        dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
             use_connectome_APL_weights=True
         ),
-        dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+        dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
             use_connectome_APL_weights=True, pn_claw_to_apl=True
         ),
     ], ids=format_model_params
@@ -4499,7 +4499,7 @@ def test_uniform_bouton_wPNKC():
     claws per KC (each from one bouton, with that bouton's coordinates), and that
     glomeruli are drawn in proportion to their # of boutons (uniformly across boutons).
     """
-    bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True)
+    bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True, multibouton_claws='first')
     n_claws = 7
     wPNKC = uniform_bouton_wPNKC(bouton_wPNKC, n_claws=n_claws, seed=0)
 
@@ -4555,7 +4555,7 @@ def test_uniform_boutons_model(orn_deltas):
     from the connectome (normalized as for prat_boutons=True models).
     """
     kws = dict(pn2kc_connections='uniform-boutons', one_row_per_claw=True,
-        prat_boutons=True, use_connectome_APL_weights=True
+        prat_boutons=True, multibouton_claws='first', use_connectome_APL_weights=True
     )
     # fewer odors, to tune faster
     responses, _, wPNKC, params = _fit_mb_model(orn_deltas=orn_deltas.iloc[:, :4],
@@ -4563,7 +4563,7 @@ def test_uniform_boutons_model(orn_deltas):
     )
     rv = params['rv']
 
-    bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True)
+    bouton_wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True, multibouton_claws='first')
     expected_wPNKC = uniform_bouton_wPNKC(bouton_wPNKC, n_claws=7,
         seed=get_fitmbmodel_default('seed')
     )
@@ -4735,7 +4735,7 @@ def test_apl_unit_coupling_optimization(orn_deltas):
     `reduced_bouton_system`), for speed.
     """
     orn_deltas, wPNKC = reduced_bouton_system(orn_deltas)
-    kws = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    kws = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True, _wPNKC=wPNKC
     )
     simulate, initial_params = make_fixed_param_kc_simulator(orn_deltas,
@@ -4845,7 +4845,7 @@ def test_onestep_lr_cache(tmp_path, monkeypatch, orn_deltas):
     old_cache = {'prat-claws_True': 5.0}
     cache_path.write_text(json.dumps(old_cache))
 
-    kws = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    kws = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True
     )
     orn_deltas, kws = maybe_reduce_bouton_system(orn_deltas, kws)
@@ -4958,7 +4958,7 @@ def test_optimize_mb_model_params_all_separately_recovery(orn_deltas, initial_pa
 
 @pytest.mark.parametrize('kws', [
         dict(),
-        dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+        dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
             use_connectome_APL_weights=True
         ),
     ], ids=format_model_params
@@ -5257,7 +5257,7 @@ def test_sensitivity_analysis_no_responses(tmp_path, orn_deltas):
 # test both branches computing KC drive in olfsysm `sim_KC_layer`
 KC_KC_INH_MODEL_KWS: List[ParamDict] = [
     dict(weight_divisor=20),
-    dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True
     ),
 ]
@@ -5462,7 +5462,7 @@ def test_kc_kc_inh_simulator(kc_kc_inh_model):
 # speed) claw + bouton model
 CLAW_SAT_MODEL_KWS: List[ParamDict] = [
     dict(one_row_per_claw=True, prat_claws=True, use_connectome_APL_weights=True),
-    dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True
     ),
 ]
@@ -6202,7 +6202,7 @@ def test_claw_pow_model_id():
 # reduced claw + bouton model (as in CLAW_SAT_MODEL_KWS), which `bouton_ves_p` requires
 # (prat_boutons=True)
 BOUTON_DEPLETION_MODEL_KWS: ParamDict = dict(one_row_per_claw=True, prat_claws=True,
-    prat_boutons=True, use_connectome_APL_weights=True
+    prat_boutons=True, multibouton_claws='first', use_connectome_APL_weights=True
 )
 
 @pytest.fixture(scope='module')

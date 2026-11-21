@@ -63,7 +63,7 @@ def _reduced_bouton_wPNKC() -> pd.DataFrame:
     """Same subset as test_mb_model.py `reduced_bouton_system` (copied, to keep this
     module independent of it): boutons of every 3rd glomerulus, claws of every 4th KC.
     """
-    wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True)
+    wPNKC = connectome_wPNKC(prat_claws=True, prat_boutons=True, multibouton_claws='first')
     gloms = wPNKC.columns.get_level_values(glomerulus_col)
     wPNKC = wPNKC.loc[:, gloms.isin(gloms.unique()[::3])]
     wPNKC = wPNKC[(wPNKC != 0).any(axis='columns')]
@@ -86,7 +86,7 @@ def reduced_bouton_system() -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 WD20: ParamDict = dict(weight_divisor=20)
-BOUTON: ParamDict = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+BOUTON: ParamDict = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
     use_connectome_APL_weights=True
 )
 CLAWS: ParamDict = dict(one_row_per_claw=True, prat_claws=True)
@@ -200,7 +200,7 @@ CASES: List[Tuple[str, str, ParamDict, bool]] = [
     ('bouton_pn_claw_to_apl', 'full', dict(BOUTON, pn_claw_to_apl=True), True),
     ('bouton_unit_coupling', 'full', dict(BOUTON, apl_unit_coupling=1.0), True),
     ('uniform_boutons', 'full', dict(pn2kc_connections='uniform-boutons',
-        one_row_per_claw=True, prat_boutons=True, use_connectome_APL_weights=True),
+        one_row_per_claw=True, prat_boutons=True, multibouton_claws='first', use_connectome_APL_weights=True),
         True
     ),
     ('one_row_per_claw', 'full', dict(one_row_per_claw=True), True),

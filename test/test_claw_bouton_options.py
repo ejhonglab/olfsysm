@@ -2,8 +2,9 @@
 synapses come from more than one bouton of their PN are placed in the claw x bouton
 matrix, and weighting claws by their PN->KC synapse counts.
 
-The default ('first', 'presence') must reproduce the construction that existed before
-these options (each claw in the lowest-ID of its boutons, weight 1).
+multibouton_claws='first' (with claw_weight='presence') must reproduce the construction
+that existed before these options (each claw in the lowest-ID of its boutons, weight 1);
+it was the default until 2026-11-20, when 'argmax' became the default.
 """
 import numpy as np
 import pandas as pd
@@ -17,9 +18,11 @@ pytestmark = pytest.mark.filterwarnings('ignore')
 KWS = dict(prat_claws=True, prat_boutons=True)
 
 
+# (the default until 2026-11-20; named `default` in the tests below, which compare the
+# options with it)
 @pytest.fixture(scope='module')
 def default():
-    return connectome_wPNKC(**KWS)
+    return connectome_wPNKC(multibouton_claws='first', **KWS)
 
 
 @pytest.fixture(scope='module')
@@ -34,7 +37,7 @@ def split():
 
 @pytest.fixture(scope='module')
 def synapses():
-    return connectome_wPNKC(claw_weight='synapses', **KWS)
+    return connectome_wPNKC(multibouton_claws='first', claw_weight='synapses', **KWS)
 
 
 @pytest.fixture(scope='module')
@@ -44,7 +47,7 @@ def split_synapses():
 
 @pytest.fixture(scope='module')
 def synapses_raw():
-    return connectome_wPNKC(claw_weight='synapses_raw', **KWS)
+    return connectome_wPNKC(multibouton_claws='first', claw_weight='synapses_raw', **KWS)
 
 
 def claw_keys(w: pd.DataFrame) -> pd.MultiIndex:
@@ -161,9 +164,45 @@ def test_claw2bouton_on_each(default, argmax, split, synapses, split_synapses):
                 w.sum(axis='columns').groupby([KC_ID, CLAW_ID]).sum().to_numpy())
 
 
+def test_default_is_argmax(argmax):
+    """multibouton_claws defaults to 'argmax' (since 2026-11-20), in `connectome_wPNKC` and
+    `fit_mb_model`."""
+    from pyolfsysm.mb_model import fit_mb_model, MULTIBOUTON_CLAWS_DEFAULT
+    assert MULTIBOUTON_CLAWS_DEFAULT == 'argmax'
+    assert connectome_wPNKC(**KWS).equals(argmax)
+    import inspect
+    for fn in (connectome_wPNKC, fit_mb_model):
+        assert inspect.signature(fn).parameters['multibouton_claws'].default == 'argmax'
+
+
+def test_argmax_and_first_without_boutons_are_the_glomerulus_wiring():
+    """Without boutons the option has no effect: 'first' and 'argmax' give the same claw x
+    glomerulus wiring (the bouton wiring summed per glomerulus)."""
+    a = connectome_wPNKC(prat_claws=True, multibouton_claws='argmax')
+    f = connectome_wPNKC(prat_claws=True, multibouton_claws='first')
+    assert a.equals(f)
+
+
+def test_model_ids_name_argmax():
+    """Model IDs of bouton models name the default ('multibouton=argmax') when it is not
+    passed, and leave out 'first', so IDs of models from before keep their names."""
+    from pyolfsysm.mb_model import format_model_params
+    base = dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True)
+    first = format_model_params(dict(base, multibouton_claws='first'))
+    assert 'multibouton' not in first
+    assert first == format_model_params(dict(base, multibouton_claws='first'))
+    unset = format_model_params(base)
+    assert 'multibouton_argmax' in unset or 'multibouton=argmax' in unset
+    assert unset == format_model_params(dict(base, multibouton_claws='argmax'))
+    assert unset != first
+    # models without boutons: no change
+    claws = dict(one_row_per_claw=True, prat_claws=True)
+    assert 'multibouton' not in format_model_params(claws)
+
+
 def test_option_validation():
     with pytest.raises(ValueError):
-        connectome_wPNKC(prat_claws=True, prat_boutons=False, multibouton_claws='argmax')
+        connectome_wPNKC(prat_claws=True, prat_boutons=False, multibouton_claws='split')
     with pytest.raises(ValueError):
         connectome_wPNKC(prat_claws=False, claw_weight='synapses')
     with pytest.raises(ValueError):

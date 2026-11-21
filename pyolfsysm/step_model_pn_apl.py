@@ -47,7 +47,9 @@ MODEL_TUNE_KWS: List[ParamDict] = dict_seq_product(
         # weights though, so would require changes to that code)
         dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
             # TODO TODO also try w/ this =False?
-            use_connectome_APL_weights=True
+            use_connectome_APL_weights=True,
+            # (the default until 2026-11-20, which these outputs were made with)
+            multibouton_claws='first'
         )
     ],
     # TODO re-order so claw_dynamics gets put towards end of dir names, not at start

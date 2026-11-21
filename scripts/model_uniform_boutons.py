@@ -53,13 +53,13 @@ NAME2MODEL_KWS: Dict[str, ParamDict] = {
     ),
     # bouton model with the most mixture suppression, of those run by
     # `model_yang_mixtures.py -f -m` (yang_mix_outputs/chosen_modeldirs_max-mixsupp-only.csv)
-    'bouton': dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    'bouton': dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         pn_claw_to_apl=True, claw_dynamics=True, use_connectome_APL_weights=True,
         **SHARED_KWS
     ),
     # same options as bouton model, except for how claws are defined
     'uniform-bouton': dict(pn2kc_connections='uniform-boutons', one_row_per_claw=True,
-        prat_boutons=True, pn_claw_to_apl=True, claw_dynamics=True,
+        prat_boutons=True, multibouton_claws='first', pn_claw_to_apl=True, claw_dynamics=True,
         use_connectome_APL_weights=True, **SHARED_KWS
     ),
 }

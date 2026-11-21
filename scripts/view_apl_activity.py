@@ -40,7 +40,7 @@ NAME2BASE_KWS: Dict[str, ParamDict] = {
     'claw': dict(one_row_per_claw=True, prat_claws=True,
         use_connectome_APL_weights=True
     ),
-    'bouton': dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True,
+    'bouton': dict(one_row_per_claw=True, prat_claws=True, prat_boutons=True, multibouton_claws='first',
         use_connectome_APL_weights=True
     ),
 }
