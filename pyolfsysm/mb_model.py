@@ -1330,7 +1330,13 @@ variable_n_claw_options: Set[str] = {'uniform', 'caron', 'hemidraw'}
 
 # TODO add 'hemibrain-matt' here, and replace _use_matt_wPNKC w/ that?
 # NOTE: FAFB = FlyWire
-connectome_options: Set[str] = {'hemibrain', 'fafb-left', 'fafb-right'}
+# the male CNS (Pratyush's pipeline, run 2026-10-25-17-31-06), its left and right calyces
+# apart, from the model tables hong-data's reference_data/make_connectome.py makes (see
+# `malecns_data_dir`). Claw x bouton wiring only (`prat_claws=True`).
+malecns_connectome_options: Set[str] = {'malecns-left', 'malecns-right'}
+connectome_options: Set[str] = ({'hemibrain', 'fafb-left', 'fafb-right'} |
+    malecns_connectome_options
+)
 
 pn2kc_connections_options: Set[str] = set(variable_n_claw_options)
 pn2kc_connections_options.update(connectome_options)
@@ -2364,6 +2370,11 @@ kckc_synapses_path: Path = (prat_hemibrain_seg_dir /
     'KCclaw-to-KCclaw_Connectivity_2025-12-05-13-39-22.parquet'
 )
 
+# the male CNS's model tables (`connectome_wPNKC(connectome='malecns-left'|'malecns-right')`),
+# copied from hong-data's reference_data/connectome (README.md there has the source and
+# sha256s)
+malecns_data_dir: Path = data_root / 'malecns_2026-10-25'
+
 claw_coord_cols: List[str] = [f'claw_{d}' for d in ('x', 'y', 'z')]
 
 def center_each_claw_coord(wPNKC: pd.DataFrame) -> pd.DataFrame:
@@ -2968,6 +2979,20 @@ def claw2bouton_from_wPNKC(wPNKC: pd.DataFrame) -> pd.DataFrame:
 # TODO make prat_claws default to true later? (here and in other places)
 # TODO TODO compare prat claw/bouton stuff to data from:
 # fiala et al 2021 https://datadryad.org/dataset/doi:10.5061/dryad.bk3j9kdd1 ?
+def _malecns_wPNKC(connectome: str, *, prat_claws: bool, prat_boutons: bool,
+    multibouton_claws: str, claw_weight: str, dist_weight: Optional[str],
+    weight_divisor: Optional[float], plot_dir: Optional[Path], _use_matt_wPNKC: bool,
+    synapse_con_path: Optional[Path], synapse_loc_path: Optional[Path],
+    Btn_separate: bool) -> pd.DataFrame:
+    """`connectome_wPNKC` for `connectome` in `malecns_connectome_options`.
+
+    Same layout as the hemibrain's `prat_claws=True` output: rows indexed by ['kc_id',
+    'claw_id', 'kc_type', 'claw_x', 'claw_y', 'claw_z', 'compartment'], columns
+    ['glomerulus', 'pn_id', 'bouton_id'] (`prat_boutons=True`) or ['glomerulus'].
+    """
+    raise NotImplementedError
+
+
 def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
     # TODO TODO TODO separate kwarg to enable prat PN->APL connections, w/o also
     # splitting PNs into boutons? olfsysm currently support that? (and/or for
@@ -2989,8 +3014,20 @@ def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
     """Returns PN->KC connectivity matrix (# of claws) for model, from connectome data.
 
     Args:
-        connectome: which connectome of hemibrain/fafb-left/fafb-right to use.
-            should be one of `connectome_options`.
+        connectome: which connectome to use, one of `connectome_options`: 'hemibrain'
+            (its right calyx), 'fafb-left' / 'fafb-right', or 'malecns-left' /
+            'malecns-right' (the male CNS's left / right calyx, Pratyush's run
+            2026-10-25-17-31-06, from the model tables of hong-data's
+            reference_data/make_connectome.py, copied to `malecns_data_dir`). The male
+            CNS needs `prat_claws=True` and `multibouton_claws='argmax'` (the tables
+            have each claw on its one main bouton); with `prat_boutons=False` the bouton
+            columns are summed per glomerulus. Its claws are as the loader makes the
+            hemibrain's (5 or more synapses from one PN of the model's glomeruli, KCs of
+            the three types), with no ROI rule and the PN types' glomeruli renamed as the
+            hemibrain's (VC3 and VC5 -> VC3, VM6 -> VC5; the queue's E97), and its
+            compartments by the hemibrain's rule (`add_compartment_index`, shape 0) over
+            its own claws. `dist_weight`, `weight_divisor`, `Btn_separate`,
+            `synapse_*_path` and `_use_matt_wPNKC` are not supported for it.
 
         prat_claws: if True, uses Pratyush's (hemibrain-only) claw definitions, with one
             output row per claw (rather than per KC)
@@ -3042,11 +3079,13 @@ def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
         multibouton_claws: only for `prat_boutons=True`. How a claw whose synapses come
             from more than one bouton of its PN (~340 of ~9,900 claws in Pratyush's v5
             segmentation, mostly a dominant bouton plus a few synapses on a neighbour)
-            is placed in the claw x bouton matrix: 'first' (default; the bouton with the
-            lowest ID, the behavior before this option existed), 'argmax' (the bouton
-            with the most synapses onto the claw), or 'split' (every bouton, each with
-            a share of the claw's weight proportional to its synapse count, so the row
-            still sums to the claw's weight).
+            is placed in the claw x bouton matrix: 'argmax' (default since 2026-11-20,
+            Tom: the bouton with the most synapses onto the claw, ties to the lowest
+            ID), 'first' (the bouton with the lowest ID, the default before
+            2026-11-20: pass it to reproduce older outputs), or 'split' (every bouton,
+            each with a share of the claw's weight proportional to its synapse count, so
+            the row still sums to the claw's weight). Without `prat_boutons` it has no
+            effect ('split' is refused).
 
         claw_weight: only for `prat_claws=True` (and `dist_weight=None`). 'presence'
             (default): each claw has weight 1. 'synapses': each claw's weight is its
@@ -3072,6 +3111,15 @@ def connectome_wPNKC(connectome: str = 'hemibrain', *, prat_claws: bool = False,
         one_row_per_claw = True
 
     assert connectome in connectome_options
+    if connectome in malecns_connectome_options:
+        return _malecns_wPNKC(connectome, prat_claws=prat_claws,
+            prat_boutons=prat_boutons, multibouton_claws=multibouton_claws,
+            claw_weight=claw_weight, dist_weight=dist_weight,
+            weight_divisor=weight_divisor, plot_dir=plot_dir,
+            _use_matt_wPNKC=_use_matt_wPNKC, synapse_con_path=synapse_con_path,
+            synapse_loc_path=synapse_loc_path, Btn_separate=Btn_separate
+        )
+
     if multibouton_claws not in ('first', 'argmax', 'split'):
         raise ValueError(f"{multibouton_claws=} must be 'first', 'argmax' or 'split'")
     if claw_weight not in ('presence', 'synapses', 'synapses_raw'):
@@ -6919,6 +6967,15 @@ def connectome_KCKC_weights(kc_ids: Optional[Sequence[int]] = None, *,
     )
 
 
+def _malecns_APL_weights(connectome: str, *, prat_claws: bool, prat_boutons: bool,
+    wPNKC: Optional[pd.DataFrame]) -> Tuple[pd.Series, pd.Series, Optional[pd.Series],
+    Optional[pd.Series]]:
+    """`connectome_APL_weights` for `connectome` in `malecns_connectome_options`: the
+    synapses between APL and each claw of `wPNKC` (and each of its boutons, for
+    `prat_boutons=True`), from the male CNS's model tables, 0 where there are none."""
+    raise NotImplementedError
+
+
 def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = False,
     prat_boutons: bool = False, apl_units: bool = False,
     wPNKC: Optional[pd.DataFrame] = None, kc_types: Optional[pd.Series] = None,
@@ -7005,6 +7062,16 @@ def connectome_APL_weights(connectome: str = 'hemibrain', *, prat_claws: bool = 
             changes.
     """
     assert connectome in connectome_options
+    if connectome in malecns_connectome_options:
+        if apl_units:
+            raise NotImplementedError(f'apl_units=True with {connectome=}: the APL '
+                "units' synapse fractions are only loaded for the hemibrain")
+        if dropped_counts is not None:
+            raise NotImplementedError(f'dropped_counts with {connectome=}')
+        return _malecns_APL_weights(connectome, prat_claws=prat_claws,
+            prat_boutons=prat_boutons, wPNKC=wPNKC
+        )
+
     if dropped_counts is not None and not (prat_claws and wPNKC is not None):
         raise NotImplementedError('dropped_counts requires prat_claws=True and wPNKC')
 
