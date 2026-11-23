@@ -269,6 +269,9 @@ ModelParams const DEFAULT_PARAMS = []() {
 
     p.kc.use_kc_kc_inh            = false;
     p.kc.kc_kc_tau                = 0.05;
+    p.kc.use_mbc1                 = false;
+    p.kc.mbc1_tau                 = 0.05;
+    p.kc.mbc1_thr                 = 0.0;
     p.kc.claw_sat                 = 0.0;
     p.kc.claw_sat_hard            = false;
     p.kc.claw_thr                 = 0.0;
@@ -927,6 +930,29 @@ void check_kc_kc_inh(ModelParams const& p, RunVars const& rv) {
         check(w.coeffs().allFinite());
         check(w.coeffs().minCoeff() >= 0);
     }
+}
+
+/* Checks parameters / weights of the feedback cells (e.g. MB-C1; only relevant if
+ * p.kc.use_mbc1=true). */
+void check_mbc1(ModelParams const& p, RunVars const& rv) {
+    check(p.kc.use_mbc1);
+    // (acts on somatic Vm, which does not determine spiking if
+    // n_claws_active_to_spike > 0)
+    check(p.kc.n_claws_active_to_spike <= 0);
+    check(p.kc.mbc1_tau > 0);
+    // so the forward Euler filter (in sim_KC_layer) is stable and stays non-negative
+    check(p.time.dt <= p.kc.mbc1_tau);
+    // (also false for NaN)
+    check(std::isfinite(p.kc.mbc1_thr) && p.kc.mbc1_thr >= 0);
+
+    Matrix const& w_in = rv.kc.wKCMBC1;
+    Matrix const& w_out = rv.kc.wMBC1KC;
+    check(w_in.rows() >= 1);
+    check(w_in.cols() == Eigen::Index(p.kc.N));
+    check(w_out.rows() == Eigen::Index(p.kc.N));
+    check(w_out.cols() == w_in.rows());
+    check(w_in.allFinite() && w_out.allFinite());
+    check(w_in.minCoeff() >= 0 && w_out.minCoeff() >= 0);
 }
 
 /* Whether the odor-specific external inhibition of KCs (rv.kc.ext_inh) / boutons
@@ -1893,6 +1919,9 @@ void fit_sparseness(ModelParams const& p, RunVars& rv) {
     if (p.kc.use_kc_kc_inh) {
         check_kc_kc_inh(p, rv);
     }
+    if (p.kc.use_mbc1) {
+        check_mbc1(p, rv);
+    }
     // (as in run_KC_sims, since fit_sparseness can also be called directly)
     check_ext_inh(p, rv);
     check_kc_spiking(p);
@@ -2727,6 +2756,16 @@ void sim_KC_layer(
     }
     double const kc_kc_decay = 1.0 - p.time.dt / p.kc.kc_kc_tau;
 
+    // feedback cells (e.g. MB-C1; see p.kc.use_mbc1): each cell's activity filters its
+    // input from the KCs' synaptic output, as kc_kc_activity filters each KC's,
+    // m(t) = (1 - dt/tau) * m(t-1) + wKCMBC1 * (nves(t-1) * spikes(t-1)) / tau
+    bool const mbc1 = p.kc.use_mbc1;
+    Column mbc1_activity;
+    if (mbc1) {
+        mbc1_activity = Column::Zero(rv.kc.wKCMBC1.rows(), 1);
+    }
+    double const mbc1_decay = 1.0 - p.time.dt / p.kc.mbc1_tau;
+
     // refractory period and spike-frequency adaptation (see p.kc.refractory_period,
     // p.kc.adapt_inc): the steps each KC is still refractory for, and each KC's
     // adaptation variable (its threshold is thr + adapt * |thr|)
@@ -3107,6 +3146,17 @@ void sim_KC_layer(
             ).matrix() / p.kc.kc_kc_tau;
             dKCdt -= rv.kc.wKCKC * kc_kc_activity;
         }
+        // (for both branches above) the feedback cells' inhibition at the soma, from
+        // the same spikes (at t-1) as KC-KC inhibition, each cell's activity above its
+        // threshold (all of it at the default mbc1_thr=0)
+        if (mbc1) {
+            mbc1_activity = mbc1_decay * mbc1_activity + (rv.kc.wKCMBC1 * (
+                nves.col(t-1).array() * spikes.col(t-1).array()
+            ).matrix()) / p.kc.mbc1_tau;
+            dKCdt -= rv.kc.wMBC1KC * (
+                mbc1_activity.array() - p.kc.mbc1_thr
+            ).max(0.0).matrix();
+        }
 
         // TODO TODO TODO add one save* flag that enables saving of mean kc/claw and
         // bouton (if boutons enabled) activity pre/post apl inhibition. include those
@@ -3386,6 +3436,15 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 ", rv.kc.wKCKC.sum()=", rv.kc.wKCKC.sum()
             ));
         }
+        // (only if enabled, so the logs of other models do not change)
+        if (p.kc.use_mbc1) {
+            rv.log(cat("p.kc.use_mbc1=", p.kc.use_mbc1, ", p.kc.mbc1_tau=",
+                p.kc.mbc1_tau, ", p.kc.mbc1_thr=", p.kc.mbc1_thr, ", rv.kc.wKCMBC1: ",
+                rv.kc.wKCMBC1.rows(), "x", rv.kc.wKCMBC1.cols(), " (sum ",
+                rv.kc.wKCMBC1.sum(), "), rv.kc.wMBC1KC: ", rv.kc.wMBC1KC.rows(), "x",
+                rv.kc.wMBC1KC.cols(), " (sum ", rv.kc.wMBC1KC.sum(), ")"
+            ));
+        }
         // (only if not the defaults, so the logs of other models do not change)
         if (p.kc.refractory_period != 0 || p.kc.adapt_inc != 0) {
             rv.log(cat("p.kc.refractory_period=", p.kc.refractory_period,
@@ -3468,6 +3527,10 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
 
     if (p.kc.use_kc_kc_inh) {
         check_kc_kc_inh(p, rv);
+    }
+
+    if (p.kc.use_mbc1) {
+        check_mbc1(p, rv);
     }
 
     check(p.kc.apl_spike_ref_dt >= 0);

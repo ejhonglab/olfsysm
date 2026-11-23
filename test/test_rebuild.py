@@ -74,6 +74,13 @@ def test_model_kwargs_and_scaled_weights():
     assert kws['fixed_thr'] == 100.0 and kws['wAPLKC'] == 0.2 and kws['kc_kc_inh'] == 20.0
     assert kws['_wPNKC'] is P['wiring'] and kws['_wAPLKC'] is P['weights']['wAPLKC']
     assert kws['_wPNAPL'] is P['weights']['wPNAPL'] and kws['claw_thr'] == 40.0
+    assert 'mbc1_inh' not in kws
+    # a model with MB-C1 cells: their scale is a parameter, their other kwargs model_kws
+    kws_mbc1 = R.model_kwargs(dict(P['params'], wMBC1_scale=30.0), P['wiring'], P['weights'],
+                              dict(P['model_kws'], mbc1_tau=0.05, mbc1_pooled=True))
+    assert kws_mbc1['mbc1_inh'] == 30.0 and kws_mbc1['mbc1_pooled'] is True
+    with pytest.raises(ValueError, match='must not hold'):
+        R.model_kwargs(P['params'], P['wiring'], P['weights'], dict(P['model_kws'], mbc1_inh=1.0))
     with pytest.raises(ValueError, match='must not hold'):
         R.model_kwargs(P['params'], P['wiring'], P['weights'], dict(P['model_kws'], fixed_thr=1.0))
     with pytest.raises(ValueError, match='both wAPLPN and wPNAPL'):

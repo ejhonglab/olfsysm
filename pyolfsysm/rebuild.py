@@ -31,7 +31,7 @@ ARCHIVE_FORMAT = 'pyolfsysm.rebuild/1'
 ARCHIVE_JSON = 'rebuild.json'
 # the fitted parameters (absolute values; `make_fixed_param_kc_simulator`'s keys)
 PARAM_KEYS: Tuple[str, ...] = ('fixed_thr', 'wAPLKC_scale', 'wKCAPL_scale', 'wAPLPN_scale',
-    'wPNAPL_scale', 'wKCKC_scale'
+    'wPNAPL_scale', 'wKCKC_scale', 'wMBC1_scale'
 )
 # the unscaled APL weights (`fit_mb_model`'s `_wAPLKC`, `_wKCAPL`, `_wAPLPN`, `_wPNAPL`)
 WEIGHT_KEYS: Tuple[str, ...] = ('wAPLKC', 'wKCAPL', 'wAPLPN', 'wPNAPL')
@@ -107,8 +107,10 @@ def model_kwargs(params: Mapping[str, float], wiring: pd.DataFrame,
 
     Args:
         params: the fitted parameters (`PARAM_KEYS`, absolute; 'wKCKC_scale' only for a
-            model with KC-KC inhibition, 'wAPLPN_scale' / 'wPNAPL_scale' only for one with
-            PN<>APL weights).
+            model with KC-KC inhibition, 'wMBC1_scale' only for one with MB-C1 cells, whose
+            weights come from `connectome_MBC1_cell_weights` with the MB-C1 kwargs of
+            `model_kws`, 'wAPLPN_scale' / 'wPNAPL_scale' only for one with PN<>APL
+            weights).
         wiring: the PN->KC wiring as fitted (`_wPNKC`; claw x bouton, gain applied).
         weights: the unscaled APL weights as fitted (`WEIGHT_KEYS`).
         model_kws: the model's other (scalar) `fit_mb_model` kwargs, e.g.

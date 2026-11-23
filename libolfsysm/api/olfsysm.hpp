@@ -341,6 +341,31 @@ struct ModelParams {
          * Only relevant if use_kc_kc_inh=true. Default 0.05. */
         double kc_kc_tau;
 
+        /* If true, a feedback pathway of C cells (e.g. the hemibrain's two MB-C1 cells,
+         * or one pooled cell) that take input from KCs and inhibit them, separate from
+         * (and alongside) KC-KC inhibition and the APL: rv.kc.wKCMBC1 (C x N) is each
+         * cell's input weight from each KC, rv.kc.wMBC1KC (N x C) its weight onto each
+         * KC. Each cell's activity `m` (in the units of its input) filters the KCs'
+         * synaptic output (spikes times nves, as for KC-KC inhibition), with time
+         * constant mbc1_tau:
+         *   dm/dt = (-m + wKCMBC1 * (nves(t-1) * spikes(t-1)) / p.time.dt) / mbc1_tau
+         * (forward Euler, as kc_kc_activity), and rv.kc.wMBC1KC * max(m - mbc1_thr, 0)
+         * is subtracted from each KC's dVm/dt at the soma (after KC-KC inhibition; in
+         * the same units as the PN>KC drive). The pathway is linear in the KCs' spikes
+         * while mbc1_thr=0, so with mbc1_tau=kc_kc_tau it equals KC-KC inhibition with
+         * wKCKC = wMBC1KC * wKCMBC1 (up to floating point summation order). Not part of
+         * the APL: APL weights at 0 leave it on. Not supported with
+         * n_claws_active_to_spike > 0 (spiking would not depend on Vm). Default false
+         * (outputs unchanged). */
+        bool use_mbc1;
+        /* Time constant (seconds) of each cell's activity. Only relevant if
+         * use_mbc1=true. Default 0.05 (kc_kc_tau's default). */
+        double mbc1_tau;
+        /* Threshold on each cell's activity (same for every cell, in the units of its
+         * activity): a cell inhibits KCs with max(m - mbc1_thr, 0). Must be >= 0. Only
+         * relevant if use_mbc1=true. Default 0 (linear). */
+        double mbc1_thr;
+
         /* Per-claw saturation of the claw>soma transfer: the linear-summation form of
          * the n_claws_active_to_spike coincidence rule (bounds how much any one claw can
          * contribute to its KC). If > 0, each claw's drive x (claw_sims: after APL
@@ -843,6 +868,14 @@ struct RunVars {
          * `post` from KC `pre` (including any overall scale). Must be non-negative.
          * See p.kc.use_kc_kc_inh for how it enters the KC dynamics. */
         SparseMatrix wKCKC;
+
+        /* Only used if p.kc.use_mbc1=true (see there). Weights of the feedback cells
+         * (e.g. MB-C1): wKCMBC1 of shape (C, p.kc.N), element (c, k) the input to cell c
+         * from KC k; wMBC1KC of shape (p.kc.N, C), element (k, c) the inhibition onto
+         * KC k from cell c (including any overall scale). C >= 1 and the same in both.
+         * Must be finite and non-negative. */
+        Matrix wKCMBC1;
+        Matrix wMBC1KC;
 
         /* Odor-specific external inhibition of each KC, of shape (p.kc.N, # odors),
          * one column per odor (columns of p.orn.data.delta, as rv.pn.sims). Empty (the

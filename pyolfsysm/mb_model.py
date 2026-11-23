@@ -545,6 +545,8 @@ exclude_params = {
     '_wAPLPN',
     '_wPNAPL',
     '_wKCKC',
+    '_wMBC1KC',
+    '_wKCMBC1',
 
     'responses_to',
     'tune_from',
@@ -593,6 +595,14 @@ AL_INH_PARAMS: Tuple[str, ...] = ('pn_inhsc', 'pn_inhadd', 'ln_inhsc', 'ln_inhad
 # `fit_mb_model` kwargs for KC-KC lateral inhibition (olfsysm `mp.kc.use_kc_kc_inh`).
 # Disabled if `kc_kc_inh` is None.
 KC_KC_INH_PARAMS: Tuple[str, ...] = ('kc_kc_inh', 'kc_kc_tau')
+
+# `fit_mb_model` kwargs for MB-C1 as feedback cells of their own (olfsysm
+# `mp.kc.use_mbc1`), alongside any KC-KC inhibition. Disabled if `mbc1_inh` is None. The
+# first three are recorded in output params if passed, the two flags only if True.
+MBC1_PARAMS: Tuple[str, ...] = ('mbc1_inh', 'mbc1_tau', 'mbc1_thr', 'mbc1_pooled',
+    'mbc1_claws_only'
+)
+MBC1_FLAG_PARAMS: Tuple[str, ...] = ('mbc1_pooled', 'mbc1_claws_only')
 
 # `fit_mb_model` kwargs for the per-claw transfer of claw>KC input: saturation (olfsysm
 # `mp.kc.claw_sat`), a rectified offset (`mp.kc.claw_thr`, w/ an optional soft knee
@@ -895,6 +905,8 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
             KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
         },
         **{k: False for k in APL_INH_FORM_PARAMS},
+        **{k: None for k in MBC1_PARAMS if k not in MBC1_FLAG_PARAMS},
+        **{k: False for k in MBC1_FLAG_PARAMS},
         **WIRING_CONTROL_DEFAULTS,
     }
 
@@ -903,7 +915,8 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
         for k in KC_KC_INH_PARAMS + ('claw_sat', 'claw_thr', 'claw_thr_width',
             'claw_thr_subgain', 'claw_pow', 'claw_pow_ref') + BOUTON_DEPLETION_PARAMS +
             EXT_INH_RECORDED_PARAMS + KC_SPIKING_PARAMS + TIME_PARAMS +
-            APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
+            APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS +
+            tuple(k for k in MBC1_PARAMS if k not in MBC1_FLAG_PARAMS)
     }
 
     def is_excluded_value(k: str, v: Any) -> bool:
@@ -8868,10 +8881,10 @@ def connectome_MBC1_weights(connectome: str = 'hemibrain', *, prat_claws: bool =
     MB-C1 takes input from KCs and PN boutons in the calyx and outputs onto both, most
     of it from and onto gamma KCs. The hemibrain has two MB-C1 cells in the right calyx
     (MB-C1_R, body IDs 5813021291 and 5813075020), with about half of the synapses each;
-    the weights are summed over both unless `by_cell=True`. MB-C1 is not part of the
-    model: these weights are for building model inputs from (e.g.
-    `connectome_MBC1_KCKC_weights`, MB-C1 as a KC x KC matrix for `fit_mb_model`'s
-    `_wKCKC`).
+    the weights are summed over both unless `by_cell=True`. These weights are for
+    building model inputs from: `connectome_MBC1_cell_weights` (MB-C1 as cells of their
+    own, `fit_mb_model`'s `mbc1_inh`) and `connectome_MBC1_KCKC_weights` (MB-C1 as a KC x
+    KC matrix for `fit_mb_model`'s `_wKCKC`).
 
     They are laid out as `connectome_APL_weights` lays out APL's, from the same kwargs,
     so the two can be used side by side: wMBC1KC (MB-C1 -> KC) and wKCMBC1 (KC -> MB-C1)
@@ -9069,53 +9082,14 @@ def connectome_MBC1_weights(connectome: str = 'hemibrain', *, prat_claws: bool =
     return wMBC1KC, wKCMBC1, wMBC1PN, wPNMBC1
 
 
-def connectome_MBC1_KCKC_weights(kc_ids: Optional[Sequence[int]] = None, *,
-    wPNKC: Optional[pd.DataFrame] = None, connectome: str = 'hemibrain',
-    pooled: bool = True, claws_only: bool = False, normalize: bool = True
-    ) -> pd.DataFrame:
-    """Returns MB-C1 as a KC x KC matrix: its output to each KC times its input from each.
+def _mbc1_kc_cell_counts(kc_ids: Optional[Sequence[int]], wPNKC: Optional[pd.DataFrame],
+    connectome: str, claws_only: bool) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Index]:
+    """Returns MB-C1 -> KC and KC -> MB-C1 synapse counts per KC and cell, and the KC IDs.
 
-    MB-C1 pools the input it gets from KCs and feeds it back onto KCs, so as a pathway
-    from KC to KC it is the rank-1 matrix W[post, pre] = wMBC1KC[post] * wKCMBC1[pre]
-    (`connectome_MBC1_weights`'s counts, per KC), diagonal included (a KC's own input to
-    MB-C1 comes back to it too). By default (`pooled=True`) the hemibrain's two MB-C1
-    cells are taken as one neuron: the outer product of the counts summed over the two
-    (rank 1). With `pooled=False` each cell is a pathway of its own and the matrix is
-    their sum, sum over cells c of wMBC1KC[post, c] * wKCMBC1[pre, c] (rank 2), with
-    none of the cross terms (a KC's input to one cell reaching the other cell's
-    targets) that pooling adds.
-
-    Laid out as `connectome_KCKC_weights` is (index `f'{KC_ID}_post'`, columns
-    `f'{KC_ID}_pre'`), so it can be passed to `fit_mb_model` as `_wKCKC` (with
-    `kc_kc_inh` its scale) in place of the KC->KC synapses. Through that path each
-    pathway is linear in the KCs' filtered spikes (`kc_kc_tau`): it is the shape of
-    MB-C1's connectivity only, not a model of the cells (their own threshold,
-    saturation, time course or sign).
-
-    Args:
-        kc_ids: KC body IDs to give the matrix for (in this order, on both axes; e.g. the
-            `KC_ID` level of a `fit_mb_model` wPNKC index). KCs without any synapse with
-            MB-C1 have all-zero rows / columns. If None (and no `wPNKC`), the KCs with
-            any synapse with MB-C1 (sorted). Raises `ValueError` if none of them has one
-            (e.g. if they are not hemibrain body IDs).
-
-        wPNKC: a wiring (e.g. the wPNKC `fit_mb_model` returns, one row per claw or per
-            KC) in place of `kc_ids`: the matrix is for its KCs, in its order.
-
-        connectome: 'hemibrain' only.
-
-        pooled: if True (the default), the two MB-C1 cells as one neuron; if False, each
-            cell a pathway of its own (see above).
-
-        claws_only: if False (the default), each KC's counts are all of its calyx
-            synapses with MB-C1, whatever their claw. If True (requires a
-            one-row-per-claw `wPNKC`), only those on the wiring's claws
-            (`connectome_MBC1_weights(prat_claws=True)` summed over each KC's claws;
-            about half of them on the hemibrain claw x bouton wiring).
-
-        normalize: as for `connectome_KCKC_weights`: if True, weights are divided by the
-            mean total incoming weight per KC, so the mean row sum is 1. Otherwise they
-            are products of synapse counts.
+    The counts (`connectome_MBC1_weights(by_cell=True)`, KC x cell DataFrames) are for
+    the KCs of `kc_ids` / `wPNKC` (in that order; 0 for KCs without any synapse with
+    MB-C1), or for every KC with a synapse with MB-C1 (sorted) if neither is passed. See
+    `connectome_MBC1_KCKC_weights` for the arguments.
     """
     if kc_ids is not None and wPNKC is not None:
         raise ValueError('pass kc_ids or wPNKC, not both')
@@ -9149,6 +9123,61 @@ def connectome_MBC1_KCKC_weights(kc_ids: Optional[Sequence[int]] = None, *,
         w_in = w_in.reindex(ids).fillna(0.0)
 
     assert list(w_out.columns) == list(w_in.columns)
+    return w_out, w_in, ids
+
+
+def connectome_MBC1_KCKC_weights(kc_ids: Optional[Sequence[int]] = None, *,
+    wPNKC: Optional[pd.DataFrame] = None, connectome: str = 'hemibrain',
+    pooled: bool = True, claws_only: bool = False, normalize: bool = True
+    ) -> pd.DataFrame:
+    """Returns MB-C1 as a KC x KC matrix: its output to each KC times its input from each.
+
+    MB-C1 pools the input it gets from KCs and feeds it back onto KCs, so as a pathway
+    from KC to KC it is the rank-1 matrix W[post, pre] = wMBC1KC[post] * wKCMBC1[pre]
+    (`connectome_MBC1_weights`'s counts, per KC), diagonal included (a KC's own input to
+    MB-C1 comes back to it too). By default (`pooled=True`) the hemibrain's two MB-C1
+    cells are taken as one neuron: the outer product of the counts summed over the two
+    (rank 1). With `pooled=False` each cell is a pathway of its own and the matrix is
+    their sum, sum over cells c of wMBC1KC[post, c] * wKCMBC1[pre, c] (rank 2), with
+    none of the cross terms (a KC's input to one cell reaching the other cell's
+    targets) that pooling adds.
+
+    Laid out as `connectome_KCKC_weights` is (index `f'{KC_ID}_post'`, columns
+    `f'{KC_ID}_pre'`), so it can be passed to `fit_mb_model` as `_wKCKC` (with
+    `kc_kc_inh` its scale) in place of the KC->KC synapses. Through that path each
+    pathway is linear in the KCs' filtered spikes (`kc_kc_tau`): it is the shape of
+    MB-C1's connectivity only, not a model of the cells (their own threshold,
+    saturation, time course or sign). `fit_mb_model`'s `mbc1_inh` runs MB-C1 as cells
+    of their own instead (`connectome_MBC1_cell_weights`), alongside any KC-KC
+    inhibition; with the same time constant and no threshold it equals this matrix
+    passed as `_wKCKC`.
+
+    Args:
+        kc_ids: KC body IDs to give the matrix for (in this order, on both axes; e.g. the
+            `KC_ID` level of a `fit_mb_model` wPNKC index). KCs without any synapse with
+            MB-C1 have all-zero rows / columns. If None (and no `wPNKC`), the KCs with
+            any synapse with MB-C1 (sorted). Raises `ValueError` if none of them has one
+            (e.g. if they are not hemibrain body IDs).
+
+        wPNKC: a wiring (e.g. the wPNKC `fit_mb_model` returns, one row per claw or per
+            KC) in place of `kc_ids`: the matrix is for its KCs, in its order.
+
+        connectome: 'hemibrain' only.
+
+        pooled: if True (the default), the two MB-C1 cells as one neuron; if False, each
+            cell a pathway of its own (see above).
+
+        claws_only: if False (the default), each KC's counts are all of its calyx
+            synapses with MB-C1, whatever their claw. If True (requires a
+            one-row-per-claw `wPNKC`), only those on the wiring's claws
+            (`connectome_MBC1_weights(prat_claws=True)` summed over each KC's claws;
+            about half of them on the hemibrain claw x bouton wiring).
+
+        normalize: as for `connectome_KCKC_weights`: if True, weights are divided by the
+            mean total incoming weight per KC, so the mean row sum is 1. Otherwise they
+            are products of synapse counts.
+    """
+    w_out, w_in, ids = _mbc1_kc_cell_counts(kc_ids, wPNKC, connectome, claws_only)
     out_ = w_out.to_numpy(dtype=float)
     in_ = w_in.to_numpy(dtype=float)
     if pooled:
@@ -9165,6 +9194,67 @@ def connectome_MBC1_KCKC_weights(kc_ids: Optional[Sequence[int]] = None, *,
         index=pd.Index(ids, name=f'{KC_ID}_post'),
         columns=pd.Index(ids, name=f'{KC_ID}_pre')
     )
+
+
+# the one column of `connectome_MBC1_cell_weights(pooled=True)` outputs
+MBC1_POOLED: str = 'pooled'
+
+
+def connectome_MBC1_cell_weights(kc_ids: Optional[Sequence[int]] = None, *,
+    wPNKC: Optional[pd.DataFrame] = None, connectome: str = 'hemibrain',
+    pooled: bool = False, claws_only: bool = False, normalize: bool = True
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Returns wMBC1KC, wKCMBC1: MB-C1 as cells of their own, for `fit_mb_model`'s
+    `mbc1_inh` (its `_wMBC1KC` / `_wKCMBC1` layout).
+
+    Each output is a DataFrame indexed by KC ID (`KC_ID`, the KCs of `kc_ids` / `wPNKC`
+    in their order, as `connectome_MBC1_KCKC_weights`), with one column per cell
+    (`MBC1_ID`, the hemibrain's two MB-C1_R cells, sorted), or one column `MBC1_POOLED`
+    if `pooled=True` (the two cells' counts summed, as one neuron). wMBC1KC is each
+    cell's output onto each KC, wKCMBC1 each cell's input from each KC.
+
+    With `normalize=True` (the default), each cell's input weights sum to 1 (so a cell's
+    activity in the model is the synapse-weighted mean of its input KCs' filtered spike
+    output, in Hz, and `fit_mb_model`'s `mbc1_thr` is in those units), and the output
+    weights carry the rest of `connectome_MBC1_KCKC_weights`'s normalization: wMBC1KC @
+    wKCMBC1.T equals `connectome_MBC1_KCKC_weights(kc_ids, wPNKC=wPNKC, pooled=pooled,
+    claws_only=claws_only)` (mean row sum 1, as `connectome_KCKC_weights`), so
+    `mbc1_inh` is in the units of `kc_kc_inh`. Otherwise both are synapse counts. A cell
+    without any input from these KCs gets all-zero weights on both sides.
+
+    Args:
+        kc_ids / wPNKC / connectome / claws_only: as for `connectome_MBC1_KCKC_weights`
+            ('hemibrain' only).
+
+        pooled: if False (the default), one column per MB-C1 cell; if True, the two as
+            one neuron.
+
+        normalize: see above.
+    """
+    w_out, w_in, ids = _mbc1_kc_cell_counts(kc_ids, wPNKC, connectome, claws_only)
+    if pooled:
+        w_out = w_out.sum(axis=1).to_frame(MBC1_POOLED)
+        w_in = w_in.sum(axis=1).to_frame(MBC1_POOLED)
+        w_out.columns.name = MBC1_ID
+        w_in.columns.name = MBC1_ID
+
+    w_out = w_out.astype(float)
+    w_in = w_in.astype(float)
+    if normalize:
+        in_sums = w_in.sum()
+        out_sums = w_out.sum()
+        # sum of the equivalent KC x KC matrix, sum over cells c of (sum over post of
+        # wMBC1KC[post, c]) * (sum over pre of wKCMBC1[pre, c])
+        total = float((out_sums * in_sums).sum())
+        assert total > 0
+        has_input = in_sums > 0
+        w_in = w_in.loc[:, has_input] / in_sums[has_input]
+        w_in = w_in.reindex(columns=w_out.columns, fill_value=0.0)
+        w_out = w_out * (in_sums.where(has_input, 0.0) / (total / len(ids)))
+
+    w_out.index = pd.Index(ids, name=KC_ID)
+    w_in.index = pd.Index(ids, name=KC_ID)
+    return w_out, w_in
 
 
 APL_KC_COUNT_COLUMNS = ('n_claws', 'kept', 'kept_unassigned', 'dropped_claw', 'no_claw',
@@ -13495,6 +13585,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     _wAPLKC: Optional[pd.Series] = None, _wKCAPL: Optional[pd.Series] = None,
     _wAPLPN: Optional[pd.Series] = None, _wPNAPL: Optional[pd.Series] = None,
     _wKCKC: Optional[pd.DataFrame] = None,
+    _wMBC1KC: Optional[pd.DataFrame] = None, _wKCMBC1: Optional[pd.DataFrame] = None,
     # TODO want to keep this arg? make "private"? or optional, and err if set (either
     # True/False) if not using _w* weights abovee?
     tune_apl_weights: Optional[bool] = None,
@@ -13529,6 +13620,9 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     pn_inhsc: Optional[float] = None, pn_inhadd: Optional[float] = None,
     ln_inhsc: Optional[float] = None, ln_inhadd: Optional[float] = None,
     kc_kc_inh: Optional[float] = None, kc_kc_tau: Optional[float] = None,
+    mbc1_inh: Optional[float] = None, mbc1_tau: Optional[float] = None,
+    mbc1_thr: Optional[float] = None, mbc1_pooled: bool = False,
+    mbc1_claws_only: bool = False,
     claw_sat: Optional[float] = None, claw_sat_hard: Optional[bool] = None,
     claw_thr: Optional[float] = None, claw_thr_width: Optional[float] = None,
     claw_thr_subgain: Optional[float] = None,
@@ -13854,6 +13948,48 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             inhibition (`mp.kc.kc_kc_tau`, olfsysm default of 0.05 if None). Requires
             `kc_kc_inh`.
 
+        mbc1_inh: if not None, runs the hemibrain's MB-C1 as feedback cells of their own
+            (olfsysm `mp.kc.use_mbc1`), alongside (and independent of) any KC-KC
+            inhibition and the APL: `kc_kc_inh` and `mbc1_inh` each have their own
+            scale, and APL weights at 0 leave MB-C1 on. Each cell filters its input
+            from the KCs' spikes (`rv.kc.wKCMBC1` times each KC's synaptic output, time
+            constant `mbc1_tau`) into an activity, and `rv.kc.wMBC1KC @ max(activity -
+            mbc1_thr, 0)` is subtracted from each KC's dVm/dt (at the soma, after KC-KC
+            inhibition). `rv.kc.wMBC1KC` is `mbc1_inh` times the cells' output weights.
+            The weights are `connectome_MBC1_cell_weights` for the model's KCs (two
+            cells; all of each KC's calyx synapses with MB-C1 unless
+            `mbc1_claws_only=True`), normalized so that each cell's input weights sum to
+            1 and the equivalent KC x KC matrix (cell -> KC times KC -> cell, summed over
+            the cells) has mean row sum 1, as KC-KC weights: `mbc1_inh` is in the units
+            of `kc_kc_inh`, and with `mbc1_tau` equal to `kc_kc_tau` and `mbc1_thr` 0 the
+            outputs equal those of `kc_kc_inh=mbc1_inh` with
+            `_wKCKC=connectome_MBC1_KCKC_weights(kc_ids, pooled=mbc1_pooled,
+            claws_only=mbc1_claws_only)` (up to floating point summation order).
+            `_wMBC1KC` / `_wKCMBC1` override the weights. Active during threshold / APL
+            tuning too. 0.0 enables the code path with zero output weights (same
+            outputs as None). Must not be negative. The loader's weights are the
+            hemibrain's only (NotImplementedError for the male CNS, whose model tables
+            have no MB-C1; hardcoded weights are accepted there, as `_wKCKC` is).
+
+        mbc1_tau: time constant (seconds) of each MB-C1 cell's activity
+            (`mp.kc.mbc1_tau`, olfsysm default of 0.05, `kc_kc_tau`'s, if None).
+            Requires `mbc1_inh`.
+
+        mbc1_thr: threshold on each MB-C1 cell's activity (`mp.kc.mbc1_thr`; olfsysm
+            default of 0, a linear cell, if None). With the loader's weights a cell's
+            activity is the synapse-weighted mean of its input KCs' filtered spike
+            output, in Hz (for constant firing, each KC's rate times its share of the
+            cell's input synapses, summed). Must not be negative. Requires `mbc1_inh`.
+
+        mbc1_pooled: if True, the two MB-C1 cells as one pooled neuron (their counts
+            summed, as `connectome_MBC1_KCKC_weights`'s default), instead of one per
+            cell. Requires `mbc1_inh`, and not `_wMBC1KC`.
+
+        mbc1_claws_only: if True, each KC's synapses with MB-C1 on the wiring's claws
+            only (`connectome_MBC1_weights(prat_claws=True)`), instead of all of its
+            calyx synapses. Requires `mbc1_inh`, `one_row_per_claw=True` and
+            `prat_claws=True`, and not `_wMBC1KC`.
+
         claw_sat: if not None, saturates each claw's input to its KC (olfsysm
             `mp.kc.claw_sat`): each claw's drive `x` (PN input minus APL inhibition,
             clipped at 0) enters the sum across the KC's claws as
@@ -14109,6 +14245,13 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             any order), used instead of `connectome_KCKC_weights` output. Used as-is
             (not normalized), then multiplied by `kc_kc_inh` (which must be passed).
 
+        _wMBC1KC / _wKCMBC1: (internal use only, e.g. tests) MB-C1 cell -> KC and KC ->
+            cell weights (index = KC IDs matching the `kc_id` level of the wPNKC index,
+            in any order, at least the model's; one column per cell, the same columns
+            in both), used instead of `connectome_MBC1_cell_weights` output. Used as-is
+            (not normalized), `_wMBC1KC` then multiplied by `mbc1_inh` (which must be
+            passed). Passed together.
+
         tune_apl_weights: whether APL weights are tuned. defaults to True if
             `scale_pre_tuning=True`, and to False if hardcoded `_w*` weights passed.
 
@@ -14152,7 +14295,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         return_olfsysm_vars: if True, also returns olfsysm `mp` and `rv` objects in
             `param_dict` (not supported by `fit_and_plot_mb_model`), as well as
             'wKCKC_unscaled' (sparse KC-KC weights before multiplying by `kc_kc_inh`),
-            if `kc_kc_inh` passed
+            if `kc_kc_inh` passed, and 'wMBC1KC_unscaled' (MB-C1 cell -> KC weights,
+            KCs x cells, before multiplying by `mbc1_inh`), if `mbc1_inh` passed
 
         multiresponder_APL_boost: if passed, APL weights of "multiresponder" KCs (from
             `_multiresponder_mask`, or masks saved by natmix_data analysis, if not
@@ -14182,7 +14326,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             certain model intermediates (e.g. 'kc_spont_in'), and certain parameters
             relevant for reproducibility (e.g. 'sp_acc', 'max_iters', and any of
             `AL_INH_PARAMS`, `KC_KC_INH_PARAMS`, `CLAW_SAT_PARAMS` or
-            `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc',
+            `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc', `MBC1_PARAMS`
+            passed (the flags only if True),
             `EXT_INH_RECORDED_PARAMS` for `EXT_INH_PARAMS` passed, any of
             `APL_INH_FORM_PARAMS` that were True, `WIRING_CONTROL_PARAMS` not at their
             defaults, and any of `CLAW_INH_POOL_PARAMS`,
@@ -14459,6 +14604,61 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         mp.kc.use_kc_kc_inh = True
         if kc_kc_tau is not None:
             mp.kc.kc_kc_tau = float(kc_kc_tau)
+
+    # (only those passed, and the flags only if True, to also add to param_dict below)
+    mbc1_params = {k: float(v) for k, v in
+        zip(('mbc1_inh', 'mbc1_tau', 'mbc1_thr'), (mbc1_inh, mbc1_tau, mbc1_thr))
+        if v is not None
+    }
+    mbc1_params.update({k: True for k, v in
+        zip(MBC1_FLAG_PARAMS, (mbc1_pooled, mbc1_claws_only)) if v
+    })
+    assert set(mbc1_params) <= set(MBC1_PARAMS)
+    if (_wMBC1KC is None) != (_wKCMBC1 is None):
+        raise ValueError('_wMBC1KC and _wKCMBC1 must be passed together')
+    if mbc1_inh is None:
+        if len(mbc1_params) > 0 or _wMBC1KC is not None:
+            raise ValueError('mbc1_tau / mbc1_thr / mbc1_pooled / mbc1_claws_only / '
+                '_wMBC1KC / _wKCMBC1 require mbc1_inh'
+            )
+    else:
+        for k in ('mbc1_inh', 'mbc1_tau', 'mbc1_thr'):
+            v = mbc1_params.get(k)
+            if v is not None and (not np.isfinite(v) or v < 0 or
+                    (k == 'mbc1_tau' and v == 0)):
+                raise ValueError(f'{k} must be finite and not negative (and mbc1_tau '
+                    f'must be positive) (got {v})'
+                )
+        if pn2kc_connections in variable_n_claw_options:
+            # (wPNKC is generated in olfsysm, w/o connectome KC IDs)
+            raise NotImplementedError('mbc1_inh not supported with '
+                f'pn2kc_connections in {variable_n_claw_options}'
+            )
+        if n_claws_active_to_spike is not None:
+            raise ValueError('mbc1_inh not supported with n_claws_active_to_spike '
+                '(inhibition acts on somatic Vm, which then does not determine spiking)'
+            )
+        if _wMBC1KC is not None:
+            if mbc1_pooled or mbc1_claws_only:
+                raise ValueError('mbc1_pooled / mbc1_claws_only do not apply to '
+                    'hardcoded _wMBC1KC / _wKCMBC1'
+                )
+        elif get_connectome(pn2kc_connections) != 'hemibrain':
+            # (as connectome_MBC1_weights would, but before any simulation)
+            raise NotImplementedError("MB-C1's weights are only available for the "
+                f'hemibrain (not {get_connectome(pn2kc_connections)!r}); pass '
+                '_wMBC1KC / _wKCMBC1 for another connectome'
+            )
+        if mbc1_claws_only and not (one_row_per_claw and prat_claws):
+            raise ValueError('mbc1_claws_only=True requires one_row_per_claw=True and '
+                'prat_claws=True'
+            )
+        # weights (rv.kc.wKCMBC1 / wMBC1KC) set below, after rv is created
+        mp.kc.use_mbc1 = True
+        if mbc1_tau is not None:
+            mp.kc.mbc1_tau = float(mbc1_tau)
+        if mbc1_thr is not None:
+            mp.kc.mbc1_thr = float(mbc1_thr)
 
     # (only those passed, to also add to param_dict below. keys are also mp.kc
     # attributes.)
@@ -15816,6 +16016,50 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         wKCKC_unscaled = csc_matrix(wKCKC_unscaled)
         rv.kc.wKCKC = float(kc_kc_inh) * wKCKC_unscaled
         del wKCKC_df, model_kc_ids
+
+    wMBC1KC_unscaled = None
+    if mbc1_inh is not None:
+        # olfsysm KCs are in kc_index order (in both one_row_per_claw cases or not)
+        model_kc_ids = pd.Index(kc_index.get_level_values(KC_ID))
+        if _wMBC1KC is None:
+            if mbc1_claws_only:
+                w_out, w_in = connectome_MBC1_cell_weights(wPNKC=wPNKC,
+                    connectome=connectome, pooled=mbc1_pooled, claws_only=True
+                )
+            else:
+                w_out, w_in = connectome_MBC1_cell_weights(model_kc_ids,
+                    connectome=connectome, pooled=mbc1_pooled
+                )
+        else:
+            w_out = _wMBC1KC
+            w_in = _wKCMBC1
+            if not w_out.columns.equals(w_in.columns) or len(w_out.columns) == 0:
+                raise ValueError('_wMBC1KC and _wKCMBC1 must have the same columns (one '
+                    'per cell, at least one)'
+                )
+            if w_out.index.duplicated().any() or w_in.index.duplicated().any():
+                raise ValueError('_wMBC1KC / _wKCMBC1 must have one row per KC')
+            missing = (set(model_kc_ids) - set(w_out.index)) | (
+                set(model_kc_ids) - set(w_in.index)
+            )
+            if len(missing) > 0:
+                raise ValueError(f'_wMBC1KC / _wKCMBC1 missing {len(missing)} model KC '
+                    'IDs'
+                )
+        w_out = w_out.loc[model_kc_ids]
+        w_in = w_in.loc[model_kc_ids]
+
+        wMBC1KC_unscaled = w_out.to_numpy(dtype=float)
+        wKCMBC1 = w_in.to_numpy(dtype=float).T
+        for w in (wMBC1KC_unscaled, wKCMBC1):
+            if not np.isfinite(w).all() or (w < 0).any():
+                raise ValueError('MB-C1 weights must be finite and non-negative')
+
+        # (KCs x cells) and (cells x KCs), as olfsysm expects. olfsysm checks shapes /
+        # values.
+        rv.kc.wKCMBC1 = wKCMBC1
+        rv.kc.wMBC1KC = float(mbc1_inh) * wMBC1KC_unscaled
+        del w_out, w_in, wKCMBC1, model_kc_ids
 
     # (only those passed, to also add to param_dict below)
     ext_inh_params = dict()
@@ -17637,6 +17881,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     # only those passed, so outputs (and saved params) of other models do not change
     param_dict.update(al_inh_params)
     param_dict.update(kc_kc_inh_params)
+    param_dict.update(mbc1_params)
     param_dict.update(claw_sat_params)
     param_dict.update(bouton_depletion_params)
     param_dict.update(ext_inh_params)
@@ -18158,6 +18403,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         param_dict['rv'] = rv
         if wKCKC_unscaled is not None:
             param_dict['wKCKC_unscaled'] = wKCKC_unscaled
+        if wMBC1KC_unscaled is not None:
+            param_dict['wMBC1KC_unscaled'] = wMBC1KC_unscaled
 
     return responses, spike_counts, wPNKC, param_dict
 
@@ -18175,11 +18422,14 @@ optimizable_model_params: Dict[str, str] = {
     # only for models w/ KC-KC inhibition (kwarg also enables it). scale multiplying
     # (unscaled) KC-KC weights.
     'wKCKC_scale': 'kc_kc_inh',
+    # only for models w/ MB-C1 cells (kwarg also enables it). scale multiplying the
+    # (unscaled) MB-C1 cell -> KC weights.
+    'wMBC1_scale': 'mbc1_inh',
 }
 
 # `optimizable_model_params` values that are also passed as `fit_mb_model` kwargs to
 # `make_fixed_param_kc_simulator`, to enable the model feature they parameterize
-_simulator_enabling_kws: Set[str] = {'apl_unit_coupling', 'kc_kc_inh'}
+_simulator_enabling_kws: Set[str] = {'apl_unit_coupling', 'kc_kc_inh', 'mbc1_inh'}
 
 # fit_mb_model kwargs that make_fixed_param_kc_simulator does not support (either
 # because they change how thresholds / APL weights are defined, or because they involve
@@ -18249,6 +18499,9 @@ def _get_fixed_params(param_dict: ParamDict) -> ParamDict:
 
     if 'kc_kc_inh' in param_dict:
         params['wKCKC_scale'] = float(param_dict['kc_kc_inh'])
+
+    if 'mbc1_inh' in param_dict:
+        params['wMBC1_scale'] = float(param_dict['mbc1_inh'])
 
     return params
 
@@ -18330,10 +18583,12 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
         **model_kws: passed to `fit_mb_model` (including any affecting the ORN/LN/PN
             layers, e.g. `pn_inhsc`, which are only simulated in that initial call).
             Must not contain kwargs in `optimizable_model_params` values (use
-            `initial_params` instead), except `apl_unit_coupling` and `kc_kc_inh`
-            (which also determine whether the APL is split into units / whether
-            there is KC-KC inhibition, and are overridden by any value in
-            `initial_params`). Kwargs only used for tuning (e.g. `target_sparsity`)
+            `initial_params` instead), except `apl_unit_coupling`, `kc_kc_inh` and
+            `mbc1_inh` (which also determine whether the APL is split into units /
+            whether there is KC-KC inhibition / whether there are MB-C1 cells, and are
+            overridden by any value in `initial_params`; the other MB-C1 kwargs, e.g.
+            `mbc1_tau` / `mbc1_thr`, apply to the initial call and to all
+            simulations). Kwargs only used for tuning (e.g. `target_sparsity`)
             are ignored if `initial_params` passed. Other KC-layer kwargs that do not
             change how thresholds / APL weights are defined (e.g. `claw_sat` /
             `claw_thr` / `claw_thr_width` / `claw_thr_subgain` / `claw_pow` /
@@ -18367,8 +18622,8 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
     e.g. to count spikes in windows of the response. Initial parameters have values for
     all keys of `optimizable_model_params` that apply to this model (PN<>APL weight
     scales only included if `prat_boutons=True`, 'apl_unit_coupling' only if the APL is
-    split into units, and 'wKCKC_scale' [= `kc_kc_inh`] only if there is KC-KC
-    inhibition).
+    split into units, 'wKCKC_scale' [= `kc_kc_inh`] only if there is KC-KC
+    inhibition, and 'wMBC1_scale' [= `mbc1_inh`] only if there are MB-C1 cells).
     """
     if orn_deltas is None:
         raise ValueError('orn_deltas must be passed (running on Hallem data not '
@@ -18413,9 +18668,12 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
     rv = param_dict.pop('rv')
     # (only present if kc_kc_inh passed)
     wKCKC_unscaled = param_dict.pop('wKCKC_unscaled', None)
+    # (only present if mbc1_inh passed)
+    wMBC1KC_unscaled = param_dict.pop('wMBC1KC_unscaled', None)
 
     initial_params = _get_fixed_params(param_dict)
     assert ('wKCKC_scale' in initial_params) == (wKCKC_unscaled is not None)
+    assert ('wMBC1_scale' in initial_params) == (wMBC1KC_unscaled is not None)
 
     apl_unit_coupling = model_kws.get('apl_unit_coupling')
     if apl_unit_coupling is not None:
@@ -18528,8 +18786,8 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
         # olfsysm only checks weights in fit_sparseness, which is not called below
         negative = {p: v for p, v in params.items() if p != 'fixed_thr' and v < 0}
         if len(negative) > 0:
-            raise ValueError('APL / KC-KC weight scales and apl_unit_coupling must '
-                f'not be negative: {negative}'
+            raise ValueError('APL / KC-KC / MB-C1 weight scales and apl_unit_coupling '
+                f'must not be negative: {negative}'
             )
 
         # same as olfsysm.fit_sparseness does w/ fixed threshold (fit_mb_model always
@@ -18563,6 +18821,10 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
         if wKCKC_unscaled is not None:
             # same as fit_mb_model
             rv.kc.wKCKC = float(params['wKCKC_scale']) * wKCKC_unscaled
+
+        if wMBC1KC_unscaled is not None:
+            # same as fit_mb_model (rv.kc.wKCMBC1 stays as that call set it)
+            rv.kc.wMBC1KC = float(params['wMBC1_scale']) * wMBC1KC_unscaled
 
         # regen=False skips olfsysm build_wPNKC and fit_sparseness, just simulating KCs
         if spike_times:
@@ -18941,8 +19203,9 @@ def optimize_mb_model_params(orn_deltas: pd.DataFrame, *,
 
         params_to_optimize: subset of `optimizable_model_params` keys. Defaults to all
             that apply to this model (PN<>APL weight scales only included if
-            `prat_boutons=True`, 'apl_unit_coupling' only if passed, and 'wKCKC_scale'
-            only if `kc_kc_inh` passed), except 'wKCAPL_scale'. Scaling all APL input
+            `prat_boutons=True`, 'apl_unit_coupling' only if passed, 'wKCKC_scale' only
+            if `kc_kc_inh` passed, and 'wMBC1_scale' only if `mbc1_inh` passed), except
+            'wKCAPL_scale'. Scaling all APL input
             weights (wKCAPL, wPNAPL) by some factor, and all APL output weights (wAPLKC,
             wAPLPN) by its inverse, does not change model outputs, so optimizing all of
             them would be redundant. Others
@@ -22080,8 +22343,8 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
                 k: [x[k] for x in param_dict_list] for k in param_dict_keys
             }
             # inputs (same for all seeds), so they still match model_kws values below
-            for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + CLAW_SAT_PARAMS +
-                    BOUTON_DEPLETION_PARAMS + EXT_INH_RECORDED_PARAMS +
+            for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + MBC1_PARAMS +
+                    CLAW_SAT_PARAMS + BOUTON_DEPLETION_PARAMS + EXT_INH_RECORDED_PARAMS +
                     APL_INH_FORM_PARAMS + CLAW_INH_POOL_PARAMS + WIRING_CONTROL_PARAMS):
                 if k in param_dict:
                     assert len(set(param_dict[k])) == 1
