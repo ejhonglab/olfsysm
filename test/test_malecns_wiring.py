@@ -14,7 +14,8 @@ from pyolfsysm.mb_model import (connectome_wPNKC, connectome_APL_weights, fit_mb
     format_model_params, load_malecns_table, claw_compartments_shell_sphere,
     malecns_data_dir, malecns_connectome_options, connectome_options,
     pn2kc_connections_options, megamat_orn_deltas, task_gloms, claw_coord_cols,
-    glomerulus_col, KC_ID, CLAW_ID, KC_TYPE, PN_ID, BOUTON_ID
+    glomerulus_col, fixed_params_to_fit_mb_model_kws, KC_ID, CLAW_ID, KC_TYPE, PN_ID,
+    BOUTON_ID
 )
 
 pytestmark = pytest.mark.filterwarnings('ignore')
@@ -187,3 +188,45 @@ def test_fit_mb_model_runs(connectome, kws, wirings):
     assert responses.shape[1] == 4 and spike_counts.shape == responses.shape
     rate = float(responses.mean().mean())
     assert 0 < rate < 0.5
+
+
+APL_WEIGHTS = ('wAPLKC', 'wKCAPL', 'wAPLPN', 'wPNAPL')
+
+
+def test_hardcoded_weights(side):
+    """`fit_mb_model` takes hardcoded weights (`_wPNKC`, `_wAPLKC` / `_wKCAPL` / `_wAPLPN` /
+    `_wPNAPL`) with `pn2kc_connections` 'malecns-left' / 'malecns-right' (refused until
+    2026-11-23): the side's own wiring and normalized APL weights, from a run at fixed
+    parameters, reproduce that run's spike counts exactly, and doubling the KC<>APL scales
+    lowers the response rate. KC-KC weights still come only from `_wKCKC` on these sides,
+    and wirings other than the hemibrain and the male CNS still refuse hardcoded weights.
+    """
+    orn = megamat_orn_deltas().iloc[:, :4]
+    kws = dict(BOUTON_MODEL, pn2kc_connections=side, make_plots=False, silent=True)
+    r0, s0, w0, p0 = fit_mb_model(orn, fixed_thr=275.0, wAPLKC=0.13, **kws)
+    hard = {f'_{k}': p0[k] / p0[f'{k}_scale'] for k in APL_WEIGHTS}
+    fixed = fixed_params_to_fit_mb_model_kws(dict(fixed_thr=p0['fixed_thr'],
+        **{f'{k}_scale': p0[f'{k}_scale'] for k in APL_WEIGHTS}
+    ))
+    r1, s1, w1, _ = fit_mb_model(orn, _wPNKC=w0, **hard, **fixed, **kws)
+    assert w1.equals(w0)
+    assert s1.equals(s0) and r1.equals(r0)
+    assert r0.values.sum() > 0
+
+    stronger = dict(fixed, wAPLKC=2 * fixed['wAPLKC'], wKCAPL=2 * fixed['wKCAPL'])
+    r2, _, _, _ = fit_mb_model(orn, _wPNKC=w0, **hard, **stronger, **kws)
+    assert r2.values.sum() < r0.values.sum()
+
+    # no KC-KC synapses of the male CNS in olfsysm (they are passed as `_wKCKC`), and the
+    # hemibrain's are not used in their place
+    with pytest.raises(NotImplementedError):
+        fit_mb_model(orn, _wPNKC=w0, **hard, **fixed, kc_kc_inh=1.0, **kws)
+
+    with pytest.raises(AssertionError, match='pn2kc_connections'):
+        fit_mb_model(orn, _wPNKC=w0, pn2kc_connections='uniform', n_claws=7,
+            make_plots=False, silent=True
+        )
+    with pytest.raises(AssertionError, match='pn2kc_connections'):
+        fit_mb_model(orn, **hard, **fixed, **dict(kws, pn2kc_connections='uniform',
+            n_claws=7)
+        )

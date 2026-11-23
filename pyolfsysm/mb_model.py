@@ -13751,7 +13751,9 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `connectome_APL_weights` outputs (`_wAPLKC` requires
             `use_connectome_APL_weights=True`). APL weights are NOT normalized by
             olfsysm, so should already be (e.g. from `rv.kc.wAPLKC_unscaled` of a call
-            with `return_olfsysm_vars=True`).
+            with `return_olfsysm_vars=True`). They require `pn2kc_connections`
+            'hemibrain' (the default), 'malecns-left' or 'malecns-right' (the latter two
+            since 2026-11-23), which then names the connectome they come from.
 
         _wKCKC: (internal use only, e.g. tests) KC x KC weights (index = post KC, columns
             = pre KC, both KC IDs matching the `kc_id` level of the wPNKC index, in
@@ -13849,15 +13851,28 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     # `require_clean_olfsysm`; `model_provenance()` records which one)
     require_clean_olfsysm()
 
+    # hardcoded weights are used as passed, so with them `pn2kc_connections` only names
+    # the connectome they come from (in the kwargs callers record), and the connectome
+    # of the KC-KC weights for `kc_kc_inh` without `_wKCKC` (the hemibrain's only;
+    # `connectome_KCKC_weights` refuses the male CNS, whose are passed as `_wKCKC`). the
+    # default 'hemibrain' and the male CNS's two calyces are accepted (the latter since
+    # 2026-11-23, Yang's OK, so that a model with hardcoded weights can run on the male
+    # CNS's own wiring); other options refuse them.
+    hardcoded_weight_connectomes = {'hemibrain'} | malecns_connectome_options
     if _wPNKC is not None:
         # just a hacky way to check pn2kc_connections is unset (== default 'hemibrain',
-        # unless i move default out of kwarg def to be able to detect unset more easily)
-        assert pn2kc_connections == 'hemibrain'
+        # unless i move default out of kwarg def to be able to detect unset more easily),
+        # or one of the male CNS's calyces
+        assert pn2kc_connections in hardcoded_weight_connectomes, (
+            f'_wPNKC requires pn2kc_connections in {sorted(hardcoded_weight_connectomes)}'
+        )
 
     if _wAPLKC is not None:
         assert _wKCAPL is not None, '_wKCAPL and _wAPLKC must be passed together'
         assert use_connectome_APL_weights
-        assert pn2kc_connections == 'hemibrain'
+        assert pn2kc_connections in hardcoded_weight_connectomes, (
+            f'_wAPLKC requires pn2kc_connections in {sorted(hardcoded_weight_connectomes)}'
+        )
         if prat_boutons:
             assert _wAPLPN is not None and _wPNAPL is not None
     else:
