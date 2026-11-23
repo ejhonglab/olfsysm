@@ -2385,6 +2385,27 @@ kckc_synapses_path: Path = (prat_hemibrain_seg_dir /
     'KCclaw-to-KCclaw_Connectivity_2025-12-05-13-39-22.parquet'
 )
 
+# hemibrain MB-C1 synapses (one row per synapse; MB-C1_R, a calyx neuron with input from
+# KCs and PN boutons and output onto both), from the same run of Pratyush's pipeline as
+# the claw x bouton wiring: KC claw IDs from its 2025-12-09 re-run (as the
+# PNbouton-to-KCclaw table `connectome_wPNKC` reads; the 2025-12-05 tables number some
+# claws differently), PN boutons from 2025-12-05 (as the APL<>PN tables). See
+# `connectome_MBC1_weights`. MB-C1<>APL tables are in the same folder, not read.
+mbc1_synapse_paths: Dict[str, Path] = {
+    'KC>MBC1': (prat_hemibrain_seg_dir /
+        'KCclaw-to-MBC1unit_Connectivity_2025-12-09-19-47-36.parquet'
+    ),
+    'MBC1>KC': (prat_hemibrain_seg_dir /
+        'MBC1unit-to-KCclaw_Connectivity_2025-12-09-19-47-36.parquet'
+    ),
+    'PN>MBC1': (prat_hemibrain_seg_dir /
+        'PNbouton-to-MBC1unit_Connectivity_2025-12-05-13-39-22.parquet'
+    ),
+    'MBC1>PN': (prat_hemibrain_seg_dir /
+        'MBC1unit-to-PNbouton_Connectivity_2025-12-05-13-39-22.parquet'
+    ),
+}
+
 # the male CNS's model tables (`connectome_wPNKC(connectome='malecns-left'|'malecns-right')`),
 # copied from hong-data's reference_data/connectome (README.md there has the source and
 # sha256s)
@@ -8817,6 +8838,334 @@ APL_KC_SYNAPSE_TABLES = {
     'APL>KC': 'APLunit-to-KCclaw_Connectivity_2025-12-14-21-12-48.parquet',
     'KC>APL': 'KCclaw-to-APLunit_Connectivity_2025-12-14-21-12-48.parquet',
 }
+
+# body ID of each MB-C1 cell's column in `connectome_MBC1_weights(by_cell=True)` outputs
+MBC1_ID: str = 'mbc1_id'
+
+
+def _mbc1_synapses(name: str) -> pd.DataFrame:
+    """The synapses of `mbc1_synapse_paths[name]` in the right calyx (CA(R) on both
+    sides), checked to be those of the hemibrain's MB-C1_R cells, whose body IDs are
+    in column `MBC1_ID`."""
+    df = pd.read_parquet(mbc1_synapse_paths[name])
+    df = filter_synapses_to_roi(df, 'CA(R)')
+    side = 'pre' if name.startswith('MBC1') else 'post'
+    assert (df[f'instance_{side}'] == 'MB-C1_R').all(), name
+    assert (df[f'type_{side}'] == 'MB-C1').all(), name
+    return df.rename(columns={f'bodyId_{side}': MBC1_ID})
+
+
+def connectome_MBC1_weights(connectome: str = 'hemibrain', *, prat_claws: bool = False,
+    prat_boutons: bool = False, wPNKC: Optional[pd.DataFrame] = None,
+    by_cell: bool = False, dropped_counts: Optional[dict] = None,
+    multibouton_claws: Optional[str] = None, claw_weight: Optional[str] = None,
+    _drop_glom_with_plus: bool = True
+    ) -> Tuple[Union[pd.Series, pd.DataFrame], Union[pd.Series, pd.DataFrame],
+        Optional[Union[pd.Series, pd.DataFrame]], Optional[Union[pd.Series, pd.DataFrame]]
+    ]:
+    """Returns wMBC1KC, wKCMBC1, wMBC1PN, wPNMBC1: MB-C1's synapse counts in the calyx.
+
+    MB-C1 takes input from KCs and PN boutons in the calyx and outputs onto both, most
+    of it from and onto gamma KCs. The hemibrain has two MB-C1 cells in the right calyx
+    (MB-C1_R, body IDs 5813021291 and 5813075020), with about half of the synapses each;
+    the weights are summed over both unless `by_cell=True`. MB-C1 is not part of the
+    model: these weights are for building model inputs from (e.g.
+    `connectome_MBC1_KCKC_weights`, MB-C1 as a KC x KC matrix for `fit_mb_model`'s
+    `_wKCKC`).
+
+    They are laid out as `connectome_APL_weights` lays out APL's, from the same kwargs,
+    so the two can be used side by side: wMBC1KC (MB-C1 -> KC) and wKCMBC1 (KC -> MB-C1)
+    are indexed as wAPLKC / wKCAPL are, wMBC1PN (MB-C1 -> PN bouton) and wPNMBC1 (PN
+    bouton -> MB-C1) as wAPLPN / wPNAPL are (None unless `prat_boutons=True`). Values
+    are synapse counts (float, not normalized), 0 where there are none. The synapses
+    are those of Pratyush's tables (`mbc1_synapse_paths`) with both sides in the right
+    calyx, CA(R) (a few dozen outside it are dropped).
+
+    Args:
+        connectome: 'hemibrain' only (the male CNS's model tables have no MB-C1).
+
+        prat_claws: if True, weights per claw: `wPNKC` (required) is a one-row-per-claw
+            wiring (`connectome_wPNKC(prat_claws=True, ...)`) and the KC weights are
+            indexed by its rows. A synapse counts for the row with its KC and claw ID.
+            Synapses on other claws (claw ID -1, a KC's synapses assigned to no claw,
+            where `wPNKC` has no claw -1 for that KC, or claws the wiring drops) and
+            those of KCs not in `wPNKC` are dropped, as `connectome_APL_weights` drops
+            APL's (`dropped_counts` says how many). If False, weights per KC: all of a
+            KC's calyx synapses with MB-C1, whatever their claw (as
+            `connectome_KCKC_weights` counts KC->KC synapses), indexed by `wPNKC.index`
+            if passed (one row per KC, no `CLAW_ID` level), otherwise by the KC IDs with
+            any synapse with MB-C1 (sorted, index named `KC_ID`).
+
+        prat_boutons: if True (requires `prat_claws=True`), also returns the bouton
+            weights, indexed by `wPNKC.columns` (which must have `PN_ID` and `BOUTON_ID`
+            levels, as from `connectome_wPNKC(prat_boutons=True, ...)`). Synapses on
+            boutons not in `wPNKC` are dropped.
+
+        wPNKC: the wiring the weights are for (hemibrain KC body IDs); see above.
+
+        by_cell: if True, each output is a DataFrame with the same index and one column
+            per MB-C1 cell (columns named `MBC1_ID`, the cells' body IDs, sorted), whose
+            row sums are the default output.
+
+        dropped_counts: if a dict is passed (requires `prat_claws=True`), it is filled
+            with what is dropped of the calyx synapses of the KCs in `wPNKC` (both cells
+            together): keys 'wMBC1KC' and 'wKCMBC1', each a DataFrame indexed by the KC
+            IDs of `wPNKC` (in its order), with integer columns 'nan_claw' (no claw ID),
+            'unassigned_claw' (claw ID -1, where `wPNKC` has no claw -1 for that KC) and
+            'other_claw' (other claw IDs not in `wPNKC` for that KC). Nothing returned
+            changes.
+
+        multibouton_claws / claw_weight / _drop_glom_with_plus: ignored (accepted so
+            that `connectome_wPNKC`'s kwargs, e.g. from `get_connectome_wPNKC_params`,
+            can be passed here too): the weights are per claw and per bouton of `wPNKC`.
+    """
+    if connectome != 'hemibrain':
+        if connectome in connectome_options:
+            raise NotImplementedError("MB-C1 synapses are only available for "
+                f"connectome='hemibrain' (not {connectome!r})"
+            )
+        raise ValueError(f'{connectome=} not in {sorted(connectome_options)}')
+
+    if prat_boutons and not prat_claws:
+        raise ValueError('prat_boutons=True requires prat_claws=True')
+
+    if prat_claws:
+        if wPNKC is None or CLAW_ID not in wPNKC.index.names:
+            raise ValueError(f'prat_claws=True requires a one-row-per-claw wPNKC (with '
+                f'a {CLAW_ID!r} index level)'
+            )
+    else:
+        if dropped_counts is not None:
+            raise ValueError('dropped_counts requires prat_claws=True')
+        if wPNKC is not None and CLAW_ID in wPNKC.index.names:
+            raise ValueError('wPNKC has one row per claw: pass prat_claws=True')
+
+    v5_claw_col = 'anatomical_claw_corrected'
+    kc2mbc1 = _mbc1_synapses('KC>MBC1').rename(columns={'bodyId_pre': KC_ID,
+        v5_claw_col: CLAW_ID
+    })
+    mbc12kc = _mbc1_synapses('MBC1>KC').rename(columns={'bodyId_post': KC_ID,
+        v5_claw_col: CLAW_ID
+    })
+    cells = sorted(set(kc2mbc1[MBC1_ID]) | set(mbc12kc[MBC1_ID]))
+
+    if wPNKC is not None:
+        index = wPNKC.index
+        kc_ids = index.get_level_values(KC_ID)
+        unique_kc_ids = pd.Index(kc_ids.unique(), name=KC_ID)
+        if prat_claws:
+            claw_keys = pd.MultiIndex.from_arrays([kc_ids,
+                index.get_level_values(CLAW_ID)], names=[KC_ID, CLAW_ID]
+            )
+            if claw_keys.duplicated().any():
+                raise NotImplementedError('wPNKC with more than one row per (KC, claw)')
+        elif kc_ids.duplicated().any():
+            raise ValueError(f'wPNKC without {CLAW_ID!r} must have one row per KC')
+
+    def kc_counts(syns: pd.DataFrame) -> pd.Series:
+        """Synapse counts of `syns` per KC or claw, laid out as the output."""
+        if not prat_claws:
+            counts = syns.groupby(KC_ID).size().astype(float)
+            if wPNKC is None:
+                return counts.rename('weight')
+            return pd.Series(counts.reindex(kc_ids).fillna(0).values, index=index,
+                name='weight'
+            )
+        on_claws = syns[syns[CLAW_ID].notna()]
+        syn_keys = pd.MultiIndex.from_arrays([on_claws[KC_ID],
+            on_claws[CLAW_ID].astype(int)], names=[KC_ID, CLAW_ID]
+        )
+        counts = pd.Series(1, index=syn_keys).groupby(level=[KC_ID, CLAW_ID]).sum()
+        return pd.Series(counts.reindex(claw_keys).fillna(0).values.astype(float),
+            index=index, name='weight'
+        )
+
+    def by_cells(counts_fn: Callable[[pd.DataFrame], pd.Series], syns: pd.DataFrame
+        ) -> Union[pd.Series, pd.DataFrame]:
+        if not by_cell:
+            return counts_fn(syns)
+        df = pd.DataFrame({c: counts_fn(syns[syns[MBC1_ID] == c]) for c in cells}
+            ).fillna(0.0)
+        df.columns.name = MBC1_ID
+        return df
+
+    def kc_weights(syns: pd.DataFrame, name: str) -> Union[pd.Series, pd.DataFrame]:
+        weights = by_cells(kc_counts, syns)
+        if not prat_claws:
+            return weights
+
+        nan_claw = syns[CLAW_ID].isna()
+        on_claws = syns[~nan_claw]
+        int_claws = on_claws[CLAW_ID].astype(int)
+        assert (int_claws == on_claws[CLAW_ID]).all()
+        syn_keys = pd.MultiIndex.from_arrays([on_claws[KC_ID], int_claws],
+            names=[KC_ID, CLAW_ID]
+        )
+        in_wiring = on_claws[KC_ID].isin(unique_kc_ids).values
+        dropped = on_claws[in_wiring & ~syn_keys.isin(claw_keys)]
+        n_dropped = len(dropped) + (~in_wiring).sum() + nan_claw.sum()
+        assert weights.to_numpy().sum() + n_dropped == len(syns)
+        if n_dropped > 0:
+            warn(f'{name}: {n_dropped}/{len(syns)} calyx synapses not on claws of wPNKC '
+                f'dropped ({nan_claw.sum()} without a claw ID, {(~in_wiring).sum()} of '
+                f'KCs not in wPNKC, {(dropped[CLAW_ID] == -1).sum()} unassigned (claw '
+                f'-1), {(dropped[CLAW_ID] != -1).sum()} on claws the wiring drops)'
+            )
+        if dropped_counts is not None:
+            def per_kc(df: pd.DataFrame) -> pd.Series:
+                return df.groupby(KC_ID).size().reindex(unique_kc_ids).fillna(0)
+
+            dropped_counts[name] = pd.DataFrame({
+                'nan_claw': per_kc(syns[nan_claw]),
+                'unassigned_claw': per_kc(dropped[dropped[CLAW_ID] == -1]),
+                'other_claw': per_kc(dropped[dropped[CLAW_ID] != -1]),
+            }, index=unique_kc_ids).astype(int)
+        return weights
+
+    wMBC1KC = kc_weights(mbc12kc, 'wMBC1KC')
+    wKCMBC1 = kc_weights(kc2mbc1, 'wKCMBC1')
+
+    wMBC1PN = None
+    wPNMBC1 = None
+    if prat_boutons:
+        cols = wPNKC.columns
+        if not (PN_ID in cols.names and BOUTON_ID in cols.names):
+            raise ValueError(f'prat_boutons=True requires wPNKC columns with {PN_ID!r} '
+                f'and {BOUTON_ID!r} levels'
+            )
+        bouton_keys = pd.MultiIndex.from_arrays([cols.get_level_values(PN_ID),
+            cols.get_level_values(BOUTON_ID)], names=[PN_ID, BOUTON_ID]
+        )
+        assert not bouton_keys.duplicated().any()
+
+        def bouton_weights(name: str, pn_col: str) -> Union[pd.Series, pd.DataFrame]:
+            syns = _mbc1_synapses(name).rename(columns={pn_col: PN_ID})
+            boutons = syns[bouton_col]
+            assert boutons.notna().all()
+            syns[bouton_col] = boutons.astype(int)
+            assert (syns[bouton_col] == boutons).all()
+
+            def bouton_counts(s: pd.DataFrame) -> pd.Series:
+                syn_keys = pd.MultiIndex.from_arrays([s[PN_ID], s[bouton_col]],
+                    names=[PN_ID, BOUTON_ID]
+                )
+                counts = pd.Series(1, index=syn_keys).groupby(level=[PN_ID, BOUTON_ID]
+                    ).sum()
+                return pd.Series(counts.reindex(bouton_keys).fillna(0).values.astype(
+                    float), index=cols, name='weight'
+                )
+
+            weights = by_cells(bouton_counts, syns)
+            n_dropped = len(syns) - int(weights.to_numpy().sum())
+            if n_dropped > 0:
+                warn(f'{name}: {n_dropped}/{len(syns)} calyx synapses on boutons not in '
+                    'wPNKC dropped'
+                )
+            return weights
+
+        wMBC1PN = bouton_weights('MBC1>PN', 'bodyId_post')
+        wPNMBC1 = bouton_weights('PN>MBC1', 'bodyId_pre')
+
+    return wMBC1KC, wKCMBC1, wMBC1PN, wPNMBC1
+
+
+def connectome_MBC1_KCKC_weights(kc_ids: Optional[Sequence[int]] = None, *,
+    wPNKC: Optional[pd.DataFrame] = None, connectome: str = 'hemibrain',
+    pooled: bool = True, claws_only: bool = False, normalize: bool = True
+    ) -> pd.DataFrame:
+    """Returns MB-C1 as a KC x KC matrix: its output to each KC times its input from each.
+
+    MB-C1 pools the input it gets from KCs and feeds it back onto KCs, so as a pathway
+    from KC to KC it is the rank-1 matrix W[post, pre] = wMBC1KC[post] * wKCMBC1[pre]
+    (`connectome_MBC1_weights`'s counts, per KC), diagonal included (a KC's own input to
+    MB-C1 comes back to it too). By default (`pooled=True`) the hemibrain's two MB-C1
+    cells are taken as one neuron: the outer product of the counts summed over the two
+    (rank 1). With `pooled=False` each cell is a pathway of its own and the matrix is
+    their sum, sum over cells c of wMBC1KC[post, c] * wKCMBC1[pre, c] (rank 2), with
+    none of the cross terms (a KC's input to one cell reaching the other cell's
+    targets) that pooling adds.
+
+    Laid out as `connectome_KCKC_weights` is (index `f'{KC_ID}_post'`, columns
+    `f'{KC_ID}_pre'`), so it can be passed to `fit_mb_model` as `_wKCKC` (with
+    `kc_kc_inh` its scale) in place of the KC->KC synapses. Through that path each
+    pathway is linear in the KCs' filtered spikes (`kc_kc_tau`): it is the shape of
+    MB-C1's connectivity only, not a model of the cells (their own threshold,
+    saturation, time course or sign).
+
+    Args:
+        kc_ids: KC body IDs to give the matrix for (in this order, on both axes; e.g. the
+            `KC_ID` level of a `fit_mb_model` wPNKC index). KCs without any synapse with
+            MB-C1 have all-zero rows / columns. If None (and no `wPNKC`), the KCs with
+            any synapse with MB-C1 (sorted). Raises `ValueError` if none of them has one
+            (e.g. if they are not hemibrain body IDs).
+
+        wPNKC: a wiring (e.g. the wPNKC `fit_mb_model` returns, one row per claw or per
+            KC) in place of `kc_ids`: the matrix is for its KCs, in its order.
+
+        connectome: 'hemibrain' only.
+
+        pooled: if True (the default), the two MB-C1 cells as one neuron; if False, each
+            cell a pathway of its own (see above).
+
+        claws_only: if False (the default), each KC's counts are all of its calyx
+            synapses with MB-C1, whatever their claw. If True (requires a
+            one-row-per-claw `wPNKC`), only those on the wiring's claws
+            (`connectome_MBC1_weights(prat_claws=True)` summed over each KC's claws;
+            about half of them on the hemibrain claw x bouton wiring).
+
+        normalize: as for `connectome_KCKC_weights`: if True, weights are divided by the
+            mean total incoming weight per KC, so the mean row sum is 1. Otherwise they
+            are products of synapse counts.
+    """
+    if kc_ids is not None and wPNKC is not None:
+        raise ValueError('pass kc_ids or wPNKC, not both')
+    if claws_only and (wPNKC is None or CLAW_ID not in wPNKC.index.names):
+        raise ValueError(f'claws_only=True requires a one-row-per-claw wPNKC (with a '
+            f'{CLAW_ID!r} index level)'
+        )
+
+    if claws_only:
+        w_out, w_in, _, _ = connectome_MBC1_weights(connectome, prat_claws=True,
+            wPNKC=wPNKC, by_cell=True
+        )
+        ids = pd.Index(wPNKC.index.get_level_values(KC_ID).unique(), name=KC_ID)
+        w_out = w_out.groupby(level=KC_ID, sort=False).sum().reindex(ids)
+        w_in = w_in.groupby(level=KC_ID, sort=False).sum().reindex(ids)
+    else:
+        w_out, w_in, _, _ = connectome_MBC1_weights(connectome, by_cell=True)
+        if wPNKC is not None:
+            ids = pd.Index(wPNKC.index.get_level_values(KC_ID).unique(), name=KC_ID)
+        elif kc_ids is None:
+            ids = w_out.index.union(w_in.index)
+        else:
+            ids = pd.Index(kc_ids)
+            if ids.duplicated().any():
+                raise ValueError('kc_ids must not have duplicates')
+        if not (ids.isin(w_out.index) | ids.isin(w_in.index)).any():
+            raise ValueError('none of the KCs has a synapse with MB-C1 (should be '
+                'hemibrain body IDs)'
+            )
+        w_out = w_out.reindex(ids).fillna(0.0)
+        w_in = w_in.reindex(ids).fillna(0.0)
+
+    assert list(w_out.columns) == list(w_in.columns)
+    out_ = w_out.to_numpy(dtype=float)
+    in_ = w_in.to_numpy(dtype=float)
+    if pooled:
+        weights = np.outer(out_.sum(axis=1), in_.sum(axis=1))
+    else:
+        weights = out_ @ in_.T
+
+    if normalize:
+        total = weights.sum()
+        assert total > 0
+        weights = weights / (total / len(ids))
+
+    return pd.DataFrame(weights,
+        index=pd.Index(ids, name=f'{KC_ID}_post'),
+        columns=pd.Index(ids, name=f'{KC_ID}_pre')
+    )
+
 
 APL_KC_COUNT_COLUMNS = ('n_claws', 'kept', 'kept_unassigned', 'dropped_claw', 'no_claw',
     'no_claw_nan', 'peduncle'
