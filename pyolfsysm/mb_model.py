@@ -631,6 +631,14 @@ EXT_INH_RECORDED_PARAMS: Tuple[str, ...] = ('ext_inh_kc_max', 'ext_inh_bouton_ma
     'ext_inh_scale'
 )
 
+# `fit_mb_model` kwarg giving PN odor-evoked rates directly (olfsysm
+# `rv.pn.preset_rates`), e.g. from recorded PN dendrites. Disabled if None.
+PN_RATES_PARAMS: Tuple[str, ...] = ('pn_rates',)
+
+# what `fit_mb_model` records in its output params for `pn_rates` passed: the # of entries
+# set (not NaN) and a hash of the table olfsysm uses (rather than the table)
+PN_RATES_RECORDED_PARAMS: Tuple[str, ...] = ('pn_rates_n_set', 'pn_rates_sha256')
+
 # `fit_mb_model` kwargs making APL inhibition divisive rather than subtractive, onto
 # KCs / claws (olfsysm `mp.kc.apl_inh_divisive`) and onto PN boutons
 # (`mp.pn.bouton_inh_divisive`). Subtractive (the default) if False, and only recorded in
@@ -905,7 +913,8 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
         'claw_weight': 'presence',
         **{k: None for k in AL_INH_PARAMS + KC_KC_INH_PARAMS + CLAW_SAT_PARAMS +
             BOUTON_DEPLETION_PARAMS + EXT_INH_PARAMS + EXT_INH_RECORDED_PARAMS +
-            KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
+            KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS +
+            PN_RATES_PARAMS + PN_RATES_RECORDED_PARAMS
         },
         **{k: False for k in APL_INH_FORM_PARAMS},
         **{k: False for k in KC_KC_FLAG_PARAMS},
@@ -13553,6 +13562,153 @@ def _ext_inh_model_rows(name: str, df: pd.DataFrame, model_index: pd.Index,
     return df.reindex(index=model_index, fill_value=0.0).to_numpy(dtype=float)
 
 
+def _pn_rates_odor_columns(df: pd.DataFrame, odors: pd.Index) -> pd.DataFrame:
+    """Returns `fit_mb_model` `pn_rates` input as floats, w/ columns `odors` (in order).
+
+    Columns must be among `odors` (`orn_deltas.columns`), or among `odors` w/o its 'panel'
+    level (as in `fit_mb_model` outputs), in any order; odors missing get NaN (the model's
+    PNs kept). Raises `ValueError` if `df` is not a DataFrame, has duplicate index or
+    column values, columns not among the odors, non-numeric values or infinite values.
+    """
+    name = 'pn_rates'
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError(f'{name} must be a DataFrame (got {type(df)})')
+
+    if df.shape[0] == 0 or df.shape[1] == 0:
+        raise ValueError(f'{name} is empty (shape {df.shape}); pass None for no rates')
+
+    if df.index.duplicated().any():
+        raise ValueError(f'{name} has duplicate index values (glomeruli): '
+            f'{list(df.index[df.index.duplicated()])}'
+        )
+    if df.columns.duplicated().any():
+        raise ValueError(f'{name} has duplicate columns (odors): '
+            f'{list(df.columns[df.columns.duplicated()])}'
+        )
+
+    candidates = [odors]
+    if isinstance(odors, pd.MultiIndex) and 'panel' in odors.names:
+        odors_no_panel = odors.droplevel('panel')
+        if not odors_no_panel.duplicated().any():
+            candidates.append(odors_no_panel)
+
+    for cols in candidates:
+        if df.columns.isin(cols).all():
+            df = df.reindex(columns=cols)
+            break
+    else:
+        if len(candidates) > 1:
+            unknown = [c for c in df.columns if c not in set(candidates[0]) and
+                c not in set(candidates[1])
+            ]
+        else:
+            unknown = [c for c in df.columns if c not in set(candidates[0])]
+        raise ValueError(f'{name} columns must be odors of orn_deltas (w/ or w/o its '
+            f"'panel' level, in any order). not among them: {unknown}\nodors: "
+            f'{list(candidates[-1])}'
+        )
+
+    try:
+        values = df.to_numpy(dtype=float)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f'{name} values must be numeric ({err})')
+
+    if np.isinf(values).any():
+        raise ValueError(f'{name} values must be finite, or NaN to keep the model PN')
+
+    return pd.DataFrame(values, index=df.index, columns=odors)
+
+
+def _pn_rates_model_rows(df: pd.DataFrame, glomeruli: pd.Index) -> np.ndarray:
+    """Returns `_pn_rates_odor_columns` output as a (# glomeruli, # odors) array.
+
+    Rows are the model's `glomeruli` (the rows of olfsysm's `mp.orn.data.delta`), in
+    order; glomeruli missing from `df` get NaN (the model's PN kept). Raises `ValueError`
+    if any index value of `df` is not one of `glomeruli`.
+    """
+    if isinstance(df.index, pd.MultiIndex):
+        raise ValueError('pn_rates index must be glomerulus names (got a MultiIndex w/ '
+            f'levels {list(df.index.names)})'
+        )
+    unknown = [g for g in df.index if g not in set(glomeruli)]
+    if len(unknown) > 0:
+        raise ValueError(f'pn_rates index values not among the model glomeruli: '
+            f'{unknown}\nmodel glomeruli: {list(glomeruli)}'
+        )
+    return df.reindex(index=glomeruli).to_numpy(dtype=float)
+
+
+def _model_glomeruli(wPNKC: pd.DataFrame) -> pd.Index:
+    """The model's glomeruli (rows of olfsysm's PN traces), from `fit_mb_model`'s wPNKC.
+
+    The columns of wPNKC (models w/o boutons), or the unique values of their 'glomerulus'
+    level, in order (models w/ boutons, whose columns are grouped by glomerulus, in the
+    PN traces' order).
+    """
+    cols = wPNKC.columns
+    if isinstance(cols, pd.MultiIndex):
+        return pd.Index(cols.get_level_values(glomerulus_col).unique(),
+            name=glomerulus_col
+        )
+    return pd.Index(cols, name=glomerulus_col)
+
+
+def _pn_rate_frame(values: np.ndarray, wPNKC: Optional[pd.DataFrame],
+    odors: Optional[Sequence]) -> pd.DataFrame:
+    values = np.asarray(values, dtype=float)
+    index = (pd.RangeIndex(values.shape[0], name=glomerulus_col) if wPNKC is None else
+        _model_glomeruli(wPNKC)
+    )
+    columns = pd.RangeIndex(values.shape[1]) if odors is None else odors
+    if not isinstance(columns, pd.Index):
+        columns = pd.Index(columns)
+    if len(index) != values.shape[0] or len(columns) != values.shape[1]:
+        raise ValueError(f'olfsysm has {values.shape[0]} glomeruli x {values.shape[1]} '
+            f'odors, but got {len(index)} glomeruli (from wPNKC) and {len(columns)} odors'
+        )
+    return pd.DataFrame(values, index=index, columns=columns)
+
+
+def pn_evoked_rates(mp: osm.ModelParams, rv: osm.RunVars, *,
+    wPNKC: Optional[pd.DataFrame] = None, odors: Optional[Sequence] = None
+    ) -> pd.DataFrame:
+    """Returns the model's PN odor-evoked rates (Hz), glomeruli x odors.
+
+    The reading `fit_mb_model`'s `pn_rates` is given in (olfsysm `pn_evoked_rates`): each
+    PN's mean rate over the steps the odor is on (`mp.time_stim_start` to
+    `mp.time_stim_end`, exclusive) minus its mean rate from `mp.time_start` to odor onset
+    (exclusive). NaN for odors not simulated (not in `mp.sim_only`).
+
+    Args:
+        mp, rv: olfsysm variables of a run (e.g. `fit_mb_model(...,
+            return_olfsysm_vars=True)`'s param_dict['mp'] / ['rv']), before any
+            `osm.remove_all_pretime`.
+
+        wPNKC: that run's wPNKC (`fit_mb_model`'s third output), to label the rows by
+            glomerulus. Rows are integers if None.
+
+        odors: labels of the columns (the odors of olfsysm's `mp.orn.data.delta`, e.g.
+            the output responses' columns). Integers if None.
+    """
+    return _pn_rate_frame(osm.pn_evoked_rates(mp, rv), wPNKC, odors)
+
+
+def pn_rate_bounds(mp: osm.ModelParams, rv: osm.RunVars, *,
+    wPNKC: Optional[pd.DataFrame] = None, odors: Optional[Sequence] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Returns the PN odor-evoked rates (Hz) `fit_mb_model`'s `pn_rates` can give (lo, hi).
+
+    For each glomerulus and odor (olfsysm `pn_rate_bounds`): `lo` is the rate with the
+    glomerulus's ORN drive shifted far down (the PN silenced from odor onset, its rate
+    clipped at 0, so about minus its spontaneous rate), `hi` with it shifted far up (the
+    PN's tanh saturated). Rates strictly between them are reached; others are refused.
+    They depend on the ORN, LN and PN parameters and the ORN input, not on the KC
+    parameters. `mp`, `rv`, `wPNKC` and `odors` as in `pn_evoked_rates`.
+    """
+    lo, hi = osm.pn_rate_bounds(mp, rv)
+    return _pn_rate_frame(lo, wPNKC, odors), _pn_rate_frame(hi, wPNKC, odors)
+
+
 # TODO delete? the series is just a hack to support one case i believe (one-row +
 # no-connectome-apl)
 #
@@ -13623,6 +13779,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     n_claws_active_to_spike: Optional[int] = None,
     pn_inhsc: Optional[float] = None, pn_inhadd: Optional[float] = None,
     ln_inhsc: Optional[float] = None, ln_inhadd: Optional[float] = None,
+    pn_rates: Optional[pd.DataFrame] = None,
     kc_kc_inh: Optional[float] = None, kc_kc_tau: Optional[float] = None,
     allow_negative_kc_kc: bool = False,
     mbc1_inh: Optional[float] = None, mbc1_tau: Optional[float] = None,
@@ -13937,6 +14094,37 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `ln_inhsc` (or decreasing `ln_inhadd`) increases LN activity, and thus PN
             normalization. See `sim_LN_layer` and `sim_PN_layer` in olfsysm.cpp. Must
             not be negative.
+
+        pn_rates: if not None, PN odor-evoked rates given directly (olfsysm
+            `rv.pn.preset_rates`), e.g. from recorded PN dendrites mapped to rates
+            outside the model. Glomeruli x odors DataFrame of rates (Hz) in the reading
+            of `pn_evoked_rates`: each PN's mean rate over the steps the odor is on minus
+            its mean rate from `mp.time_start` to odor onset (so negative values are PNs
+            below their spontaneous rate). NaN keeps the model's PN for that glomerulus
+            and odor; other values must be finite. Index glomerulus names among the
+            model's glomeruli (the wPNKC glomeruli; any missing are kept), columns among
+            the odors of `orn_deltas` (also accepted w/o its 'panel' level, as in the
+            output `responses`; any missing are kept), both in any order. A set PN's trace
+            is the one the model's PN stage gives for that odor when the glomerulus's ORN
+            drive (above spontaneous) is the model's own plus a shift times the ORN
+            layer's response to a unit delta, w/ the shift solved for so the trace's
+            odor-evoked rate is the given one (to within 1e-9 Hz): the odor's LN
+            inhibition stays the model's (computed from `orn_deltas`), the steps before
+            odor onset stay the model's (so spontaneous rates, KC spontaneous input and
+            thresholds relative to it do not change), and the time course is the
+            model's own PN dynamics at that input (onset transient, adaptation under the
+            odor's LN inhibition, saturation, the decay after offset). Rates within
+            1e-9 Hz of the model's own keep its traces bit for bit, so the model's own
+            `pn_evoked_rates` give the unset outputs exactly. Rates the stage can not
+            reach for that glomerulus and odor (outside `pn_rate_bounds`: below about
+            minus its spontaneous rate, or above the saturated drive) are refused.
+            The PN traces feed everything downstream (boutons, claws, PN>APL), in every
+            simulation, including those used to pick thresholds and tune APL weights,
+            and those of `make_fixed_param_kc_simulator`'s `simulate`. Not supported w/
+            `tune_on_hallem=True` or `repro_preprint_s1d=True`. Recorded in output params
+            as 'pn_rates_n_set' (the # of entries set) and 'pn_rates_sha256' (the first
+            16 hex digits of a hash of the table olfsysm uses, glomeruli and odors in
+            model order, w/ their labels), not the table.
 
         kc_kc_inh: if not None, enables APL-independent KC-KC lateral inhibition
             (olfsysm `mp.kc.use_kc_kc_inh`), with weights `rv.kc.wKCKC` set to
@@ -14345,7 +14533,8 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc',
             `KC_KC_FLAG_PARAMS` that were True, `MBC1_PARAMS` passed (the flags only if
             True),
-            `EXT_INH_RECORDED_PARAMS` for `EXT_INH_PARAMS` passed, any of
+            `EXT_INH_RECORDED_PARAMS` for `EXT_INH_PARAMS` passed,
+            `PN_RATES_RECORDED_PARAMS` if `pn_rates` was passed, any of
             `APL_INH_FORM_PARAMS` that were True, `WIRING_CONTROL_PARAMS` not at their
             defaults, and any of `CLAW_INH_POOL_PARAMS`,
             `KC_SPIKING_PARAMS`, `TIME_PARAMS` or `APL_DYNAMICS_PARAMS` that were
@@ -14845,6 +15034,18 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     for k, df in (('ext_inh_kc', ext_inh_kc), ('ext_inh_bouton', ext_inh_bouton)):
         if df is not None:
             ext_inh_dfs[k] = _ext_inh_odor_columns(k, df, orn_deltas.columns)
+
+    # (glomerulus x odor DataFrame w/ columns in orn_deltas order. rows are aligned to the
+    # model's glomeruli, and the matrix set into rv, below, after rv is created)
+    pn_rates_df = None
+    if pn_rates is not None:
+        if tune_on_hallem or repro_preprint_s1d:
+            # (the Hallem / extra odors simulated would need rates too, and thresholds
+            # tuned on the Hallem odors would not see them)
+            raise NotImplementedError('pn_rates not supported with tune_on_hallem=True '
+                'or repro_preprint_s1d=True'
+            )
+        pn_rates_df = _pn_rates_odor_columns(pn_rates, orn_deltas.columns)
 
     if ext_inh_scale is not None:
         if len(ext_inh_dfs) == 0:
@@ -15782,6 +15983,14 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     mp.orn.data.delta = orn_deltas.copy()
     # (olfsysm odor columns, which ext_inh_* columns were put in the order of above)
     assert all(df.columns.equals(orn_deltas.columns) for df in ext_inh_dfs.values())
+
+    # (# glomeruli, # odors), rows / columns those of olfsysm's mp.orn.data.delta, set
+    # into rv below
+    pn_rates_arr = None
+    if pn_rates_df is not None:
+        assert pn_rates_df.columns.equals(orn_deltas.columns)
+        pn_rates_arr = _pn_rates_model_rows(pn_rates_df, orn_deltas.index)
+        assert pn_rates_arr.shape == orn_deltas.shape
     # TODO need to remove DA4m (2a) from wPNKC first too (already out, it seems)?
     # don't see matt doing it in hemimat-modeling... (i don't think i need to.
     # rv.pn.pn_sims below had receptor-dim length of 22)
@@ -16121,6 +16330,17 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
 
     if ext_inh_scale is not None:
         ext_inh_params['ext_inh_scale'] = ext_inh_scale
+
+    # (only if passed, to also add to param_dict below)
+    pn_rates_params = dict()
+    if pn_rates_arr is not None:
+        # (# glomeruli, # odors). olfsysm also checks shape / values (and that PN noise
+        # is off).
+        rv.pn.preset_rates = pn_rates_arr
+        pn_rates_params['pn_rates_n_set'] = int(np.isfinite(pn_rates_arr).sum())
+        pn_rates_params['pn_rates_sha256'] = _lr_cache_key_value(pd.DataFrame(
+            pn_rates_arr, index=orn_deltas.index, columns=orn_deltas.columns
+        ))['sha256'][:16]
 
     kc_to_claws = None
     if one_row_per_claw:
@@ -16712,7 +16932,20 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     # threads than that. any other way to dynamically configure the # of threads OMP
     # uses?
     osm.run_ORN_LN_sims(mp, rv)
-    osm.run_PN_sims(mp, rv)
+    if pn_rates_arr is None:
+        osm.run_PN_sims(mp, rv)
+    else:
+        try:
+            osm.run_PN_sims(mp, rv)
+        except ValueError as err:
+            # (olfsysm names a refused rate by row and column; add their labels)
+            match = re.search(r'preset_rates\((\d+), (\d+)\)', str(err))
+            if match is None:
+                raise
+            g, o = (int(x) for x in match.groups())
+            raise ValueError(f'pn_rates: {err} [glomerulus {orn_deltas.index[g]!r}, '
+                f'odor {orn_deltas.columns[o]!r}]'
+            ) from err
     before_any_tuning = time.time()
 
     # This is the only place where build_wPNKC and fit_sparseness (both functions in
@@ -17915,6 +18148,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     param_dict.update(claw_sat_params)
     param_dict.update(bouton_depletion_params)
     param_dict.update(ext_inh_params)
+    param_dict.update(pn_rates_params)
     param_dict.update(apl_inh_form_params)
     param_dict.update(claw_inh_pool_params)
     param_dict.update(wiring_control_params)
@@ -18632,7 +18866,9 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
             which can only be set for the initial call, since the ORN/LN/PN layers they
             also determine are only simulated there, and `APL_DYNAMICS_PARAMS`
             (`apl_taum`, the APL's time constant, which stays set in the olfsysm
-            parameters the simulations reuse).
+            parameters the simulations reuse). So does `pn_rates` (the PN rates given
+            directly): the PN traces it sets in the initial call are those every
+            simulation reuses.
 
     Returns `simulate` function, and dict of initial parameters. `simulate` takes dict
     with any subset of keys of initial parameters (others are left at initial values),
@@ -22381,7 +22617,7 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
             # inputs (same for all seeds), so they still match model_kws values below
             for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + KC_KC_FLAG_PARAMS +
                     MBC1_PARAMS + CLAW_SAT_PARAMS + BOUTON_DEPLETION_PARAMS +
-                    EXT_INH_RECORDED_PARAMS +
+                    EXT_INH_RECORDED_PARAMS + PN_RATES_RECORDED_PARAMS +
                     APL_INH_FORM_PARAMS + CLAW_INH_POOL_PARAMS + WIRING_CONTROL_PARAMS):
                 if k in param_dict:
                     assert len(set(param_dict[k])) == 1
