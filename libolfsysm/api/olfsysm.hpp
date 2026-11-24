@@ -340,6 +340,13 @@ struct ModelParams {
         /* Time constant (seconds) of the filtered KC activity driving KC-KC inhibition.
          * Only relevant if use_kc_kc_inh=true. Default 0.05. */
         double kc_kc_tau;
+        /* If true, rv.kc.wKCKC may have negative entries (checked finite only): the
+         * same term, rv.kc.wKCKC * a subtracted from each KC's dVm/dt, so a negative
+         * weight is excitation onto KC `post` from KC `pre` (net KC-KC excitation where
+         * the weights onto a KC sum to less than 0). Nothing bounds it but the KCs'
+         * spiking (a spike resets Vm, so a KC fires at most once per step). Only
+         * relevant if use_kc_kc_inh=true. Default false (negative weights refused). */
+        bool allow_negative_kc_kc;
 
         /* If true, a feedback pathway of C cells (e.g. the hemibrain's two MB-C1 cells,
          * or one pooled cell) that take input from KCs and inhibit them, separate from
@@ -865,8 +872,9 @@ struct RunVars {
 
         /* Only used if p.kc.use_kc_kc_inh=true. KC->KC inhibitory weights, of shape
          * (p.kc.N, p.kc.N), with element (post, pre) the weight of inhibition onto KC
-         * `post` from KC `pre` (including any overall scale). Must be non-negative.
-         * See p.kc.use_kc_kc_inh for how it enters the KC dynamics. */
+         * `post` from KC `pre` (including any overall scale). Must be finite, and
+         * non-negative unless p.kc.allow_negative_kc_kc=true. See p.kc.use_kc_kc_inh
+         * for how it enters the KC dynamics. */
         SparseMatrix wKCKC;
 
         /* Only used if p.kc.use_mbc1=true (see there). Weights of the feedback cells

@@ -269,6 +269,7 @@ ModelParams const DEFAULT_PARAMS = []() {
 
     p.kc.use_kc_kc_inh            = false;
     p.kc.kc_kc_tau                = 0.05;
+    p.kc.allow_negative_kc_kc     = false;
     p.kc.use_mbc1                 = false;
     p.kc.mbc1_tau                 = 0.05;
     p.kc.mbc1_thr                 = 0.0;
@@ -928,7 +929,10 @@ void check_kc_kc_inh(ModelParams const& p, RunVars const& rv) {
     check(w.cols() == Eigen::Index(p.kc.N));
     if (w.nonZeros() > 0) {
         check(w.coeffs().allFinite());
-        check(w.coeffs().minCoeff() >= 0);
+        // (negative weights are KC-KC excitation, through the same term)
+        if (!p.kc.allow_negative_kc_kc) {
+            check(w.coeffs().minCoeff() >= 0);
+        }
     }
 }
 
@@ -3435,6 +3439,13 @@ void run_KC_sims(ModelParams const& p, RunVars& rv, bool regen) {
                 p.kc.kc_kc_tau, ", rv.kc.wKCKC.nonZeros()=", rv.kc.wKCKC.nonZeros(),
                 ", rv.kc.wKCKC.sum()=", rv.kc.wKCKC.sum()
             ));
+            // (only if not the default, so the logs of other models do not change)
+            if (p.kc.allow_negative_kc_kc) {
+                rv.log(cat("p.kc.allow_negative_kc_kc=", p.kc.allow_negative_kc_kc,
+                    ", rv.kc.wKCKC.coeffs().minCoeff()=", rv.kc.wKCKC.nonZeros() > 0 ?
+                    rv.kc.wKCKC.coeffs().minCoeff() : 0.0
+                ));
+            }
         }
         // (only if enabled, so the logs of other models do not change)
         if (p.kc.use_mbc1) {

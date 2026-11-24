@@ -128,6 +128,7 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("n_apl_units", &ModelParams::KC::n_apl_units)
         .def_readwrite("use_kc_kc_inh", &ModelParams::KC::use_kc_kc_inh)
         .def_readwrite("kc_kc_tau", &ModelParams::KC::kc_kc_tau)
+        .def_readwrite("allow_negative_kc_kc", &ModelParams::KC::allow_negative_kc_kc)
         .def_readwrite("use_mbc1", &ModelParams::KC::use_mbc1)
         .def_readwrite("mbc1_tau", &ModelParams::KC::mbc1_tau)
         .def_readwrite("mbc1_thr", &ModelParams::KC::mbc1_thr)

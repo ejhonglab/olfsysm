@@ -595,6 +595,9 @@ AL_INH_PARAMS: Tuple[str, ...] = ('pn_inhsc', 'pn_inhadd', 'ln_inhsc', 'ln_inhad
 # `fit_mb_model` kwargs for KC-KC lateral inhibition (olfsysm `mp.kc.use_kc_kc_inh`).
 # Disabled if `kc_kc_inh` is None.
 KC_KC_INH_PARAMS: Tuple[str, ...] = ('kc_kc_inh', 'kc_kc_tau')
+# `fit_mb_model` flags of KC-KC lateral inhibition (olfsysm `mp.kc.allow_negative_kc_kc`:
+# negative KC-KC weights, i.e. KC-KC excitation). Recorded in output params only if True.
+KC_KC_FLAG_PARAMS: Tuple[str, ...] = ('allow_negative_kc_kc',)
 
 # `fit_mb_model` kwargs for MB-C1 as feedback cells of their own (olfsysm
 # `mp.kc.use_mbc1`), alongside any KC-KC inhibition. Disabled if `mbc1_inh` is None. The
@@ -905,6 +908,7 @@ def format_model_params(model_kws: ParamDict, *, human: bool = False, sep: str =
             KC_SPIKING_PARAMS + TIME_PARAMS + APL_DYNAMICS_PARAMS + CLAW_INH_POOL_PARAMS
         },
         **{k: False for k in APL_INH_FORM_PARAMS},
+        **{k: False for k in KC_KC_FLAG_PARAMS},
         **{k: None for k in MBC1_PARAMS if k not in MBC1_FLAG_PARAMS},
         **{k: False for k in MBC1_FLAG_PARAMS},
         **WIRING_CONTROL_DEFAULTS,
@@ -13620,6 +13624,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
     pn_inhsc: Optional[float] = None, pn_inhadd: Optional[float] = None,
     ln_inhsc: Optional[float] = None, ln_inhadd: Optional[float] = None,
     kc_kc_inh: Optional[float] = None, kc_kc_tau: Optional[float] = None,
+    allow_negative_kc_kc: bool = False,
     mbc1_inh: Optional[float] = None, mbc1_tau: Optional[float] = None,
     mbc1_thr: Optional[float] = None, mbc1_pooled: bool = False,
     mbc1_claws_only: bool = False,
@@ -13942,10 +13947,20 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             `rv.kc.wKCKC @ activity` is subtracted from each KC's dVm/dt (at the soma),
             in the same units as PN>KC drive. Active during threshold / APL tuning
             too. 0.0 enables the code path with zero weights (same outputs as None).
-            Must not be negative.
+            Must not be negative, unless `allow_negative_kc_kc=True`.
 
         kc_kc_tau: time constant (seconds) of the filtered KC activity driving KC-KC
             inhibition (`mp.kc.kc_kc_tau`, olfsysm default of 0.05 if None). Requires
+            `kc_kc_inh`.
+
+        allow_negative_kc_kc: if True, `kc_kc_inh` and the entries of `_wKCKC` may be
+            negative (olfsysm `mp.kc.allow_negative_kc_kc`; the weights are still
+            checked finite). The KC-KC term is the same (`rv.kc.wKCKC @ activity`
+            subtracted from each KC's dVm/dt), so a negative weight is excitation among
+            KCs. Nothing bounds it but the KCs' spiking (a spike resets Vm, so a KC
+            fires at most once per time step), and threshold / APL tuning may not
+            converge with strong excitation. With non-negative weights the outputs are
+            those of False. Recorded in output params only if True. Requires
             `kc_kc_inh`.
 
         mbc1_inh: if not None, runs the hemibrain's MB-C1 as feedback cells of their own
@@ -14244,6 +14259,7 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             = pre KC, both KC IDs matching the `kc_id` level of the wPNKC index, in
             any order), used instead of `connectome_KCKC_weights` output. Used as-is
             (not normalized), then multiplied by `kc_kc_inh` (which must be passed).
+            Must be finite, and non-negative unless `allow_negative_kc_kc=True`.
 
         _wMBC1KC / _wKCMBC1: (internal use only, e.g. tests) MB-C1 cell -> KC and KC ->
             cell weights (index = KC IDs matching the `kc_id` level of the wPNKC index,
@@ -14326,8 +14342,9 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             certain model intermediates (e.g. 'kc_spont_in'), and certain parameters
             relevant for reproducibility (e.g. 'sp_acc', 'max_iters', and any of
             `AL_INH_PARAMS`, `KC_KC_INH_PARAMS`, `CLAW_SAT_PARAMS` or
-            `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc', `MBC1_PARAMS`
-            passed (the flags only if True),
+            `BOUTON_DEPLETION_PARAMS` that were passed, e.g. 'pn_inhsc',
+            `KC_KC_FLAG_PARAMS` that were True, `MBC1_PARAMS` passed (the flags only if
+            True),
             `EXT_INH_RECORDED_PARAMS` for `EXT_INH_PARAMS` passed, any of
             `APL_INH_FORM_PARAMS` that were True, `WIRING_CONTROL_PARAMS` not at their
             defaults, and any of `CLAW_INH_POOL_PARAMS`,
@@ -14583,13 +14600,19 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         zip(KC_KC_INH_PARAMS, (kc_kc_inh, kc_kc_tau)) if v is not None
     }
     if kc_kc_inh is None:
-        if kc_kc_tau is not None or _wKCKC is not None:
-            raise ValueError('kc_kc_tau / _wKCKC require kc_kc_inh')
+        if kc_kc_tau is not None or _wKCKC is not None or allow_negative_kc_kc:
+            raise ValueError('kc_kc_tau / _wKCKC / allow_negative_kc_kc require '
+                'kc_kc_inh'
+            )
     else:
         for k, v in kc_kc_inh_params.items():
-            if not np.isfinite(v) or v < 0 or (k == 'kc_kc_tau' and v == 0):
+            # (a negative kc_kc_inh is KC-KC excitation, if allowed)
+            negative_ok = k == 'kc_kc_inh' and allow_negative_kc_kc
+            if not np.isfinite(v) or (v < 0 and not negative_ok) or (
+                    k == 'kc_kc_tau' and v <= 0):
                 raise ValueError(f'{k} must be finite and not negative (and kc_kc_tau '
-                    f'must be positive) (got {v})'
+                    'must be positive; kc_kc_inh may be negative with '
+                    f'allow_negative_kc_kc=True) (got {v})'
                 )
         if pn2kc_connections in variable_n_claw_options:
             # (wPNKC is generated in olfsysm, w/o connectome KC IDs)
@@ -14604,6 +14627,10 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
         mp.kc.use_kc_kc_inh = True
         if kc_kc_tau is not None:
             mp.kc.kc_kc_tau = float(kc_kc_tau)
+        if allow_negative_kc_kc:
+            mp.kc.allow_negative_kc_kc = True
+            # (only if True, so params of other models do not change)
+            kc_kc_inh_params['allow_negative_kc_kc'] = True
 
     # (only those passed, and the flags only if True, to also add to param_dict below)
     mbc1_params = {k: float(v) for k, v in
@@ -16009,8 +16036,11 @@ def fit_mb_model(orn_deltas: pd.DataFrame, *,
             wKCKC_df = wKCKC_df.loc[model_kc_ids, model_kc_ids]
 
         wKCKC_unscaled = wKCKC_df.to_numpy(dtype=float)
-        if not np.isfinite(wKCKC_unscaled).all() or (wKCKC_unscaled < 0).any():
-            raise ValueError('KC-KC weights must be finite and non-negative')
+        if not np.isfinite(wKCKC_unscaled).all() or (
+                not allow_negative_kc_kc and (wKCKC_unscaled < 0).any()):
+            raise ValueError('KC-KC weights must be finite and non-negative (negative '
+                'allowed with allow_negative_kc_kc=True)'
+            )
 
         # (post, pre), as olfsysm expects. olfsysm checks shape / values.
         wKCKC_unscaled = csc_matrix(wKCKC_unscaled)
@@ -18623,7 +18653,9 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
     all keys of `optimizable_model_params` that apply to this model (PN<>APL weight
     scales only included if `prat_boutons=True`, 'apl_unit_coupling' only if the APL is
     split into units, 'wKCKC_scale' [= `kc_kc_inh`] only if there is KC-KC
-    inhibition, and 'wMBC1_scale' [= `mbc1_inh`] only if there are MB-C1 cells).
+    inhibition, and 'wMBC1_scale' [= `mbc1_inh`] only if there are MB-C1 cells). Scales
+    passed to `simulate` must not be negative, except 'wKCKC_scale' (KC-KC excitation)
+    if `allow_negative_kc_kc=True` is among `model_kws`.
     """
     if orn_deltas is None:
         raise ValueError('orn_deltas must be passed (running on Hallem data not '
@@ -18784,10 +18816,14 @@ def make_fixed_param_kc_simulator(orn_deltas: pd.DataFrame, *,
             )
 
         # olfsysm only checks weights in fit_sparseness, which is not called below
-        negative = {p: v for p, v in params.items() if p != 'fixed_thr' and v < 0}
+        # (a negative 'wKCKC_scale' is KC-KC excitation, if the initial call allowed it)
+        negative = {p: v for p, v in params.items() if p != 'fixed_thr' and v < 0 and
+            not (p == 'wKCKC_scale' and mp.kc.allow_negative_kc_kc)
+        }
         if len(negative) > 0:
             raise ValueError('APL / KC-KC / MB-C1 weight scales and apl_unit_coupling '
-                f'must not be negative: {negative}'
+                'must not be negative (except the KC-KC scale with '
+                f'allow_negative_kc_kc=True): {negative}'
             )
 
         # same as olfsysm.fit_sparseness does w/ fixed threshold (fit_mb_model always
@@ -22343,8 +22379,9 @@ def fit_and_plot_mb_model(plot_dir: Path, *, sensitivity_analysis: bool = False,
                 k: [x[k] for x in param_dict_list] for k in param_dict_keys
             }
             # inputs (same for all seeds), so they still match model_kws values below
-            for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + MBC1_PARAMS +
-                    CLAW_SAT_PARAMS + BOUTON_DEPLETION_PARAMS + EXT_INH_RECORDED_PARAMS +
+            for k in (AL_INH_PARAMS + KC_KC_INH_PARAMS + KC_KC_FLAG_PARAMS +
+                    MBC1_PARAMS + CLAW_SAT_PARAMS + BOUTON_DEPLETION_PARAMS +
+                    EXT_INH_RECORDED_PARAMS +
                     APL_INH_FORM_PARAMS + CLAW_INH_POOL_PARAMS + WIRING_CONTROL_PARAMS):
                 if k in param_dict:
                     assert len(set(param_dict[k])) == 1
