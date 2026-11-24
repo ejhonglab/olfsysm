@@ -15,6 +15,7 @@
 #include <set>
 #include <map>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <exception>
 #include <atomic>
@@ -2645,6 +2646,292 @@ void sim_PN_layer(
     }
 }
 
+/* PN rates given directly (rv.pn.preset_rates; see there). */
+
+/* Tolerance (Hz) on the odor-evoked rates in rv.pn.preset_rates: an entry within this of
+ * the model's own rate keeps the model's trace, and the trace of any other set entry has
+ * the entry's rate to within this. */
+double const PN_PRESET_RATE_TOL = 1e-9;
+
+/* Largest shift (Hz) of a glomerulus's ORN drive apply_pn_preset_rates searches, and the
+ * shift at which pn_rate_bounds reads the bounds (sim_PN_layer's tanh is +-1 there, in
+ * double precision, from the first step after odor onset). */
+double const PN_PRESET_SHIFT_MAX = 1e12;
+
+/* Whether rv.pn.preset_rates is in use (i.e. the matrix is not empty). */
+bool use_pn_preset_rates(RunVars const& rv) {
+    return rv.pn.preset_rates.rows() > 0 || rv.pn.preset_rates.cols() > 0;
+}
+
+/* The steps of the PN rate reading (pn_evoked_rate) are inside the simulation. */
+void check_pn_rate_windows(ModelParams const& p) {
+    check(p.time.start_step() < p.time.stim.start_step());
+    check(p.time.stim.start_step() < p.time.stim.end_step());
+    check(p.time.stim.end_step() <= p.time.steps_all());
+}
+
+void check_pn_preset_rates(ModelParams const& p, RunVars const& rv) {
+    if (!use_pn_preset_rates(rv)) {
+        return;
+    }
+    Matrix const& r = rv.pn.preset_rates;
+    check(r.rows() == Eigen::Index(get_ngloms(p)));
+    check(r.cols() == Eigen::Index(get_nodors(p)));
+    bool no_inf = true;
+    for (Eigen::Index j = 0; j < r.cols(); j++) {
+        for (Eigen::Index i = 0; i < r.rows(); i++) {
+            // (NaN entries keep the model's PN; every other entry must be finite)
+            no_inf = no_inf && !std::isinf(r(i, j));
+        }
+    }
+    check(no_inf);
+    // (the rate of a noisy trace would be random)
+    check(p.pn.noise.sd == 0.0);
+    check_pn_rate_windows(p);
+}
+
+/* Mean of row `row` of `m` over columns [a, b), summed in order (one reading for every
+ * caller, so the same trace always gives the same mean). */
+double row_window_mean(Matrix const& m, Eigen::Index row, unsigned a, unsigned b) {
+    double sum = 0.0;
+    for (unsigned t = a; t < b; t++) {
+        sum += m(row, t);
+    }
+    return sum / double(b - a);
+}
+
+/* The odor-evoked rate of row `row` of PN traces `pn_t` (# rows x
+ * p.time.steps_all()): its mean over the steps the odor is on
+ * (p.time.stim.start_step() to p.time.stim.end_step(), exclusive) minus its mean from
+ * p.time.start_step() to odor onset (exclusive). */
+double pn_evoked_rate(ModelParams const& p, Matrix const& pn_t, Eigen::Index row) {
+    unsigned const start = p.time.start_step();
+    unsigned const on = p.time.stim.start_step();
+    unsigned const off = p.time.stim.end_step();
+    return row_window_mean(pn_t, row, on, off) - row_window_mean(pn_t, row, start, on);
+}
+
+/* The ORN layer's response above spontaneous to an odor delta of 1, at every step
+ * (sim_ORN_layer is linear in the delta: its trace is spont plus delta times this, up
+ * to rounding). */
+Row unit_orn_timecourse(ModelParams const& p) {
+    Matrix odor = p.time.stim.row_all();
+    smoothts_exp(odor, 0.02/p.time.dt);
+    Row k(1, p.time.steps_all());
+    k.setZero();
+    double mul = p.time.dt/p.orn.taum;
+    for (unsigned t = 1; t < p.time.steps_all(); t++) {
+        k(t) = k(t-1)*(1.0-mul) + odor(t)*mul;
+    }
+    return k;
+}
+
+/* Glomerulus g's PN trace for one odor as sim_PN_layer computes it, but with the
+ * glomerulus's ORN drive above spontaneous (`orn_t`(g, .) - spont(g)) plus `shift`
+ * times `unit_orn` (unit_orn_timecourse) from odor onset on. `out` (1 x
+ * p.time.steps_all()) is row g of `pn_t` (the model's traces) before onset
+ * (p.time.stim.start_step()), and the shifted dynamics from there; `inhA` / `inhB` are
+ * the odor's LN inhibition, as computed from the model's own ORN input. With
+ * p.pn.noise.sd == 0 (check_pn_preset_rates), sim_PN_layer's noise is its mean. */
+void sim_PN_glom_shifted(
+        ModelParams const& p, Matrix const& orn_t, Row const& inhA, Row const& inhB,
+        Matrix const& pn_t, Row const& unit_orn, Eigen::Index g, double shift,
+        Row& out) {
+    unsigned const n = p.time.steps_all();
+    unsigned const on = p.time.stim.start_step();
+    out = pn_t.row(g);
+    double const orn_spont = p.orn.data.spont(g);
+    double const spont =
+        orn_spont*p.pn.inhsc/(p.orn.data.spont.sum()+p.pn.inhadd);
+    // (sim_PN_layer's inh_PN at the start of step `on`: from step on-1's LN inhibition,
+    // and 0 before step 1's)
+    double inh_PN = on >= 2 ?
+        p.pn.inhsc/(p.pn.inhadd+0.25*inhA(on-1)+0.75*inhB(on-1)) : 0.0;
+    for (unsigned t = on; t < n; t++) {
+        double orn_delta = (orn_t(g, t-1) - orn_spont) + shift*unit_orn(t-1);
+        double dPNdt = -out(t-1) + spont;
+        dPNdt += 200.0*std::tanh((orn_delta+p.pn.offset)*p.pn.tanhsc/200.0*inh_PN);
+        dPNdt += p.pn.noise.mean;
+        inh_PN = p.pn.inhsc/(p.pn.inhadd+0.25*inhA(t)+0.75*inhB(t));
+        double v = out(t-1) + dPNdt*p.time.dt/p.pn.taum;
+        out(t) = 0.0 < v ? v : 0.0;
+    }
+}
+
+/* A root of `f` in [a, b], with fa = f(a) and fb = f(b) of opposite signs (or one 0), by
+ * Brent's method (as Numerical Recipes' zbrent): returns as soon as |f| <= ftol, or when
+ * the bracket can not shrink further, or after `max_iter` evaluations (the caller checks
+ * the value there). */
+template<class F>
+double brent_root(F&& f, double a, double b, double fa, double fb, double ftol,
+        int max_iter) {
+    double const eps = std::numeric_limits<double>::epsilon();
+    double c = b, fc = fb, d = b - a, e = d;
+    for (int iter = 0; iter < max_iter; iter++) {
+        if ((fb > 0.0 && fc > 0.0) || (fb < 0.0 && fc < 0.0)) {
+            c = a; fc = fa; e = d = b - a;
+        }
+        if (std::abs(fc) < std::abs(fb)) {
+            a = b; b = c; c = a;
+            fa = fb; fb = fc; fc = fa;
+        }
+        double tol1 = 2.0*eps*std::abs(b) + std::numeric_limits<double>::min();
+        double xm = 0.5*(c - b);
+        if (std::abs(fb) <= ftol || std::abs(xm) <= tol1) {
+            return b;
+        }
+        if (std::abs(e) >= tol1 && std::abs(fa) > std::abs(fb)) {
+            double s = fb/fa, pp, q;
+            if (a == c) {
+                pp = 2.0*xm*s;
+                q = 1.0 - s;
+            } else {
+                q = fa/fc;
+                double r = fb/fc;
+                pp = s*(2.0*xm*q*(q - r) - (b - a)*(r - 1.0));
+                q = (q - 1.0)*(r - 1.0)*(s - 1.0);
+            }
+            if (pp > 0.0) {
+                q = -q;
+            }
+            pp = std::abs(pp);
+            double min1 = 3.0*xm*q - std::abs(tol1*q);
+            double min2 = std::abs(e*q);
+            if (2.0*pp < (min1 < min2 ? min1 : min2)) {
+                e = d;
+                d = pp/q;
+            } else {
+                d = xm;
+                e = d;
+            }
+        } else {
+            d = xm;
+            e = d;
+        }
+        a = b;
+        fa = fb;
+        b += std::abs(d) > tol1 ? d : (xm >= 0.0 ? tol1 : -tol1);
+        fb = f(b);
+    }
+    return b;
+}
+
+/* Sets each PN with a finite entry in column `odor` of rv.pn.preset_rates to that rate in
+ * rv.pn.sims[odor] (as rv.pn.preset_rates says), after sim_PN_layer has simulated the
+ * odor. `unit_orn` is unit_orn_timecourse(p). */
+void apply_pn_preset_rates(
+        ModelParams const& p, RunVars& rv, unsigned odor, Row const& unit_orn) {
+    Matrix& pn_t = rv.pn.sims[odor];
+    Matrix const& orn_t = rv.orn.sims[odor];
+    Row const& inhA = rv.ln.inhA.sims[odor];
+    Row const& inhB = rv.ln.inhB.sims[odor];
+    check(pn_t.cols() == Eigen::Index(p.time.steps_all()));
+    check(orn_t.cols() == pn_t.cols());
+
+    Row trace(1, p.time.steps_all());
+    for (Eigen::Index g = 0; g < pn_t.rows(); g++) {
+        double const r = rv.pn.preset_rates(g, odor);
+        if (std::isnan(r)) {
+            continue;
+        }
+        double const f0 = pn_evoked_rate(p, pn_t, g) - r;
+        if (std::abs(f0) <= PN_PRESET_RATE_TOL) {
+            // (the model's own rate: its trace, bit for bit)
+            continue;
+        }
+        // f(shift): the rate of the trace at that shift, minus the given rate
+        // (non-decreasing in the shift)
+        auto f = [&](double shift) {
+            sim_PN_glom_shifted(p, orn_t, inhA, inhB, pn_t, unit_orn, g, shift, trace);
+            return pn_evoked_rate(p, trace, 0) - r;
+        };
+        // bracket: from the model's drive (shift 0) out, by factors of 4, up or down
+        double const dir = f0 < 0.0 ? 1.0 : -1.0;
+        double a = 0.0, fa = f0;
+        double b = dir, fb = f(b);
+        while (dir*fb < -PN_PRESET_RATE_TOL && std::abs(b) < PN_PRESET_SHIFT_MAX) {
+            a = b;
+            fa = fb;
+            b = std::abs(4.0*b) < PN_PRESET_SHIFT_MAX ? 4.0*b : dir*PN_PRESET_SHIFT_MAX;
+            fb = f(b);
+        }
+        if (dir*fb < -PN_PRESET_RATE_TOL) {
+            double const other = f(-b) + r;
+            double const lo = dir > 0.0 ? other : fb + r;
+            double const hi = dir > 0.0 ? fb + r : other;
+            throw std::invalid_argument(cat(std::setprecision(10),
+                "rv.pn.preset_rates(", g, ", ", odor, ") = ", r, " Hz (glomerulus row ",
+                g, ", odor column ", odor, ") is outside the odor-evoked rates the PN "
+                "stage can reach for that glomerulus and odor (", lo, " to ", hi,
+                " Hz; pn_rate_bounds)"
+            ));
+        }
+        double shift = b;
+        if (std::abs(fb) > PN_PRESET_RATE_TOL) {
+            shift = brent_root(f, a, b, fa, fb, PN_PRESET_RATE_TOL, 200);
+        }
+        double const err = f(shift);
+        if (!(std::abs(err) <= PN_PRESET_RATE_TOL)) {
+            throw std::runtime_error(cat(std::setprecision(10),
+                "rv.pn.preset_rates(", g, ", ", odor, ") = ", r, " Hz: no ORN drive "
+                "shift found giving the rate to within ", PN_PRESET_RATE_TOL, " Hz "
+                "(off by ", err, " Hz at shift ", shift, ")"
+            ));
+        }
+        pn_t.row(g) = trace;
+    }
+}
+
+Matrix pn_evoked_rates(ModelParams const& p, RunVars const& rv) {
+    check_pn_rate_windows(p);
+    Matrix out(get_ngloms(p), get_nodors(p));
+    out.setConstant(std::numeric_limits<double>::quiet_NaN());
+    for (unsigned i : get_simlist(p)) {
+        Matrix const& pn_t = rv.pn.sims[i];
+        // (not after remove_all_pretime)
+        check(pn_t.cols() == Eigen::Index(p.time.steps_all()));
+        check(pn_t.rows() == out.rows());
+        for (Eigen::Index g = 0; g < pn_t.rows(); g++) {
+            out(g, i) = pn_evoked_rate(p, pn_t, g);
+        }
+    }
+    return out;
+}
+
+void pn_rate_bounds(ModelParams const& p, RunVars const& rv, Matrix& lo, Matrix& hi) {
+    check_pn_rate_windows(p);
+    check(p.pn.noise.sd == 0.0);
+    lo.resize(get_ngloms(p), get_nodors(p));
+    hi.resize(get_ngloms(p), get_nodors(p));
+    lo.setConstant(std::numeric_limits<double>::quiet_NaN());
+    hi.setConstant(std::numeric_limits<double>::quiet_NaN());
+    Row const unit_orn = unit_orn_timecourse(p);
+    std::vector<unsigned> simlist = get_simlist(p);
+    OmpExceptionCapture exc;
+#pragma omp parallel for
+    for (unsigned j = 0; j < simlist.size(); j++) {
+        exc.run([&] {
+            unsigned i = simlist[j];
+            Matrix const& pn_t = rv.pn.sims[i];
+            Matrix const& orn_t = rv.orn.sims[i];
+            check(pn_t.cols() == Eigen::Index(p.time.steps_all()));
+            check(orn_t.cols() == pn_t.cols());
+            Row trace(1, p.time.steps_all());
+            for (Eigen::Index g = 0; g < pn_t.rows(); g++) {
+                sim_PN_glom_shifted(p, orn_t, rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
+                    pn_t, unit_orn, g, -PN_PRESET_SHIFT_MAX, trace
+                );
+                lo(g, i) = pn_evoked_rate(p, trace, 0);
+                sim_PN_glom_shifted(p, orn_t, rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
+                    pn_t, unit_orn, g, PN_PRESET_SHIFT_MAX, trace
+                );
+                hi(g, i) = pn_evoked_rate(p, trace, 0);
+            }
+        });
+    }
+    exc.rethrow();
+}
+
 // NOTE: this seems to only have ever been called from run_FFAPL_sims, which was only
 // ever called manually (between run_PN_sims and run_KC_sims calls), and thus is not
 // suitable for including feedback from overall APL activity (e.g. that includes input
@@ -3330,6 +3617,21 @@ void run_ORN_LN_sims(ModelParams const& p, RunVars& rv) {
 
 void run_PN_sims(ModelParams const& p, RunVars& rv) {
     std::vector<unsigned> simlist = get_simlist(p);
+    check_pn_preset_rates(p, rv);
+    bool const preset = use_pn_preset_rates(rv);
+    Row unit_orn;
+    if (preset) {
+        unit_orn = unit_orn_timecourse(p);
+        unsigned n_set = 0;
+        for (unsigned i : simlist) {
+            for (Eigen::Index g = 0; g < rv.pn.preset_rates.rows(); g++) {
+                n_set += std::isnan(rv.pn.preset_rates(g, i)) ? 0 : 1;
+            }
+        }
+        rv.log(cat("rv.pn.preset_rates: ", n_set, " PN rates set (glomerulus x odor, "
+            "of the simulated odors)"
+        ));
+    }
     OmpExceptionCapture exc;
 #pragma omp parallel for
     for (unsigned j = 0; j < simlist.size(); j++) {
@@ -3339,6 +3641,9 @@ void run_PN_sims(ModelParams const& p, RunVars& rv) {
                     p, rv,
                     rv.orn.sims[i], rv.ln.inhA.sims[i], rv.ln.inhB.sims[i],
                     rv.pn.sims[i]);
+            if (preset) {
+                apply_pn_preset_rates(p, rv, i, unit_orn);
+            }
         });
     }
     exc.rethrow();

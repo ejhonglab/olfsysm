@@ -808,6 +808,38 @@ struct RunVars {
          * Must be finite and >= 0. Requires p.pn.n_total_boutons > 0. */
         Matrix bouton_ext_inh;
 
+        /* PN odor-evoked rates (Hz) given directly, of shape (# glomeruli, # odors):
+         * rows those of p.orn.data.delta (as the rows of rv.pn.sims), one column per
+         * odor (its columns, as rv.kc.ext_inh). Empty (the default) disables it
+         * (outputs unchanged, bit for bit). A NaN entry keeps the model's PN for that
+         * glomerulus and odor; every other entry must be finite. An entry is in
+         * pn_evoked_rates' reading: the PN's mean rate over the steps the odor is on
+         * minus its mean rate from p.time.start to odor onset.
+         *
+         * run_PN_sims, after simulating odor i (sim_PN_layer, itself unchanged), sets
+         * each PN g with a finite entry r: from odor onset (p.time.stim.start_step())
+         * on, its trace becomes the one sim_PN_layer's dynamics give for odor i when
+         * glomerulus g's ORN drive above spontaneous is the model's own plus a shift
+         * times the ORN layer's response to a unit odor delta (the ORN time course
+         * every glomerulus shares), with the shift solved for (bracketing, then Brent's
+         * method) so that the trace's odor-evoked rate is r to within 1e-9 Hz
+         * (PN_PRESET_RATE_TOL). Everything else is the model's: the steps before onset
+         * (so spontaneous rates, sample_PN_spont and rv.kc.spont_in do not change), and
+         * odor i's LN inhibition, computed from the model's own ORN input (the LNs read
+         * the ORNs, not the PNs). So a set PN's time course is the model's own PN
+         * dynamics for that odor at the input that gives the rate: the onset transient,
+         * the adaptation under the odor's LN inhibition, the tanh saturation, the decay
+         * and undershoot after offset. An entry within 1e-9 Hz of the model's own rate
+         * keeps the model's trace, bit for bit. The rate is non-decreasing in the
+         * shift, so every rate between the bounds of pn_rate_bounds (the PN silenced
+         * from onset, its rate clipped at 0, to its drive saturating the tanh) is
+         * reached; an entry outside them is refused (std::invalid_argument). Requires
+         * p.pn.noise.sd == 0. Only simulated odors (p.sim_only) are set, in every
+         * run_PN_sims call, so every simulation that reads rv.pn.sims sees the rates:
+         * the boutons and claws, the PN>APL drive, fit_sparseness's threshold and APL
+         * tuning, FFAPL. */
+        Matrix preset_rates;
+
         // TODO TODO so do i not need a pn_ids (/ bouton_ids), like the kc_ids he uses
         // for that other case?
         // TODO convert type of either this (or claw_to_kc, which is currently
@@ -1066,8 +1098,25 @@ void sim_KC_layer(
 /* Run ORN and LN sims for all odors. */
 void run_ORN_LN_sims(ModelParams const& p, RunVars& rv);
 
-/* Run PN sims for all odors. */
+/* Run PN sims for all odors (then setting any rv.pn.preset_rates). */
 void run_PN_sims(ModelParams const& p, RunVars& rv);
+
+/* Each simulated odor's PN odor-evoked rates (Hz) in rv.pn.sims, of shape (# glomeruli,
+ * # odors): a PN's mean rate over the steps the odor is on (p.time.stim.start_step() to
+ * p.time.stim.end_step(), exclusive) minus its mean rate from p.time.start_step() to
+ * odor onset (exclusive), each summed in step order. NaN for odors not simulated (not in
+ * p.sim_only). The reading rv.pn.preset_rates is given in. Not after
+ * remove_all_pretime. */
+Matrix pn_evoked_rates(ModelParams const& p, RunVars const& rv);
+
+/* The odor-evoked rates (Hz) rv.pn.preset_rates can give each glomerulus for each
+ * simulated odor (NaN for the others), from the ORN, LN and PN sims of
+ * run_ORN_LN_sims / run_PN_sims (only the PN traces before onset are read, which the
+ * preset rates do not change): `lo` with the glomerulus's ORN drive shifted far down
+ * (the PN silenced from onset, its rate clipped at 0), `hi` shifted far up (the tanh
+ * saturated). Every rate strictly between them, or within 1e-9 Hz of either, is
+ * reached. Requires p.pn.noise.sd == 0. */
+void pn_rate_bounds(ModelParams const& p, RunVars const& rv, Matrix& lo, Matrix& hi);
 
 /* Run feedforward APL sims for all odors. */
 void run_FFAPL_sims(ModelParams const& p, RunVars& rv);

@@ -244,7 +244,8 @@ PYBIND11_MODULE(olfsysm, m) {
         .def_readwrite("wPNAPL_units", &RunVars::PN::wPNAPL_units)
         .def_readonly("pn_sims", &RunVars::PN::sims)
         .def_readonly("bouton_sims", &RunVars::PN::bouton_sims)
-        .def_readwrite("bouton_ext_inh", &RunVars::PN::bouton_ext_inh);
+        .def_readwrite("bouton_ext_inh", &RunVars::PN::bouton_ext_inh)
+        .def_readwrite("preset_rates", &RunVars::PN::preset_rates);
 
     py::class_<RunVars::FFAPL>(m, "RVFFAPL")
         .def_readonly("vm_sims", &RunVars::FFAPL::vm_sims)
@@ -322,7 +323,23 @@ PYBIND11_MODULE(olfsysm, m) {
     )pbdoc");
 
     m.def("run_PN_sims", &run_PN_sims, R"pbdoc(
-        Run PN sims for all odors.
+        Run PN sims for all odors (then setting any rv.pn.preset_rates).
+    )pbdoc");
+
+    m.def("pn_evoked_rates", &pn_evoked_rates, R"pbdoc(
+        Each simulated odor's PN odor-evoked rates (Hz), (# glomeruli, # odors): the
+        mean rate over the steps the odor is on minus the mean from time_start to odor
+        onset. NaN for odors not simulated. The reading rv.pn.preset_rates is given in.
+    )pbdoc");
+
+    m.def("pn_rate_bounds", [](ModelParams const& p, RunVars const& rv) {
+        Matrix lo, hi;
+        pn_rate_bounds(p, rv, lo, hi);
+        return py::make_tuple(lo, hi);
+    }, R"pbdoc(
+        (lo, hi): the odor-evoked rates (Hz) rv.pn.preset_rates can give each
+        glomerulus (rows) for each simulated odor (columns; NaN for the others), from
+        the PN silenced from onset to its ORN drive saturating.
     )pbdoc");
 
     m.def("run_FFAPL_sims", &run_FFAPL_sims, R"pbdoc(
